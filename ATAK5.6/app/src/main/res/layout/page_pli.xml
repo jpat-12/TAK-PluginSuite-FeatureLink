@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/fl_bg_root"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/fl_space_md">
+
+        <!-- Shown when not signed in -->
+        <TextView
+            android:id="@+id/pli_sign_in_hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Sign in on the Home tab to configure PLI."
+            style="@style/FL.Text.Hint"
+            android:gravity="center"
+            android:paddingTop="24dp"
+            android:visibility="gone" />
+
+        <!-- PLI content (shown when signed in) -->
+        <LinearLayout
+            android:id="@+id/pli_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- ── PLI FEATURE LAYER ──────────────────────────────────── -->
+            <LinearLayout
+                style="@style/FL.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="@dimen/fl_space_md">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="PLI Feature Layer"
+                    style="@style/FL.Text.SectionHeader"
+                    android:paddingBottom="@dimen/fl_space_sm" />
+
+                <RadioGroup
+                    android:id="@+id/pli_radio_group"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="@dimen/fl_space_sm">
+
+                    <RadioButton
+                        android:id="@+id/create_layer_rb"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Create New Layer"
+                        android:textColor="@color/fl_text_secondary"
+                        android:checked="true"
+                        android:layout_marginEnd="@dimen/fl_space_lg" />
+
+                    <RadioButton
+                        android:id="@+id/join_layer_rb"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Join Existing Layer"
+                        android:textColor="@color/fl_text_secondary" />
+
+                </RadioGroup>
+
+                <EditText
+                    android:id="@+id/pli_layer_name_edit"
+                    style="@style/FL.Input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="Layer name  (e.g. Alpha Team PLI)"
+                    android:inputType="text"
+                    android:layout_marginBottom="@dimen/fl_space_sm" />
+
+                <LinearLayout
+                    android:id="@+id/pli_layer_url_row"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="@dimen/fl_space_sm"
+                    android:visibility="gone">
+
+                    <ImageButton
+                        android:id="@+id/pli_layer_url_qr_btn"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:src="@drawable/ic_qr_scan"
+                        android:background="?android:attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Scan layer QR"
+                        android:padding="4dp"
+                        android:layout_marginEnd="@dimen/fl_space_sm" />
+
+                    <EditText
+                        android:id="@+id/pli_layer_url_edit"
+                        style="@style/FL.Input"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="Feature Layer URL"
+                        android:inputType="textUri" />
+
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/pli_action_btn"
+                    style="@style/FL.Button.Primary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:minHeight="40dp"
+                    android:text="Create Layer"
+                    android:layout_marginBottom="@dimen/fl_space_sm" />
+
+                <TextView
+                    android:id="@+id/pli_status_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    style="@style/FL.Text.Status" />
+
+            </LinearLayout>
+
+            <!-- ── AUTO-SEND ──────────────────────────────────────────── -->
+            <LinearLayout
+                style="@style/FL.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="@dimen/fl_space_md">
+
+                <CheckBox
+                    android:id="@+id/pli_auto_send_checkbox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Auto-send PLI every 30 seconds"
+                    android:textColor="@color/fl_text_secondary"
+                    android:textSize="@dimen/fl_text_body" />
+
+            </LinearLayout>
+
+            <!-- ── QR CONFIGURATION ───────────────────────────────────── -->
+            <LinearLayout
+                style="@style/FL.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="QR Configuration"
+                    style="@style/FL.Text.SectionHeader"
+                    android:paddingBottom="@dimen/fl_space_sm" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/pli_share_qr_btn"
+                        style="@style/FL.Button.Secondary"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:minHeight="40dp"
+                        android:text="Share Config QR"
+                        android:enabled="false"
+                        android:layout_marginEnd="@dimen/fl_space_sm" />
+
+                    <Button
+                        android:id="@+id/pli_scan_qr_btn"
+                        style="@style/FL.Button.Secondary"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:minHeight="40dp"
+                        android:text="Scan Config QR" />
+
+                </LinearLayout>
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

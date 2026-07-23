@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/fl_bg_root">
+
+        <!-- Tab bar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:orientation="horizontal"
+            android:background="@color/fl_bg_root">
+
+            <Button
+                android:id="@+id/tab_home"
+                style="@style/FL.Button"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="HOME"
+                android:textSize="12sp"
+                android:textColor="@color/tab_text_selector"
+                android:background="@drawable/tab_background" />
+
+            <Button
+                android:id="@+id/tab_layers"
+                style="@style/FL.Button"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="LAYERS"
+                android:textSize="12sp"
+                android:textColor="@color/tab_text_selector"
+                android:background="@drawable/tab_background" />
+
+            <Button
+                android:id="@+id/tab_pli"
+                style="@style/FL.Button"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="PLI"
+                android:textSize="12sp"
+                android:textColor="@color/tab_text_selector"
+                android:background="@drawable/tab_background" />
+
+        </LinearLayout>
+
+        <!-- Page content container - pages are swapped here -->
+        <FrameLayout
+            android:id="@+id/page_container"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+    </LinearLayout>
+
+    <!-- OAuth sign-in overlay — covers the whole panel during the login flow -->
+    <FrameLayout
+        android:id="@+id/oauth_webview_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:background="@android:color/white" />
+
+</FrameLayout>

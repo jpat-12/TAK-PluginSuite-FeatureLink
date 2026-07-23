@@ -1,0 +1,8 @@
+-keep class com.atakmap.android.featurelink.** { *; }
+-keep class com.atakmap.android.featurelink.plugin.** { *; }
+
+-keepattributes Signature
+-keepattributes *Annotation*
+
+-dontwarn com.atakmap.**
+-dontwarn gov.tak.**

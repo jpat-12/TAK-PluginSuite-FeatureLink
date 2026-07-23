@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <dimen name="fl_space_xs">4dp</dimen>
+    <dimen name="fl_space_sm">8dp</dimen>
+    <dimen name="fl_space_md">12dp</dimen>
+    <dimen name="fl_space_lg">16dp</dimen>
+
+    <dimen name="fl_radius_card">10dp</dimen>
+    <dimen name="fl_radius_input">8dp</dimen>
+    <dimen name="fl_radius_button">8dp</dimen>
+
+    <dimen name="fl_text_title">18sp</dimen>
+    <dimen name="fl_text_section">14sp</dimen>
+    <dimen name="fl_text_body">13sp</dimen>
+    <dimen name="fl_text_small">11sp</dimen>
+
+</resources>

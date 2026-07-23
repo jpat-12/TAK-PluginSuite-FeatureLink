@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Radial menu button icon: upload/send arrow over a layer stack -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+
+    <!-- Layer base -->
+    <path
+        android:fillColor="#0099CC"
+        android:pathData="M16,26 L2,20 L16,14 L30,20 Z" />
+
+    <!-- Upload arrow shaft -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M15,18 L15,8 L17,8 L17,18 Z" />
+
+    <!-- Upload arrow head -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M16,4 L10,10 L22,10 Z" />
+
+</vector>

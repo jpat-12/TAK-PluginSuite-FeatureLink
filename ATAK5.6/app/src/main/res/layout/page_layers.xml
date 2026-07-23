@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/fl_bg_root"
+    android:padding="@dimen/fl_space_md">
+
+    <!-- ── MY ARCGIS LAYERS ───────────────────────────────────────────── -->
+    <LinearLayout
+        style="@style/FL.Card"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layout_marginBottom="@dimen/fl_space_md">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="My ArcGIS Layers"
+                style="@style/FL.Text.SectionHeader" />
+
+            <Button
+                android:id="@+id/refresh_private_layers_btn"
+                style="@style/FL.Button.Small"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Refresh" />
+
+        </LinearLayout>
+
+        <!-- Shown when not signed in -->
+        <TextView
+            android:id="@+id/layers_sign_in_hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Sign in on the Home tab to see your ArcGIS layers."
+            style="@style/FL.Text.Hint"
+            android:gravity="center"
+            android:paddingTop="@dimen/fl_space_lg"
+            android:visibility="gone" />
+
+        <ListView
+            android:id="@+id/private_layers_list"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="@dimen/fl_space_sm"
+            android:divider="@color/fl_divider"
+            android:dividerHeight="1dp"
+            android:listSelector="@android:color/transparent" />
+
+    </LinearLayout>
+
+    <!-- ── PUBLIC LAYERS ──────────────────────────────────────────────── -->
+    <LinearLayout
+        style="@style/FL.Card"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layout_marginBottom="@dimen/fl_space_md">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Public Layers"
+            style="@style/FL.Text.SectionHeader"
+            android:paddingBottom="@dimen/fl_space_sm" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/fl_space_sm">
+
+            <ImageButton
+                android:id="@+id/scan_layer_qr_btn"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:src="@drawable/ic_qr_scan"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Scan layer QR"
+                android:padding="4dp"
+                android:layout_marginEnd="@dimen/fl_space_sm" />
+
+            <EditText
+                android:id="@+id/public_layer_url_edit"
+                style="@style/FL.Input"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Feature Service URL"
+                android:inputType="textUri"
+                android:layout_marginEnd="@dimen/fl_space_sm" />
+
+            <Button
+                android:id="@+id/add_public_layer_btn"
+                style="@style/FL.Button.Primary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="36dp"
+                android:text="Add" />
+
+        </LinearLayout>
+
+        <ListView
+            android:id="@+id/public_layers_list"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:divider="@color/fl_divider"
+            android:dividerHeight="1dp"
+            android:listSelector="@android:color/transparent" />
+
+    </LinearLayout>
+
+    <!-- ── BOTTOM TOOLBAR ─────────────────────────────────────────────── -->
+    <Button
+        android:id="@+id/upload_pref_btn"
+        style="@style/FL.Button.Secondary"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:minHeight="36dp"
+        android:text="Upload Display Prefs (JSON)" />
+
+</LinearLayout>

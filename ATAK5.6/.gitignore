@@ -1,0 +1,46 @@
+# ── Gradle ───────────────────────────────────────────────────────────────────
+.gradle/
+build/
+app/build/
+gradle.properties
+
+# ── Android ──────────────────────────────────────────────────────────────────
+local.properties
+*.apk
+*.aab
+*.dex
+*.class
+out/
+gen/
+captures/
+proguard/
+
+# ── Signing keys ─────────────────────────────────────────────────────────────
+*.jks
+*.keystore
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+*.swp
+*.swo
+
+# ── Logs / profiling ─────────────────────────────────────────────────────────
+*.log
+*.hprof
+
+# ── OS junk ──────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Keep these SDK support files — required by the build ─────────────────────
+!.takdev/
+!.takdev/aars/
+!.takdev/aars/*.aar
+!buildtools/
+!buildtools/atak-gradle-takdev.jar
+!app/featurelink.keystore

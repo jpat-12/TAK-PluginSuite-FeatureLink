@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Surfaces -->
+    <color name="fl_bg_root">#0A0A0A</color>
+    <color name="fl_bg_surface">#161616</color>
+    <color name="fl_bg_surface_alt">#1C1C1C</color>
+    <color name="fl_bg_input">#1C1C1C</color>
+    <color name="fl_bg_input_focused">#232323</color>
+    <color name="fl_border">#2A2A2A</color>
+    <color name="fl_border_focused">#0099CC</color>
+    <color name="fl_divider">#242424</color>
+
+    <!-- Text -->
+    <color name="fl_text_primary">#FFFFFF</color>
+    <color name="fl_text_secondary">#AEB4B8</color>
+    <color name="fl_text_muted">#7A7A7A</color>
+    <color name="fl_text_hint">#666666</color>
+
+    <!-- Accent -->
+    <color name="fl_accent">#0099CC</color>
+    <color name="fl_accent_pressed">#00729B</color>
+    <color name="fl_accent_dim">#1A3A44</color>
+
+    <!-- Status -->
+    <color name="fl_success">#4CAF50</color>
+    <color name="fl_error">#FF5722</color>
+
+</resources>
