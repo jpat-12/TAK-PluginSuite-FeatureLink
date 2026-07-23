@@ -44,11 +44,19 @@ app/src/main/java/com/atakmap/android/featurelink/
 
 app/src/main/res/
 ├── layout/
-│   ├── main_layout.xml       — Tab bar + FrameLayout page container
-│   ├── page_home.xml         — Feature statistics + scan-QR icon
-│   ├── page_private.xml      — ArcGIS auth + layer list + PLI controls + QR buttons
-│   └── page_public.xml       — Public layer URL entry + list
+│   ├── main_layout.xml       — Tab bar (Home/Layers/PLI) + FrameLayout page container
+│   ├── page_home.xml         — ArcGIS account card + feature statistics card
+│   ├── page_layers.xml       — "My ArcGIS Layers" + "Public Layers" cards, no sub-tabs
+│   ├── page_pli.xml          — PLI feature layer / auto-send / QR config cards
+│   └── item_layer.xml        — Single layer row (eye icon, name, interval spinners, action btn)
+├── values/
+│   ├── colors.xml            — fl_* design-system colors (surfaces, text, accent, status)
+│   ├── dimens.xml            — fl_* spacing/radius/text-size scale
+│   └── styles.xml            — FL.Text.*, FL.Button.*, FL.Input, FL.Card styles
 └── drawable/
+    ├── bg_card.xml           — Rounded card surface (used by FL.Card)
+    ├── bg_input.xml          — Rounded input bg w/ focused-state border
+    ├── bg_button_primary.xml / bg_button_secondary.xml — Filled/outline button states
     └── ic_qr_scan.xml        — Vector drawable (4 corner brackets + centre square)
 
 app/src/main/AndroidManifest.xml      — Permissions (INTERNET, CAMERA) + QrScanActivity

@@ -1,0 +1,84 @@
+# TAK-PluginSuite-FeatureLink — root .gitignore covering all components
+# (ATAK5.6, ATAK5.7 — Android/Gradle; WinTAK5.6, WinTAK5.7 — Visual Studio/.NET/C++;
+# Infra-TAK — Python/Flask console module)
+
+# ── Gradle / Android (ATAK5.6, ATAK5.7) ─────────────────────────────────────
+.gradle/
+**/build/
+**/app/build/
+gradle.properties
+local.properties
+*.apk
+*.aab
+*.dex
+*.class
+out/
+gen/
+captures/
+proguard/
+
+# ── Signing keys ─────────────────────────────────────────────────────────────
+*.jks
+*.keystore
+
+# ── Visual Studio / .NET / C++ (WinTAK5.6, WinTAK5.7) ───────────────────────
+.vs/
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.pdb
+*.ilk
+*.exp
+*.obj
+packages/
+*.nupkg
+CMakeFiles/
+CMakeCache.txt
+
+# ── Python (Infra-TAK) ───────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+*.swp
+*.swo
+
+# ── Logs / profiling ─────────────────────────────────────────────────────────
+*.log
+*.hprof
+
+# ── OS junk ──────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Keep these SDK support files — required by the ATAK builds ─────────────
+!ATAK5.6/.takdev/
+!ATAK5.6/.takdev/aars/
+!ATAK5.6/.takdev/aars/*.aar
+!ATAK5.6/buildtools/
+!ATAK5.6/buildtools/atak-gradle-takdev.jar
+!ATAK5.6/app/featurelink.keystore
+!ATAK5.7/.takdev/
+!ATAK5.7/.takdev/aars/
+!ATAK5.7/.takdev/aars/*.aar
+!ATAK5.7/buildtools/
+!ATAK5.7/buildtools/atak-gradle-takdev.jar
+!ATAK5.7/app/featurelink.keystore
