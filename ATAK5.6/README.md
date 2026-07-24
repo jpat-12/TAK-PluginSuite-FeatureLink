@@ -12,7 +12,7 @@ An ATAK plugin that bridges ATAK and ArcGIS Feature Services, enabling operators
 - **Public Layer Support** — Add and manage public ArcGIS Feature Service URLs without authentication.
 - **Radial Menu Integration** — "Send to Feature Layer" action appears on the radial menu of any point map item.
 - **QR Code Share** — Generate and scan QR codes to share portal credentials or layer URLs between devices.
-- **3-Tab UI** — Home (stats), Private (authenticated layers), and Public (URL-based layers).
+- **3-Tab UI** — Home (stats), Layers (authenticated + public), and PLI, with Account and Add Layer as dedicated pushed pages.
 
 ---
 
@@ -72,20 +72,35 @@ The output APK will be in `app/build/outputs/apk/civ/debug/` or `.../release/`.
 
 ## Usage
 
+The plugin header (icon, title, and an account button) sits above the Home / Layers / PLI
+tab bar and is visible on every tab. Tapping the account button pushes a full-screen
+**Account** page (with a back button) for ArcGIS sign-in/out — it no longer lives inline
+on the Home tab.
+
 ### Home Tab
 
-Displays a summary of total features and per-layer statistics fetched live from ArcGIS REST.
+Displays a collapsible **Feature Statistics** card: total feature count and per-layer
+stats fetched live from ArcGIS REST. Tap the chevron to collapse/expand it.
 
-### Private Tab
+### Account Page (via header button)
 
-1. Enter your ArcGIS Portal URL, username, and password, then tap **Login**.
-2. Your hosted feature layers populate the list. Use the checkboxes to select layers for download; set a recurrence interval with the spinner.
-3. Enable **Auto-Send PLI** to stream your position to the configured PLI layer automatically.
-4. Use **Create PLI Layer** or **Join PLI Layer** (via QR scan) to set up a shared position layer.
+1. Enter your ArcGIS Portal URL, username, and password, then tap **Sign in with ArcGIS**.
+2. Once signed in, your hosted feature layers populate the Layers tab automatically.
+3. Tap the back button (or the system back button) to return to whatever tab you were on.
 
-### Public Tab
+### Layers Tab
 
-Enter any public ArcGIS Feature Service URL and tap **Add** to include it in your layer list. Layers can be removed individually.
+- **My ArcGIS Layers** — populated automatically once signed in. Use the checkboxes to
+  select layers for download; set a recurrence interval with the spinner.
+- **Public Layers** — tap **Add Layer** to push the **Add Layer** page, which offers
+  **Scan Config QR** (primary) or pasting a Feature Service URL directly (fallback).
+  The **Upload Display Prefs (JSON)** action also lives on this page.
+
+### PLI Tab
+
+1. Use **Create New Layer** or **Join Existing Layer** (via QR scan) to set up a shared
+   position layer.
+2. Enable **Auto-Send PLI** to stream your position to the configured PLI layer automatically.
 
 ### Send to Feature Layer (Radial Menu)
 
@@ -93,13 +108,14 @@ Long-press any point map item to open its radial menu. Tap **Send to Feature Lay
 
 ### QR Codes
 
-FeatureLink supports four distinct QR code types. Any scanner entry point (Home sign-in row, PLI layer URL field, Public layer URL row, PLI "Scan Config QR" button) accepts all four types and routes automatically.
+FeatureLink supports four distinct QR code types. Any scanner entry point (Add Layer page,
+PLI layer URL field, PLI "Scan Config QR" button) accepts all four types and routes
+automatically — including pushing you to the Home or Layers tab as needed.
 
 | Where to scan | What it does |
 |---|---|
-| Home tab — QR icon next to Sign In | Signs into ArcGIS |
+| Layers tab — Add Layer page's "Scan Config QR" | Adds a layer to the list |
 | PLI tab — QR icon on the layer URL field | Fills the PLI destination URL |
-| Layers tab — Public sub-tab QR icon | Adds a layer to the list |
 | PLI tab — Scan Config QR button | Full setup: sign in + set PLI endpoint |
 
 ---
@@ -263,4 +279,4 @@ All HTTP calls to ArcGIS REST use plain `HttpURLConnection` — no third-party H
 
 ## License
 
-This plugin is provided as a sample under the ATAK-CIV SDK sample license. See the root SDK `LICENSE` file for details.
+Licensed under the Apache License, Version 2.0. See the [LICENSE](../LICENSE) file for details.

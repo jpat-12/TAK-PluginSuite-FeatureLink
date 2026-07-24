@@ -89,16 +89,26 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private TextView totalCountText;
     private ListView layerStatsList;
     private Button setPliEndpointBtn;
+    private LinearLayout statsContent;
+    private android.widget.ImageButton collapseStatsBtn;
+    private boolean statsExpanded = true;
 
-    // Home page — credentials
-    private LinearLayout arcgisAccountContent;
-    private android.widget.ImageButton collapseAccountBtn;
-    private boolean accountExpanded = true;
+    // Overlay — full-screen pushed pages (Account, Add Layer)
+    private FrameLayout overlayContainer;
+    private View accountPageView, addLayerPageView;
+    private android.widget.ImageButton accountBtn;
+
+    // Account page — credentials
     private Button ssoLoginBtn, logoutBtn;
     private TextView authStatusText;
 
+    // Add Layer page
+    private Button scanLayerQrBtn, addPublicLayerBtn, uploadPrefBtn;
+
     // OAuth WebView overlay (lives in main_layout, covers everything during sign-in)
     private FrameLayout oauthWebViewContainer;
+    private View oauthKeyboardListenerTarget;
+    private android.view.ViewTreeObserver.OnGlobalLayoutListener oauthKeyboardListener;
 
 
     // PLI page
@@ -113,14 +123,20 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private CheckBox pliAutoSendCheckbox;
     private Button pliShareQrBtn, pliScanQrBtn;
 
-    // Layers page — public layers section
-    private ListView publicLayersList;
+    // Layers page — public layers section (plain containers, not ListViews, so the whole
+    // Layers page can be one scrollable unit with each section sized to its content)
+    private LinearLayout publicLayersList;
     private EditText publicLayerUrlEdit;
-    private Button addPublicLayerBtn;
 
     // Layers page — private layers section
-    private ListView privateLayersList;
+    private LinearLayout privateLayersList;
     private TextView layersSignInHint;
+
+    // Layers page — collapsible section state
+    private LinearLayout privateLayersContent, publicLayersContent;
+    private android.widget.ImageButton collapsePrivateBtn, collapsePublicBtn;
+    private boolean privateLayersExpanded = true;
+    private boolean publicLayersExpanded  = true;
 
     // Data
     private final List<ArcGISLayer> privateLayers = new ArrayList<>();
@@ -144,28 +160,61 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         this.authManager       = new ArcGISAuthManager(prefs);
         this.restClient        = new ArcGISRestClient();
 
-        mainView       = LayoutInflater.from(context).inflate(R.layout.main_layout,  null);
-        homePageView   = LayoutInflater.from(context).inflate(R.layout.page_home,   null);
-        layersPageView = LayoutInflater.from(context).inflate(R.layout.page_layers, null);
-        pliPageView    = LayoutInflater.from(context).inflate(R.layout.page_pli,    null);
+        mainView         = LayoutInflater.from(context).inflate(R.layout.main_layout,    null);
+        homePageView     = LayoutInflater.from(context).inflate(R.layout.page_home,      null);
+        layersPageView   = LayoutInflater.from(context).inflate(R.layout.page_layers,    null);
+        pliPageView      = LayoutInflater.from(context).inflate(R.layout.page_pli,       null);
+        accountPageView  = LayoutInflater.from(context).inflate(R.layout.page_account,   null);
+        addLayerPageView = LayoutInflater.from(context).inflate(R.layout.page_add_layer, null);
 
         pageContainer        = mainView.findViewById(R.id.page_container);
+        overlayContainer      = mainView.findViewById(R.id.overlay_container);
         oauthWebViewContainer = mainView.findViewById(R.id.oauth_webview_container);
         tabHome   = mainView.findViewById(R.id.tab_home);
         tabLayers = mainView.findViewById(R.id.tab_layers);
         tabPli    = mainView.findViewById(R.id.tab_pli);
+        accountBtn = mainView.findViewById(R.id.account_btn);
 
         tabHome.setOnClickListener(v   -> navigatePage(0));
         tabLayers.setOnClickListener(v -> navigatePage(1));
         tabPli.setOnClickListener(v    -> navigatePage(2));
+        accountBtn.setOnClickListener(v -> showAccountPage());
 
         setupSwipeGesture(pageContainer);
         wireHomePageViews();
         wireLayersPageViews();
         wirePliPageViews();
+        wireAccountPageView();
+        wireAddLayerPageView();
 
         loadSavedData();
         navigatePage(0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Overlay pages (Account, Add Layer) — full-screen, pushed over the tabs
+    // -------------------------------------------------------------------------
+
+    private void showAccountPage() {
+        overlayContainer.removeAllViews();
+        overlayContainer.addView(accountPageView);
+        overlayContainer.setVisibility(View.VISIBLE);
+        syncHomeAuthState();
+    }
+
+    private void showAddLayerPage() {
+        overlayContainer.removeAllViews();
+        overlayContainer.addView(addLayerPageView);
+        overlayContainer.setVisibility(View.VISIBLE);
+    }
+
+    private boolean isOverlayShowing() {
+        return overlayContainer.getVisibility() == View.VISIBLE;
+    }
+
+    private void hideOverlay() {
+        overlayContainer.removeAllViews();
+        overlayContainer.setVisibility(View.GONE);
     }
 
     // -------------------------------------------------------------------------
@@ -220,32 +269,52 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     // -------------------------------------------------------------------------
 
     private void wireHomePageViews() {
-        totalCountText      = homePageView.findViewById(R.id.total_count_text);
-        layerStatsList      = homePageView.findViewById(R.id.layer_stats_list);
-        setPliEndpointBtn   = homePageView.findViewById(R.id.set_pli_endpoint_btn);
-        arcgisAccountContent = homePageView.findViewById(R.id.arcgis_account_content);
-        collapseAccountBtn  = homePageView.findViewById(R.id.collapse_account_btn);
-
-        ssoLoginBtn    = homePageView.findViewById(R.id.sso_login_btn);
-        logoutBtn      = homePageView.findViewById(R.id.logout_btn);
-        authStatusText = homePageView.findViewById(R.id.auth_status_text);
+        totalCountText    = homePageView.findViewById(R.id.total_count_text);
+        layerStatsList    = homePageView.findViewById(R.id.layer_stats_list);
+        setPliEndpointBtn = homePageView.findViewById(R.id.set_pli_endpoint_btn);
+        statsContent      = homePageView.findViewById(R.id.stats_content);
+        collapseStatsBtn  = homePageView.findViewById(R.id.collapse_stats_btn);
 
         Button refreshBtn = homePageView.findViewById(R.id.home_refresh_btn);
         refreshBtn.setOnClickListener(v -> refreshHomeStats());
-        ssoLoginBtn.setOnClickListener(v -> performSsoLogin());
-        logoutBtn.setOnClickListener(v   -> performLogout());
 
-        collapseAccountBtn.setOnClickListener(v -> toggleAccountSection());
+        collapseStatsBtn.setOnClickListener(v -> toggleStatsSection());
 
         setPliEndpointBtn.setOnClickListener(v -> navigatePage(2));
         updateSetPliEndpointBtn();
     }
 
-    private void toggleAccountSection() {
-        accountExpanded = !accountExpanded;
-        arcgisAccountContent.setVisibility(accountExpanded ? View.VISIBLE : View.GONE);
-        collapseAccountBtn.setImageResource(accountExpanded
+    private void toggleStatsSection() {
+        statsExpanded = !statsExpanded;
+        statsContent.setVisibility(statsExpanded ? View.VISIBLE : View.GONE);
+        collapseStatsBtn.setImageResource(statsExpanded
                 ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+    }
+
+    private void wireAccountPageView() {
+        ssoLoginBtn    = accountPageView.findViewById(R.id.sso_login_btn);
+        logoutBtn      = accountPageView.findViewById(R.id.logout_btn);
+        authStatusText = accountPageView.findViewById(R.id.auth_status_text);
+
+        ssoLoginBtn.setOnClickListener(v -> performSsoLogin());
+        logoutBtn.setOnClickListener(v   -> performLogout());
+
+        android.widget.ImageButton backBtn = accountPageView.findViewById(R.id.account_back_btn);
+        backBtn.setOnClickListener(v -> hideOverlay());
+    }
+
+    private void wireAddLayerPageView() {
+        publicLayerUrlEdit = addLayerPageView.findViewById(R.id.public_layer_url_edit);
+        addPublicLayerBtn  = addLayerPageView.findViewById(R.id.add_public_layer_btn);
+        scanLayerQrBtn     = addLayerPageView.findViewById(R.id.scan_layer_qr_btn);
+        uploadPrefBtn      = addLayerPageView.findViewById(R.id.upload_pref_btn);
+
+        addPublicLayerBtn.setOnClickListener(v -> addPublicLayer());
+        scanLayerQrBtn.setOnClickListener(v -> startQrScan());
+        uploadPrefBtn.setOnClickListener(v -> showPrefFileDialog());
+
+        android.widget.ImageButton backBtn = addLayerPageView.findViewById(R.id.add_layer_back_btn);
+        backBtn.setOnClickListener(v -> hideOverlay());
     }
 
     private void updateSetPliEndpointBtn() {
@@ -311,6 +380,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             authStatusText.setText("Not signed in");
             authStatusText.setTextColor(0xFFFF5722);
         }
+        updateAccountButtonColor(authed);
+    }
+
+    private void updateAccountButtonColor(boolean authed) {
+        accountBtn.setColorFilter(authed ? 0xFF4CAF50 : 0xFFFF5722,
+                android.graphics.PorterDuff.Mode.SRC_IN);
     }
 
     private void syncPliPageAuthState() {
@@ -469,9 +544,38 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         oauthWebViewContainer.addView(overlay);
         oauthWebViewContainer.setVisibility(View.VISIBLE);
         webView.loadUrl(authUrl);
+
+        // Hide the "Sign in to ArcGIS" header while the keyboard is up so the field the
+        // user is typing into isn't pushed out of view on a small drop-down panel.
+        watchKeyboardToToggle(ctx, header);
+    }
+
+    /**
+     * Hides {@code toHide} whenever the on-screen keyboard is visible and restores it once
+     * the keyboard is dismissed. Cleaned up automatically in {@link #hideOAuthWebView()}.
+     */
+    private void watchKeyboardToToggle(Context ctx, View toHide) {
+        if (!(ctx instanceof android.app.Activity)) return;
+        View decorView = ((android.app.Activity) ctx).getWindow().getDecorView();
+        oauthKeyboardListenerTarget = decorView;
+        oauthKeyboardListener = () -> {
+            android.graphics.Rect visibleFrame = new android.graphics.Rect();
+            decorView.getWindowVisibleDisplayFrame(visibleFrame);
+            int screenHeight = decorView.getRootView().getHeight();
+            boolean keyboardVisible = screenHeight > 0
+                    && (screenHeight - visibleFrame.bottom) > screenHeight * 0.15;
+            toHide.setVisibility(keyboardVisible ? View.GONE : View.VISIBLE);
+        };
+        decorView.getViewTreeObserver().addOnGlobalLayoutListener(oauthKeyboardListener);
     }
 
     private void hideOAuthWebView() {
+        if (oauthKeyboardListenerTarget != null && oauthKeyboardListener != null) {
+            oauthKeyboardListenerTarget.getViewTreeObserver()
+                    .removeOnGlobalLayoutListener(oauthKeyboardListener);
+            oauthKeyboardListenerTarget = null;
+            oauthKeyboardListener = null;
+        }
         oauthWebViewContainer.removeAllViews();
         oauthWebViewContainer.setVisibility(View.GONE);
     }
@@ -539,24 +643,38 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void wireLayersPageViews() {
         // Public layers section
-        publicLayersList   = layersPageView.findViewById(R.id.public_layers_list);
-        publicLayerUrlEdit = layersPageView.findViewById(R.id.public_layer_url_edit);
-        addPublicLayerBtn  = layersPageView.findViewById(R.id.add_public_layer_btn);
-        addPublicLayerBtn.setOnClickListener(v -> addPublicLayer());
-        android.widget.ImageButton scanLayerQrBtn = layersPageView.findViewById(R.id.scan_layer_qr_btn);
-        scanLayerQrBtn.setOnClickListener(v -> startQrScan());
+        publicLayersList    = layersPageView.findViewById(R.id.public_layers_list);
+        publicLayersContent = layersPageView.findViewById(R.id.public_layers_content);
+        collapsePublicBtn   = layersPageView.findViewById(R.id.collapse_public_btn);
+        Button openAddLayerBtn = layersPageView.findViewById(R.id.open_add_layer_btn);
+        openAddLayerBtn.setOnClickListener(v -> showAddLayerPage());
+        collapsePublicBtn.setOnClickListener(v -> togglePublicLayersSection());
 
         // Private layers section
-        privateLayersList  = layersPageView.findViewById(R.id.private_layers_list);
-        layersSignInHint   = layersPageView.findViewById(R.id.layers_sign_in_hint);
+        privateLayersList    = layersPageView.findViewById(R.id.private_layers_list);
+        privateLayersContent = layersPageView.findViewById(R.id.private_layers_content);
+        collapsePrivateBtn   = layersPageView.findViewById(R.id.collapse_private_btn);
+        layersSignInHint     = layersPageView.findViewById(R.id.layers_sign_in_hint);
         Button refreshPrivateBtn = layersPageView.findViewById(R.id.refresh_private_layers_btn);
         refreshPrivateBtn.setOnClickListener(v -> {
             if (authManager.isAuthenticated()) fetchUserLayers();
             else refreshPrivateLayers();
         });
+        collapsePrivateBtn.setOnClickListener(v -> togglePrivateLayersSection());
+    }
 
-        Button uploadPrefBtn = layersPageView.findViewById(R.id.upload_pref_btn);
-        uploadPrefBtn.setOnClickListener(v -> showPrefFileDialog());
+    private void togglePrivateLayersSection() {
+        privateLayersExpanded = !privateLayersExpanded;
+        privateLayersContent.setVisibility(privateLayersExpanded ? View.VISIBLE : View.GONE);
+        collapsePrivateBtn.setImageResource(privateLayersExpanded
+                ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+    }
+
+    private void togglePublicLayersSection() {
+        publicLayersExpanded = !publicLayersExpanded;
+        publicLayersContent.setVisibility(publicLayersExpanded ? View.VISIBLE : View.GONE);
+        collapsePublicBtn.setImageResource(publicLayersExpanded
+                ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
     }
 
     private void refreshLayersList() {
@@ -565,18 +683,49 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void refreshPublicLayers() {
-        LayerListAdapter adapter = new LayerListAdapter(
-                pluginContext, publicLayers, this::onLayerAction);
-        publicLayersList.setAdapter(adapter);
+        populateLayerList(publicLayersList, publicLayers);
     }
 
     private void refreshPrivateLayers() {
         boolean authed = authManager.isAuthenticated();
         layersSignInHint.setVisibility(authed ? View.GONE    : View.VISIBLE);
         privateLayersList.setVisibility(authed ? View.VISIBLE : View.GONE);
+        populateLayerList(privateLayersList, privateLayers);
+    }
+
+    /**
+     * Populates a plain vertical container (rather than a ListView) so each list can grow to
+     * its natural height and the whole Layers page scrolls as one unit.
+     */
+    private void populateLayerList(LinearLayout container, List<ArcGISLayer> layers) {
+        container.removeAllViews();
         LayerListAdapter adapter = new LayerListAdapter(
-                pluginContext, privateLayers, this::onLayerAction);
-        privateLayersList.setAdapter(adapter);
+                pluginContext, layers, this::onLayerAction, this::toggleLayerVisibility);
+        for (int i = 0; i < layers.size(); i++) {
+            container.addView(adapter.getView(i, null, container));
+            if (i < layers.size() - 1) {
+                View divider = new View(pluginContext);
+                divider.setLayoutParams(new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1)));
+                divider.setBackgroundColor(0xFF242424);
+                container.addView(divider);
+            }
+        }
+    }
+
+    private void toggleLayerVisibility(ArcGISLayer layer) {
+        layer.visible = !layer.visible;
+        List<Marker> markers = layerMarkers.get(layer.url);
+        if (markers != null) {
+            for (Marker m : markers) m.setVisible(layer.visible);
+        }
+        if ("private".equals(layer.type)) {
+            savePrivateLayers();
+            refreshPrivateLayers();
+        } else {
+            savePublicLayers();
+            refreshPublicLayers();
+        }
     }
 
     private void onLayerAction(ArcGISLayer layer) {
@@ -609,8 +758,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     layer.type = "public";
                     publicLayers.add(layer);
                     savePublicLayers();
-                    refreshLayersList();
                     publicLayerUrlEdit.setText("");
+                    hideOverlay();
+                    navigatePage(1);
                     downloadLayer(layer);
                 } else {
                     Toast.makeText(pluginContext, "Could not load layer from URL",
@@ -667,6 +817,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         }
 
                         m.setMetaBoolean("readiness", true);
+                        m.setVisible(layer.visible);
                         root.addItem(m);
                         added.add(m);
                     }
@@ -811,6 +962,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void startQrScan() {
         QrScanDialog dialog = new QrScanDialog(getMapView().getContext(), payload -> {
             mainHandler.post(() -> {
+                // Close the Add Layer overlay (if that's what triggered this scan) — the
+                // apply* handlers below navigate to whichever page the result belongs on.
+                hideOverlay();
+
                 // v:2 / v:1-display QR takes priority over v:1 operational QR
                 DisplayConfig displayConfig = QrHelper.parseDisplayConfig(payload);
                 if (displayConfig != null) {
@@ -1213,9 +1368,18 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     @Override public void onDropDownSelectionRemoved() {}
-    @Override public void onDropDownClose() { hideOAuthWebView(); }
+    @Override public void onDropDownClose() { hideOAuthWebView(); hideOverlay(); }
     @Override public void onDropDownSizeChanged(double width, double height) {}
     @Override public void onDropDownVisible(boolean visible) {}
+
+    @Override
+    protected boolean onBackButtonPressed() {
+        if (isOverlayShowing()) {
+            hideOverlay();
+            return true;
+        }
+        return false;
+    }
 
     @Override
     public void disposeImpl() {

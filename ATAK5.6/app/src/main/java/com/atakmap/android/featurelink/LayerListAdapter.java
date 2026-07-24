@@ -6,7 +6,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.ImageButton;
-import android.widget.ImageView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
@@ -23,16 +22,22 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         void onAction(ArcGISLayer layer);
     }
 
+    public interface OnVisibilityToggleListener {
+        void onToggleVisibility(ArcGISLayer layer);
+    }
+
     private static final int[]     INTERVAL_VALUES = {0, 1, 3, 5, 10, 20, 30, 45};
     private static final String[]  INTERVAL_LABELS = {"Off", "1", "3", "5", "10", "20", "30", "45"};
     private static final String[]  UNITS = {"s", "min", "hr"};
 
     private final OnLayerActionListener listener;
+    private final OnVisibilityToggleListener visibilityListener;
 
     public LayerListAdapter(Context context, List<ArcGISLayer> layers,
-            OnLayerActionListener listener) {
+            OnLayerActionListener listener, OnVisibilityToggleListener visibilityListener) {
         super(context, 0, layers);
-        this.listener = listener;
+        this.listener           = listener;
+        this.visibilityListener = visibilityListener;
     }
 
     @NonNull
@@ -46,8 +51,10 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         ArcGISLayer layer = getItem(position);
         if (layer == null) return convertView;
 
-        ImageView   eyeIcon         = convertView.findViewById(R.id.layer_eye_icon);
+        ImageButton eyeIcon         = convertView.findViewById(R.id.layer_eye_icon);
         TextView    nameText        = convertView.findViewById(R.id.layer_name_text);
+        TextView    typeBadge       = convertView.findViewById(R.id.layer_type_badge);
+        View        intervalRow     = convertView.findViewById(R.id.layer_interval_row);
         Spinner     intervalSpinner = convertView.findViewById(R.id.layer_interval_spinner);
         Spinner     unitSpinner     = convertView.findViewById(R.id.layer_unit_spinner);
         ImageButton actionBtn       = convertView.findViewById(R.id.layer_action_btn);
@@ -55,11 +62,18 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         nameText.setText(layer.name);
 
         boolean isPrivate = "private".equals(layer.type);
-        eyeIcon.setImageResource(isPrivate ? R.drawable.ic_eye_closed : R.drawable.ic_eye_open);
+        typeBadge.setText(isPrivate ? "[Private]" : "[Public]");
+        typeBadge.setTextColor(getContext().getResources().getColor(
+                isPrivate ? R.color.fl_badge_private : R.color.fl_badge_public));
+
+        eyeIcon.setImageResource(layer.visible ? R.drawable.ic_eye_open : R.drawable.ic_eye_closed);
+        eyeIcon.setAlpha(layer.visible ? 1.0f : 0.4f);
+        eyeIcon.setOnClickListener(v -> {
+            if (visibilityListener != null) visibilityListener.onToggleVisibility(layer);
+        });
 
         if (isPrivate) {
-            intervalSpinner.setVisibility(View.VISIBLE);
-            unitSpinner.setVisibility(View.VISIBLE);
+            intervalRow.setVisibility(View.VISIBLE);
 
             // --- Interval Spinner ---
             ArrayAdapter<String> intervalAdapter = new ArrayAdapter<>(
@@ -117,8 +131,7 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
             });
 
         } else {
-            intervalSpinner.setVisibility(View.GONE);
-            unitSpinner.setVisibility(View.GONE);
+            intervalRow.setVisibility(View.GONE);
             actionBtn.setImageResource(android.R.drawable.ic_menu_delete);
             actionBtn.setOnClickListener(v -> {
                 if (listener != null) listener.onAction(layer);
