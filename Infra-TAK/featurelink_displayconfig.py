@@ -33,7 +33,7 @@ from flask import (
     send_file, send_from_directory,
 )
 
-MODULE_VERSION = '1.2.2'
+MODULE_VERSION = '1.3.0'
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'featurelink_displayconfig_assets')
 
@@ -195,6 +195,14 @@ tr:last-child td{border-bottom:none}
 .toast.show{opacity:1}
 .toast.success{background:var(--green);color:#fff}
 .toast.error{background:var(--red);color:#fff}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:28px;width:320px;max-width:90vw;text-align:center}
+.modal-title{font-size:14px;font-weight:700;margin-bottom:16px;word-break:break-word}
+.qr-canvas-wrap{display:flex;justify-content:center;margin-bottom:16px;min-height:220px;align-items:center}
+.qr-canvas-wrap canvas{border-radius:8px}
+.qr-link-text{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);word-break:break-all;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:16px}
+.modal-actions{display:flex;gap:8px;justify-content:center}
 </style>
 </head>
 <body>
@@ -237,6 +245,7 @@ tr:last-child td{border-bottom:none}
           <td>
             <div class="row-actions">
               <a class="btn btn-primary btn-sm" href="/featurelink/featurelink-display-config?load={{ d.id }}">Open</a>
+              <button class="btn btn-ghost btn-sm" onclick="showQR('{{ d.id }}', {{ d.name|tojson }})">QR</button>
               <button class="btn btn-ghost btn-sm" onclick="copyLink('{{ d.id }}')">Copy link</button>
               <button class="btn btn-danger-ghost btn-sm" onclick="deleteDataset('{{ d.id }}')">Delete</button>
             </div>
@@ -249,7 +258,46 @@ tr:last-child td{border-bottom:none}
   </div>
 </div>
 <div class="toast" id="toast"></div>
+<div class="modal-overlay" id="qr-modal-overlay" onclick="if(event.target===this) closeQRModal()">
+  <div class="modal">
+    <div class="modal-title" id="qr-modal-name"></div>
+    <div class="qr-canvas-wrap" id="qr-canvas-wrap"></div>
+    <div class="qr-link-text" id="qr-modal-link"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" onclick="copyLinkFromModal()">Copy link</button>
+      <button class="btn btn-primary btn-sm" onclick="closeQRModal()">Close</button>
+    </div>
+  </div>
+</div>
+<!-- QR code generation. Pinned to 1.4.4 — see featurelink-display-config's
+     index.html for why (1.5.x's build/ isn't a standalone browser bundle). -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
 <script>
+let qrModalId = null;
+function showQR(id, name){
+  qrModalId = id;
+  const url = window.location.origin + '/featurelink/featurelink-display-config?load=' + encodeURIComponent(id);
+  document.getElementById('qr-modal-name').textContent = name || 'Saved Dataset Config';
+  document.getElementById('qr-modal-link').textContent = url;
+  const wrap = document.getElementById('qr-canvas-wrap');
+  wrap.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  wrap.appendChild(canvas);
+  QRCode.toCanvas(canvas, url, {
+    width: 220, margin: 1, errorCorrectionLevel: 'M',
+    color: { dark: '#000000', light: '#ffffff' },
+  }, function(err){
+    if (err) wrap.innerHTML = '<div style="color:var(--red);font-size:12px">QR generation failed: ' + err.message + '</div>';
+  });
+  document.getElementById('qr-modal-overlay').classList.add('open');
+}
+function closeQRModal(){
+  document.getElementById('qr-modal-overlay').classList.remove('open');
+  qrModalId = null;
+}
+function copyLinkFromModal(){
+  if (qrModalId) copyLink(qrModalId);
+}
 let toastTimer;
 function showToast(msg, kind){
   const el = document.getElementById('toast');

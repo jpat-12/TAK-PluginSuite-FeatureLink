@@ -1,6 +1,6 @@
 # Infra-TAK Module — FeatureLink
 
-**Current version: 1.2.2** — `MODULE_VERSION` in `featurelink_displayconfig.py`
+**Current version: 1.3.0** — `MODULE_VERSION` in `featurelink_displayconfig.py`
 is the single source of truth; `install.sh` reads it back out with `grep`
 after every sync. No separate CHANGELOG, the commit log is the changelog.
 
@@ -55,8 +55,9 @@ code export, plus a save/admin layer:
   source, field count, and last-updated time, plus a button to start a new
   one. **Open** reloads a saved entry back into the configurator (dataset
   re-fetched/re-parsed, config re-applied exactly — no lossy round-trip
-  through the export format). **Copy link** copies the same URL the QR's
-  Saved Dataset Link mode encodes. **Delete** removes it.
+  through the export format). **QR** pops up the same Saved Dataset Link QR
+  right on the hub page — no need to open the configurator first. **Copy
+  link** copies that same URL. **Delete** removes it.
 
 Uploaded files and saved configs are stored under
 `CONFIG_DIR/featurelink_displayconfig/datasets/` on the console (one
