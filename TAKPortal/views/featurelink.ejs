@@ -1,0 +1,63 @@
+<%- include("partials/header") %>
+<%- include("partials/sidebar") %>
+
+<main class="main">
+  <h1>FeatureLink</h1>
+  <p class="muted">
+    Download a display config below, then open it in the FeatureLink plugin
+    in ATAK or WinTAK (Import Config). You're already signed in to TAK
+    Portal, so no separate login is needed on the device.
+  </p>
+
+  <div class="card">
+    <div id="configsMsg" class="msg"></div>
+    <div id="configsLoading" class="muted">Loading...</div>
+    <div id="configCards" class="plugin-cards" style="display: none; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px;"></div>
+    <div id="configsEmpty" style="display: none; margin-top: 16px; color: var(--muted);">
+      No configs are available yet — check back once your admin has added some.
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  const msgEl = document.getElementById('configsMsg');
+  const loadingEl = document.getElementById('configsLoading');
+  const cardsEl = document.getElementById('configCards');
+  const emptyEl = document.getElementById('configsEmpty');
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function renderCard(c) {
+    const div = document.createElement('div');
+    div.className = 'plugin-card';
+    div.innerHTML =
+      '<strong>' + escapeHtml(c.name) + '</strong>' +
+      (c.description ? '<span class="muted">' + escapeHtml(c.description) + '</span>' : '') +
+      '<span class="muted">Target: ' + escapeHtml(c.targetApp) + '</span>' +
+      '<a class="btn" href="/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download">Download</a>';
+    return div;
+  }
+
+  fetch('/api/featurelink/configs', { credentials: 'same-origin' })
+    .then((r) => r.json())
+    .then((d) => {
+      loadingEl.style.display = 'none';
+      const configs = (d && d.configs) || [];
+      if (!configs.length) {
+        emptyEl.style.display = '';
+        return;
+      }
+      configs.forEach((c) => cardsEl.appendChild(renderCard(c)));
+      cardsEl.style.display = 'grid';
+    })
+    .catch(() => {
+      loadingEl.style.display = 'none';
+      msgEl.textContent = 'Failed to load configs.';
+    });
+})();
+</script>

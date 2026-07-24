@@ -1,0 +1,165 @@
+<%- include("partials/header") %>
+<%- include("partials/sidebar") %>
+
+<main class="main">
+  <h1>FeatureLink Configs</h1>
+  <p class="muted">
+    Prep display configs here for field devices to list and download from the
+    FeatureLink plugin. Users connect via <a href="/setup-featurelink">Setup FeatureLink</a>
+    under Onboarding.
+  </p>
+
+  <div class="card">
+    <h2 style="margin-top: 0;">Configs</h2>
+    <div id="configsMsg" class="msg"></div>
+    <div id="configsLoading" class="muted">Loading...</div>
+    <table id="configsTable" style="display: none; width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th style="text-align: left; padding: 8px;">Name</th>
+          <th style="text-align: left; padding: 8px;">Target</th>
+          <th style="text-align: left; padding: 8px;">Source</th>
+          <th style="text-align: left; padding: 8px;">Updated</th>
+          <th style="text-align: left; padding: 8px;"></th>
+        </tr>
+      </thead>
+      <tbody id="configsBody"></tbody>
+    </table>
+    <div id="configsEmpty" style="display: none; margin-top: 16px; color: var(--muted);">
+      No configs yet — add one below.
+    </div>
+  </div>
+
+  <details class="card settings-section" style="margin-top: 24px;" open>
+    <summary class="settings-summary" style="cursor: pointer; padding: 4px 0;">Add Config</summary>
+    <div class="settings-body" style="margin-top: 12px;">
+      <div class="row" style="flex-wrap: wrap; gap: 16px;">
+        <div style="flex: 1; min-width: 240px;">
+          <label>Name
+            <input type="text" id="newName" placeholder="e.g. County Boundaries" style="width: 100%;" />
+          </label>
+          <label style="margin-top: 8px;">Description (optional)
+            <input type="text" id="newDescription" style="width: 100%;" />
+          </label>
+          <label style="margin-top: 8px;">Target
+            <select id="newTargetApp" style="width: 100%;">
+              <option value="Both" selected>Both</option>
+              <option value="ATAK">ATAK</option>
+              <option value="WinTAK">WinTAK</option>
+            </select>
+          </label>
+        </div>
+        <div style="flex: 1; min-width: 240px;">
+          <label>Upload config file
+            <input type="file" id="newFile" />
+          </label>
+          <p class="muted" style="margin: 8px 0; text-align: center;">— or —</p>
+          <label>Source URL (e.g. an ArcGIS FeatureLayer or hosted config JSON)
+            <input type="url" id="newSourceUrl" placeholder="https://..." style="width: 100%;" />
+          </label>
+        </div>
+      </div>
+      <button class="btn" type="button" id="addConfigBtn" style="margin-top: 12px;">Add Config</button>
+      <div id="addConfigMsg" class="msg"></div>
+    </div>
+  </details>
+</main>
+
+<script>
+(function () {
+  const msgEl = document.getElementById('configsMsg');
+  const loadingEl = document.getElementById('configsLoading');
+  const tableEl = document.getElementById('configsTable');
+  const bodyEl = document.getElementById('configsBody');
+  const emptyEl = document.getElementById('configsEmpty');
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function renderRow(c) {
+    const source = c.sourceType === 'url' ? escapeHtml(c.sourceUrl) : escapeHtml(c.filename || '');
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td style="padding: 8px;">' + escapeHtml(c.name) + (c.description ? '<br><span class="muted">' + escapeHtml(c.description) + '</span>' : '') + '</td>' +
+      '<td style="padding: 8px;">' + escapeHtml(c.targetApp) + '</td>' +
+      '<td style="padding: 8px; word-break: break-all;">' + source + '</td>' +
+      '<td style="padding: 8px;">' + new Date(c.updatedAt).toLocaleString() + '</td>' +
+      '<td style="padding: 8px;"><button class="btn deleteBtn" data-id="' + c.id + '">Delete</button></td>';
+    return tr;
+  }
+
+  function loadConfigs() {
+    loadingEl.style.display = '';
+    tableEl.style.display = 'none';
+    emptyEl.style.display = 'none';
+    fetch('/api/featurelink/admin/configs', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((d) => {
+        loadingEl.style.display = 'none';
+        const configs = (d && d.configs) || [];
+        if (!configs.length) {
+          emptyEl.style.display = '';
+          return;
+        }
+        bodyEl.innerHTML = '';
+        configs.forEach((c) => bodyEl.appendChild(renderRow(c)));
+        tableEl.style.display = '';
+        bodyEl.querySelectorAll('.deleteBtn').forEach((btn) => {
+          btn.addEventListener('click', function () {
+            if (!confirm('Delete this config?')) return;
+            fetch('/api/featurelink/admin/configs/' + btn.dataset.id, { method: 'DELETE', credentials: 'same-origin' })
+              .then((r) => r.json())
+              .then((dd) => {
+                if (dd && dd.success) loadConfigs();
+                else msgEl.textContent = (dd && dd.error) || 'Delete failed.';
+              });
+          });
+        });
+      })
+      .catch(() => { loadingEl.style.display = 'none'; msgEl.textContent = 'Failed to load configs.'; });
+  }
+
+  document.getElementById('addConfigBtn').addEventListener('click', function () {
+    const addMsg = document.getElementById('addConfigMsg');
+    const name = document.getElementById('newName').value.trim();
+    const description = document.getElementById('newDescription').value.trim();
+    const targetApp = document.getElementById('newTargetApp').value;
+    const file = document.getElementById('newFile').files[0];
+    const sourceUrl = document.getElementById('newSourceUrl').value.trim();
+
+    if (!name) { addMsg.textContent = 'Name is required.'; return; }
+    if (!file && !sourceUrl) { addMsg.textContent = 'Upload a file or provide a source URL.'; return; }
+
+    const form = new FormData();
+    form.append('name', name);
+    form.append('description', description);
+    form.append('targetApp', targetApp);
+    if (file) {
+      form.append('sourceType', 'file');
+      form.append('config', file);
+    } else {
+      form.append('sourceType', 'url');
+      form.append('sourceUrl', sourceUrl);
+    }
+
+    addMsg.textContent = 'Adding...';
+    fetch('/api/featurelink/admin/configs', { method: 'POST', credentials: 'same-origin', body: form })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d || !d.success) { addMsg.textContent = (d && d.error) || 'Failed to add config.'; return; }
+        addMsg.textContent = 'Added.';
+        document.getElementById('newName').value = '';
+        document.getElementById('newDescription').value = '';
+        document.getElementById('newFile').value = '';
+        document.getElementById('newSourceUrl').value = '';
+        loadConfigs();
+      })
+      .catch(() => { addMsg.textContent = 'Failed to add config.'; });
+  });
+
+  loadConfigs();
+})();
+</script>

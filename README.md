@@ -13,6 +13,7 @@ FeatureLink component in one place.
 | [`ATAK5.6/`](ATAK5.6/) | FeatureLink ATAK plugin, built against ATAK-CIV 5.6.0 | Available — see [`ATAK5.6/README.md`](ATAK5.6/README.md) |
 | `ATAK5.7/` | FeatureLink ATAK plugin, ATAK-CIV 5.7.x port | Planned |
 | [`Infra-TAK/`](Infra-TAK/) | Display Configurator — infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | Available — see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
+| [`TAKPortal/`](TAKPortal/) | FeatureLink Configs — TAK Portal module: admin preps display configs, any logged-in field user browses/downloads them | Available — see [`TAKPortal/README.md`](TAKPortal/README.md) |
 | `WinTAK5.6/` | FeatureLink WinTAK plugin, WinTAK 5.6.x port | Planned |
 | `WinTAK5.7/` | FeatureLink WinTAK plugin, WinTAK 5.7.x port | Planned |
 
@@ -58,6 +59,28 @@ This module replaces the old standalone `FeatureLink-DisplayConfig`
 GitHub Pages app, which is now deprecated in favor of running the same
 tool from the console.
 
+### TAK Portal module (`TAKPortal/`)
+
+Adds a **FeatureLink Configs** admin page (Administration) and a **FeatureLink**
+browse/download page (Onboarding) to an existing
+[TAK Portal](https://github.com/AdventureSeeker423/TAK-Portal) install (as
+deployed by infra-TAK, default `~/TAK-Portal`). Lets an admin prep display
+configs for field users to download, without needing the infra-TAK console's
+admin password — any logged-in TAK Portal user can download a config through
+their own browser session, then open it in the FeatureLink plugin:
+
+```bash
+git clone https://github.com/jpat-12/TAK-PluginSuite-FeatureLink.git
+cd TAK-PluginSuite-FeatureLink/TAKPortal
+bash install.sh
+```
+
+Patches TAK Portal's `server.js`, `permissions.registry.js`,
+`portalAuth.middleware.js`, and sidebar idempotently (safe to re-run,
+including after pulling a newer TAK Portal `main` from upstream) rather than
+forking it — see [`TAKPortal/README.md`](TAKPortal/README.md) for why there's
+no separate login/token for the plugin, plus updating and uninstalling.
+
 ### WinTAK plugins (`WinTAK5.6/`, `WinTAK5.7/`)
 
 Not yet published — placeholders for upcoming ports.
@@ -66,3 +89,8 @@ Not yet published — placeholders for upcoming ports.
 
 - [ATAK-Plugin_FeatureLink](https://github.com/jpat-12/ATAK-Plugin_FeatureLink) — original standalone repo for the ATAK plugin
 - [infra-TAK](https://github.com/jpat-12/infra-TAK) — the console the `Infra-TAK/` module installs into
+- [TAK-Portal](https://github.com/AdventureSeeker423/TAK-Portal) — the portal the `TAKPortal/` module installs into
+
+## Support
+
+If this project is useful to you, consider [buying me a coffee](https://buymeacoffee.com/jpat).
