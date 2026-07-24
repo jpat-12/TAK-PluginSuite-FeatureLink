@@ -2276,10 +2276,11 @@ function downloadLinkQR() {
 // ══════════════════════════════════════════
 function exportConfig() {
   const out = {
-    _version: '1.0',
+    _version: '1.1',
     _tool: 'FeatureLink Display Configurator',
     _generated: new Date().toISOString(),
-    _source: state.fileName,
+    _source: state.fileName || null,
+    featureLayerUrl: state.featureLayerUrl || null,
     _rowCount: state.rows.length,
     fields: state.fields.map(f => ({ name: f.name, type: f.type })),
     layer: { ...state.cfg.layer },
@@ -2619,9 +2620,10 @@ function buildQRPayload(mode) {
   } else {
     // Full export config (same as exported JSON, minus raw row data)
     const out = {
-      _v: '1.0',
+      _v: '1.1',
       _tool: 'FeatureLink Display Configurator',
-      _src: state.fileName,
+      _src: state.fileName || null,
+      featureLayerUrl: state.featureLayerUrl || null,
       fields: state.fields.map(f=>({ n: f.name, t: f.type })),
       layer: state.cfg.layer,
       symbology: buildSymbologyExport(),
@@ -2732,6 +2734,7 @@ function applyConfigPayload(p) {
 
   // Full export JSON (_version or _v)
   if (p._version || p._v) {
+    if (p.featureLayerUrl) state.featureLayerUrl = p.featureLayerUrl;
     if (p.layer) Object.assign(state.cfg.layer, p.layer);
     if (p.labels) Object.assign(state.cfg.labels, p.labels);
     if (p.popup) {

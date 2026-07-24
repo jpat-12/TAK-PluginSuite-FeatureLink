@@ -1,6 +1,6 @@
 # Infra-TAK Module — FeatureLink
 
-**Current version: 1.3.0** — `MODULE_VERSION` in `featurelink_displayconfig.py`
+**Current version: 1.3.1** — `MODULE_VERSION` in `featurelink_displayconfig.py`
 is the single source of truth; `install.sh` reads it back out with `grep`
 after every sync. No separate CHANGELOG, the commit log is the changelog.
 
@@ -64,6 +64,117 @@ Uploaded files and saved configs are stored under
 directory per saved entry: `record.json` for the config + metadata, plus
 `data.bin` for file-based sources). FeatureLayer-URL-based entries store just
 the URL and re-fetch live data on open.
+
+## Payload formats (for the ATAK plugin's QR scanner / config importer)
+
+There are **five distinct payload shapes** the tool produces. The first two
+are JSON meant to be parsed; the QR modes exist to fit that JSON in a QR
+code and use shortened keys accordingly. The last one is not JSON at all.
+
+### 1. Exported Config JSON (the "⬇ Export Config JSON" download)
+
+```jsonc
+{
+  "_version": "1.1",
+  "_tool": "FeatureLink Display Configurator",
+  "_generated": "2026-01-01T00:00:00.000Z",
+  "_source": "my-data.csv",              // uploaded filename, or null if loaded from a URL
+  "featureLayerUrl": "https://.../FeatureServer/0",  // or null if loaded from a file
+  "_rowCount": 1234,
+  "fields": [ { "name": "STATUS", "type": "str" }, ... ],  // type: str|num|dat|geo
+  "layer": { "name": "...", "opacity": 1.0, "minScale": 0, "maxScale": 0, "visible": true },
+  "symbology": { /* Esri renderer JSON — see "Symbology object" below */ },
+  "labels": { "enabled": true, "field": "...", "fontSize": 12, "color": "#ffffff", "haloColor": "#000000", "haloSize": 1, "bold": false, "italic": false },
+  "popup": {
+    "enabled": true, "titleField": "...", "customHtml": false, "htmlTemplate": null,
+    "fields": [ { "field": "STATUS", "alias": "Status" }, ... ]
+  }
+}
+```
+
+### 2. QR "Full config" mode (`_v` schema — similar to #1 but NOT identical keys)
+
+```jsonc
+{
+  "_v": "1.1",
+  "_tool": "FeatureLink Display Configurator",
+  "_src": "my-data.csv",                 // or null
+  "featureLayerUrl": "https://.../FeatureServer/0",  // or null
+  "fields": [ { "n": "STATUS", "t": "str" }, ... ],   // note: n/t, not name/type
+  "layer": { ... same shape as #1 ... },
+  "symbology": { /* identical shape to #1 — same generator function */ },
+  "labels": { ... same shape as #1, including haloColor/haloSize ... },
+  "popup": {
+    "enabled": true, "title": "...", "html": null,     // note: "title" not "titleField"
+    "fields": [ { "f": "STATUS", "a": "Status" }, ... ] // note: f/a, not field/alias
+  }
+}
+```
+
+### 3. QR "Compact" mode (`v:1` schema — smallest payload, no raw field list)
+
+```jsonc
+{
+  "v": 1,
+  "src": "my-data.csv",                  // or null
+  "layer": { "name": "...", "opacity": 1.0, "visible": true },  // no minScale/maxScale
+  "sym": { /* discriminated union by "t" — see "sym object" below */ },
+  "lbl": { "f": "...", "sz": 12, "c": "#ffffff", "b": false, "i": false } /* or null if labels disabled — no halo */,
+  "popup": {
+    "t": "TITLE_FIELD",
+    "flds": [ "STATUS", ["NAME", "Display Name"], ... ]  // string = same alias; [field, alias] = renamed
+  }
+}
+```
+
+### 4. QR "URL + Config" mode (`v:2` schema — compact + the layer URL)
+
+Identical to #3 (compact), plus a top-level `"url"` field with the
+FeatureLayer URL, and `v: 2` instead of `v: 1`. Only generated when the
+dataset was loaded from a URL (falls back to compact/`v:1` otherwise).
+
+```jsonc
+{ "v": 2, "url": "https://.../FeatureServer/0", "layer": {...}, "sym": {...}, "lbl": {...}, "popup": {...} }
+```
+
+### 5. QR "Saved Dataset Link" mode — **not JSON**
+
+A plain URL string (no wrapping object, no `v` field):
+
+```
+https://<console-host>/featurelink/featurelink-display-config?load=<dataset-id>
+```
+
+Scanning it should open that URL in a browser (or an in-app WebView) —
+there's nothing to parse. It only works for datasets that have been
+**Saved** first (the QR option is disabled otherwise), and `<dataset-id>`
+is a 32-char lowercase hex string.
+
+### `sym` object (used in payloads #3 and #4)
+
+Discriminated by `t`:
+
+| `t` | Meaning | Fields |
+|---|---|---|
+| `s` | Simple marker | `c` color hex, `oc` outline color hex, `sz` size, `sh` shape (`circle`\|`square`\|`diamond`\|`triangle`\|`cross`\|`x`\|`star`), `op` opacity 0–1 |
+| `adv` | Rule-based + per-value (the "advanced" editor) | `f` field name, `vs`: `[{v, c, sh, m, is, ic}]` (up to 20; `m` is `shape`\|`icon`, `is`/`ic` = iconset/icon filename when `m:"icon"`), `r`: `[{f, o, v, c, sh, m}]` (rules; `o` is one of `= ≠ contains "starts with" > < >= <= "is empty" "is not empty"`) |
+| `ic` | Single icon symbol | `is` iconset name, `ic` icon filename, `sz` size (default 24), `op` opacity |
+| `rb` | Rules-based (shape/color only, no icons) | `rules`: `[{f, o, v, c, sh}]`, `dc` default color hex — **note:** default shape/size/opacity are NOT preserved in this compact form |
+| `uv` | Unique values | `f` field, `uv`: `[{v, c}]` (up to 30) |
+| `cb` | Class breaks | `f` field, `cb`: `[{mn, mx, c}]` — **note:** this tool's own importer does not currently re-apply `cb` payloads (known gap); if your parser handles it directly this isn't a concern |
+
+### Symbology object (Esri renderer JSON, used in payloads #1 and #2)
+
+Same shape either way — one function builds it for both:
+
+- `{"type":"simple", "symbol": {"type":"simple-marker"|"picture-marker", ...}}`
+- `{"type":"rule-based", "field", "rules":[{"where","label","symbol"}], "defaultSymbol"}`
+- `{"type":"unique-value", "field", "uniqueValueInfos":[{"value","label","symbol"}]}`
+- `{"type":"class-breaks", "field", "classBreakInfos":[{"minValue","maxValue","label","symbol"}]}`
+
+`symbol` is either:
+- `{"type":"simple-marker", "color":[r,g,b,a], "size", "style", "outline":{"color","width"}}` (`color` is `[0-255,0-255,0-255,0-255]`, alpha included)
+- `{"type":"picture-marker", "url":"icons/<iconset>/<icon>.png", "width", "height", "opacity"}` — **`url` is relative to the console** (`/featurelink/featurelink-display-config/`), not an absolute URL
 
 ### External dependencies
 
