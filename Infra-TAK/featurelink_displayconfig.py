@@ -1,9 +1,10 @@
 """
-featurelink_displayconfig.py — FeatureLink Display Configurator module for infra-TAK
+featurelink_displayconfig.py — FeatureLink module for infra-TAK
 
-Registers /featurelink-display-config (the configurator), /featurelink-display-config/admin
-(the saved-datasets list), and their supporting APIs directly on the Flask app.
-Call register_routes(app, login_required) from app.py.
+Registers the /featurelink hub (saved-datasets list + entry point), the
+/featurelink/featurelink-display-config configurator, and their supporting
+APIs directly on the Flask app. Call register_routes(app, login_required)
+from app.py.
 
 The configurator itself (featurelink_displayconfig_assets/index.html) is a
 self-contained client-side tool: upload FeatureLayer data (CSV/TSV/JSON/
@@ -14,7 +15,7 @@ code) for the FeatureLink ATAK plugin.
 This module adds persistence on top of that: "Save" on the configurator
 POSTs the dataset (a FeatureLayer URL, or the raw uploaded file) + the
 display config to this module, which stores it under CONFIG_DIR and lists
-it on the admin page. Opening a saved entry reloads the dataset and
+it on the /featurelink hub. Opening a saved entry reloads the dataset and
 re-applies the saved config exactly (no lossy round-trip through the Esri
 export format — the internal config object is stored as-is).
 """
@@ -28,11 +29,11 @@ import shutil
 import uuid
 
 from flask import (
-    abort, jsonify, make_response, render_template_string, request,
+    abort, jsonify, make_response, redirect, render_template_string, request,
     send_file, send_from_directory,
 )
 
-MODULE_VERSION = '1.1.1'
+MODULE_VERSION = '1.2.0'
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'featurelink_displayconfig_assets')
 
@@ -41,9 +42,17 @@ CONFIG_DIR = os.environ.get('CONFIG_DIR') or os.path.join(
 )
 DATASETS_DIR = os.path.join(CONFIG_DIR, 'featurelink_displayconfig', 'datasets')
 
-# Same brand asset infra-TAK uses for the TAK Server card/nav-link — stand-in
-# icon for this module until it has its own.
-ICON_URL = 'https://tak.gov/assets/logos/brand-06b80939.svg'
+# FeatureLink's own icon (same layered-map mark as the ATAK plugin's launcher
+# icon, ATAK5.6/app/src/main/res/drawable/ic_launcher.xml) as an inline SVG
+# data URI — same convention infra-TAK uses for other modules' `icon_data`
+# (e.g. CLOUDTAK_ICON), so no external asset/network dependency.
+ICON_DATA = (
+    'data:image/svg+xml;base64,'
+    'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+'
+    'PHBhdGggZmlsbD0iIzAwOTlDQyIgZD0iTTI0LDQwIEw0LDMyIEwyNCwyNCBMNDQsMzIgWiIvPjxwYXRo'
+    'IGZpbGw9IiMwMEJCRUUiIGQ9Ik0yNCwzMiBMNCwyNCBMMjQsMTYgTDQ0LDI0IFoiLz48cGF0aCBmaWxs'
+    'PSIjRkZGRkZGIiBkPSJNMjQsMjQgTDQsMTYgTDI0LDggTDQ0LDE2IFoiLz48L3N2Zz4='
+)
 
 _ID_RE = re.compile(r'[^a-fA-F0-9]')
 
@@ -146,11 +155,11 @@ def delete_dataset(dataset_id):
         shutil.rmtree(d)
 
 
-ADMIN_TEMPLATE = '''<!DOCTYPE html>
+HUB_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>FeatureLink Display Configs — infra-TAK</title>
+<title>FeatureLink — infra-TAK</title>
 <style>
 :root{--bg:#1a1d23;--surface:#22262f;--surface2:#2b3040;--border:#3a3f50;--accent:#0078d4;--accent2:#005a9e;
 --accent-green:#107c10;--text:#e8eaf0;--text-muted:#8b92a8;--danger:#d13438;--radius:6px}
@@ -167,6 +176,8 @@ header a.back-link:hover{color:var(--text)}
 cursor:pointer;font-size:13px;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
 .new-btn:hover{opacity:.85}
 main{max-width:1000px;margin:0 auto;padding:28px 20px}
+.section-title{font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;
+margin:0 0 12px}
 .empty{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:48px;text-align:center;color:var(--text-muted)}
 .empty a{color:var(--accent)}
 .list{display:flex;flex-direction:column;gap:10px}
@@ -189,18 +200,19 @@ z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;background:var
 </head>
 <body>
 <header>
-<img class="logo" src="{{ icon_url }}" alt="">
-<h1>FeatureLink Display Configs</h1>
+<img class="logo" src="{{ icon_data }}" alt="">
+<h1>FeatureLink</h1>
 <span class="spacer"></span>
 <a class="back-link" href="/console">&larr; Console</a>
-<a class="new-btn" href="/featurelink-display-config">+ New Dataset Config</a>
+<a class="new-btn" href="/featurelink/featurelink-display-config">+ New Dataset Config</a>
 </header>
 <main>
+<div class="section-title">Saved Dataset Configs</div>
 {% if not datasets %}
 <div class="empty">
   No saved dataset configs yet.<br><br>
-  <a href="/featurelink-display-config">Open the configurator</a> to upload a dataset, set up its
-  display config, and click <strong>Save</strong> — it'll show up here.
+  <a href="/featurelink/featurelink-display-config">Open the Display Configurator</a> to upload a
+  dataset, set up its display config, and click <strong>Save</strong> — it'll show up here.
 </div>
 {% else %}
 <div class="list" id="dataset-list">
@@ -215,7 +227,7 @@ z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;background:var
     </div>
   </div>
   <div class="row-actions">
-    <a class="open-btn" href="/featurelink-display-config?load={{ d.id }}">Open</a>
+    <a class="open-btn" href="/featurelink/featurelink-display-config?load={{ d.id }}">Open</a>
     <button onclick="copyLink('{{ d.id }}')">Copy link</button>
     <button class="del-btn" onclick="deleteDataset('{{ d.id }}')">Delete</button>
   </div>
@@ -235,7 +247,7 @@ function showToast(msg){
   toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
 }
 function copyLink(id){
-  const url = window.location.origin + '/featurelink-display-config?load=' + encodeURIComponent(id);
+  const url = window.location.origin + '/featurelink/featurelink-display-config?load=' + encodeURIComponent(id);
   navigator.clipboard.writeText(url).then(
     () => showToast('Link copied — scan or share it to open this config directly'),
     () => showToast(url)
@@ -244,7 +256,7 @@ function copyLink(id){
 async function deleteDataset(id){
   if (!confirm('Delete this saved dataset config? This cannot be undone.')) return;
   try {
-    const r = await fetch('/api/featurelink-display-config/datasets/' + encodeURIComponent(id), { method: 'DELETE' });
+    const r = await fetch('/api/featurelink/datasets/' + encodeURIComponent(id), { method: 'DELETE' });
     if (!r.ok) throw new Error('delete failed');
     const row = document.querySelector('.row[data-id="' + id + '"]');
     if (row) row.remove();
@@ -262,29 +274,47 @@ async function deleteDataset(id){
 
 
 def register_routes(app, login_required):
-    @app.route('/featurelink-display-config')
-    @app.route('/featurelink-display-config/')
+    @app.route('/featurelink')
+    @app.route('/featurelink/')
+    @login_required
+    def featurelink_hub_page():
+        resp = make_response(render_template_string(
+            HUB_TEMPLATE, datasets=list_datasets(), icon_data=ICON_DATA,
+        ))
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        return resp
+
+    @app.route('/featurelink/featurelink-display-config')
+    @app.route('/featurelink/featurelink-display-config/')
     @login_required
     def featurelink_displayconfig_page():
         resp = send_from_directory(ASSETS_DIR, 'index.html')
         resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
         return resp
 
-    @app.route('/featurelink-display-config/icons/<path:filename>')
+    @app.route('/featurelink/featurelink-display-config/icons/<path:filename>')
     @login_required
     def featurelink_displayconfig_icon(filename):
         return send_from_directory(os.path.join(ASSETS_DIR, 'icons'), filename)
 
+    # Legacy redirects — the module used to live directly at
+    # /featurelink-display-config (and /featurelink-display-config/admin)
+    # before the /featurelink hub was added. Preserve any already-shared
+    # links/QR codes/bookmarks.
+    @app.route('/featurelink-display-config')
+    @app.route('/featurelink-display-config/')
+    @login_required
+    def featurelink_displayconfig_legacy_redirect():
+        qs = request.query_string.decode()
+        target = '/featurelink/featurelink-display-config' + (f'?{qs}' if qs else '')
+        return redirect(target, code=301)
+
     @app.route('/featurelink-display-config/admin')
     @login_required
-    def featurelink_displayconfig_admin():
-        resp = make_response(render_template_string(
-            ADMIN_TEMPLATE, datasets=list_datasets(), icon_url=ICON_URL,
-        ))
-        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
-        return resp
+    def featurelink_displayconfig_admin_legacy_redirect():
+        return redirect('/featurelink', code=301)
 
-    @app.route('/api/featurelink-display-config/datasets', methods=['GET', 'POST'])
+    @app.route('/api/featurelink/datasets', methods=['GET', 'POST'])
     @login_required
     def featurelink_displayconfig_datasets_api():
         if request.method == 'GET':
@@ -298,7 +328,7 @@ def register_routes(app, login_required):
             return jsonify({'ok': False, 'error': str(e)}), 400
         return jsonify(record)
 
-    @app.route('/api/featurelink-display-config/datasets/<dataset_id>', methods=['GET', 'DELETE'])
+    @app.route('/api/featurelink/datasets/<dataset_id>', methods=['GET', 'DELETE'])
     @login_required
     def featurelink_displayconfig_dataset_api(dataset_id):
         if request.method == 'DELETE':
@@ -309,7 +339,7 @@ def register_routes(app, login_required):
             return jsonify({'ok': False, 'error': 'not found'}), 404
         return jsonify(record)
 
-    @app.route('/api/featurelink-display-config/datasets/<dataset_id>/file')
+    @app.route('/api/featurelink/datasets/<dataset_id>/file')
     @login_required
     def featurelink_displayconfig_dataset_file(dataset_id):
         path = _data_path(_clean_id(dataset_id))

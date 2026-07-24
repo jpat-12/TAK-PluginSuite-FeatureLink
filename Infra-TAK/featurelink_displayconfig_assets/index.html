@@ -787,7 +787,7 @@
   <span class="badge">FeatureLink</span>
   <span class="saved-badge" id="saved-name-badge" title="Currently editing this saved config"></span>
   <span class="spacer"></span>
-  <a class="admin-link-btn" href="/featurelink-display-config/admin">&#128194; Saved Configs</a>
+  <a class="admin-link-btn" href="/featurelink">&#128194; Saved Configs</a>
   <button class="save-btn" id="save-btn" disabled onclick="saveDataset()">
     &#128190; Save
   </button>
@@ -925,6 +925,12 @@
 // ══════════════════════════════════════════
 //  State
 // ══════════════════════════════════════════
+// Absolute, not relative — this page can be reached with or without a
+// trailing slash (/featurelink/featurelink-display-config), and a relative
+// "icons/..." path resolves differently in each case. Anchoring to an
+// absolute path sidesteps that entirely.
+const ICONS_BASE = '/featurelink/featurelink-display-config/icons/';
+
 let state = {
   fileName: null,
   featureLayerUrl: null,
@@ -1501,7 +1507,7 @@ function renderSymbologyTab() {
         <div class="cfg-section">
           <div class="cfg-label">Selected Icon</div>
           <div class="icon-selected-chip">
-            <img src="icons/${encodeURIComponent(s.icon.iconset)}/${encodeURIComponent(s.icon.icon)}" />
+            <img src="${ICONS_BASE}${encodeURIComponent(s.icon.iconset)}/${encodeURIComponent(s.icon.icon)}" />
             <span>${s.icon.icon.replace(/\.png$/i,'')}</span>
           </div>
           <div class="cfg-label">Size</div>
@@ -1746,7 +1752,7 @@ function generateClassBreaks() {
 async function loadManifest() {
   if (iconManifest) return;
   try {
-    const r = await fetch('icons/manifest.json');
+    const r = await fetch(ICONS_BASE + 'manifest.json');
     iconManifest = await r.json();
   } catch(e) { console.warn('Icon manifest unavailable:', e); }
 }
@@ -1771,7 +1777,7 @@ function renderIconGrid() {
         const setEsc = s.icon.iconset.replace(/"/g,'&quot;');
         const icEsc  = ic.replace(/"/g,'&quot;');
         return `<div class="icon-thumb${s.icon.icon===ic?' selected':''}" title="${ic.replace(/\.png$/i,'')}" data-is="${setEsc}" data-ic="${icEsc}" onclick="selectIcon(this.dataset.is,this.dataset.ic)">
-          <img src="icons/${setEnc}/${icEnc}" loading="lazy" onerror="this.style.opacity=0" /></div>`;
+          <img src="${ICONS_BASE}${setEnc}/${icEnc}" loading="lazy" onerror="this.style.opacity=0" /></div>`;
       }).join('')}
     </div>${moreNote}`;
 }
@@ -1798,7 +1804,7 @@ function setIconset(name) {
 function advSwatchHtml(sym, ctx, idx) {
   const isOpen = symEdCtx && symEdCtx.ctx===ctx && symEdCtx.idx===idx;
   const inner = sym.mode==='icon' && sym.icon
-    ? `<img src="icons/${encodeURIComponent(sym.iconset||'')}/${encodeURIComponent(sym.icon)}" style="width:20px;height:20px;object-fit:contain">`
+    ? `<img src="${ICONS_BASE}${encodeURIComponent(sym.iconset||'')}/${encodeURIComponent(sym.icon)}" style="width:20px;height:20px;object-fit:contain">`
     : `<div style="width:18px;height:18px;background:${sym.color||'#888'};border-radius:${(sym.shape||'circle')==='circle'?'50%':'3px'};opacity:${sym.opacity??0.85}"></div>`;
   return `<div class="adv-sym-btn${isOpen?' is-open':''}" title="Edit symbol" onclick="openSymEd('${ctx}',${idx})">${inner}</div>`;
 }
@@ -1894,7 +1900,7 @@ function renderSymEdHtml(sym) {
       ? shown.map(ic=>{
           const sEnc=encodeURIComponent(sym.iconset||''), iEnc=encodeURIComponent(ic);
           const sEsc=(sym.iconset||'').replace(/"/g,'&quot;'), iEsc=ic.replace(/"/g,'&quot;');
-          return `<div class="sym-ed-icon-thumb${sym.icon===ic?' selected':''}" title="${ic.replace(/\.png$/i,'')}" data-is="${sEsc}" data-ic="${iEsc}" onclick="selectSymIcon(this.dataset.is,this.dataset.ic)"><img src="icons/${sEnc}/${iEnc}" loading="lazy" onerror="this.style.opacity=0"/></div>`;
+          return `<div class="sym-ed-icon-thumb${sym.icon===ic?' selected':''}" title="${ic.replace(/\.png$/i,'')}" data-is="${sEsc}" data-ic="${iEsc}" onclick="selectSymIcon(this.dataset.is,this.dataset.ic)"><img src="${ICONS_BASE}${sEnc}/${iEnc}" loading="lazy" onerror="this.style.opacity=0"/></div>`;
         }).join('')
       : `<div style="color:var(--text-muted);font-size:11px;padding:8px">${iconset?'No icons match.':'Choose an iconset above.'}</div>`;
     const moreNote = icons.length>150 ? `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">Showing 150 of ${icons.length} — refine search</div>` : '';
@@ -2456,7 +2462,7 @@ async function saveDataset() {
       payload.file_content_b64 = arrayBufferToBase64(buf);
     }
 
-    const resp = await fetch('/api/featurelink-display-config/datasets', {
+    const resp = await fetch('/api/featurelink/datasets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2477,7 +2483,7 @@ async function saveDataset() {
 
 async function loadSavedDataset(id) {
   try {
-    const resp = await fetch(`/api/featurelink-display-config/datasets/${encodeURIComponent(id)}`);
+    const resp = await fetch(`/api/featurelink/datasets/${encodeURIComponent(id)}`);
     if (!resp.ok) throw new Error('saved dataset not found');
     const rec = await resp.json();
 
@@ -2490,7 +2496,7 @@ async function loadSavedDataset(id) {
       document.getElementById('layer-url-input').value = rec.source_url;
       await loadFromUrl();
     } else {
-      const fileResp = await fetch(`/api/featurelink-display-config/datasets/${encodeURIComponent(id)}/file`);
+      const fileResp = await fetch(`/api/featurelink/datasets/${encodeURIComponent(id)}/file`);
       if (!fileResp.ok) throw new Error('saved dataset file is missing');
       const blob = await fileResp.blob();
       const file = new File([blob], rec.file_name || (rec.name + '.csv'));
@@ -2521,7 +2527,7 @@ const QR_BYTE_LIMIT = 2900;  // conservative QR binary capacity at error-correct
 function buildQRPayload(mode) {
   if (mode === 'link') {
     if (!state.savedDatasetId) return buildQRPayload('compact');
-    return `${window.location.origin}/featurelink-display-config?load=${encodeURIComponent(state.savedDatasetId)}`;
+    return `${window.location.origin}/featurelink/featurelink-display-config?load=${encodeURIComponent(state.savedDatasetId)}`;
   }
 
   if (mode === 'urlcfg') {
@@ -2840,7 +2846,7 @@ function scheduleQRRefresh() {
 // Init empty tabs
 renderAllTabs();
 
-// If opened as /featurelink-display-config?load=<id> (from the admin page, a
+// If opened as /featurelink/featurelink-display-config?load=<id> (from the hub page, a
 // copied link, or a scanned "Saved Dataset Link" QR), load that dataset + its
 // saved config automatically.
 (function initFromQuery() {

@@ -1,19 +1,24 @@
-# Infra-TAK Module — FeatureLink Display Configurator
+# Infra-TAK Module — FeatureLink
 
-**Current version: 1.1.1** — `MODULE_VERSION` in `featurelink_displayconfig.py`
+**Current version: 1.2.0** — `MODULE_VERSION` in `featurelink_displayconfig.py`
 is the single source of truth; `install.sh` reads it back out with `grep`
 after every sync. No separate CHANGELOG, the commit log is the changelog.
 
-Adds a **FeatureLink Display Config** link to the sidebar and a module card
+Adds a **FeatureLink** link to the sidebar (sorted last) and a module card
 to the home page of an [infra-TAK](https://github.com/jpat-12/infra-TAK)
-console. It's the same display configurator that used to live at
+console, both using FeatureLink's own icon (the same layered-map mark as the
+ATAK plugin's launcher icon). The link opens the **`/featurelink` hub** —
+the saved dataset configs list plus an entry point into the Display
+Configurator at `/featurelink/featurelink-display-config`. The configurator
+itself is the same tool that used to live at
 `jpat-12.github.io/FeatureLink-DisplayConfig` (now retired — see below),
-served from the console instead of GitHub Pages, plus a small admin/save
-layer on top so configs don't just live in a downloaded file.
+served from the console instead of GitHub Pages, plus a save/hub layer on
+top so configs don't just live in a downloaded file.
 
-The sidebar link, home page card, and admin page all currently use the
-tak.gov brand logo as a stand-in icon (same asset infra-TAK uses for the TAK
-Server card) — a placeholder until this module gets its own.
+`install.sh` migrates any pre-v1.2.0 install automatically (old route was
+`/featurelink-display-config` directly, old icon was a tak.gov logo
+placeholder) — just re-run it, no manual cleanup needed. The old routes also
+redirect to the new ones, so previously shared links/QR codes keep working.
 
 ## What it does
 
@@ -39,13 +44,13 @@ code export, plus a save/admin layer:
   the dataset (the uploaded file, or the FeatureLayer URL) and its display
   config to the console. Saving again with the same session updates the
   same entry; the name prompt lets you rename it.
-- **Saved Configs admin page** (`/featurelink-display-config/admin`, linked
-  from the top of the configurator) — lists every saved dataset config with
-  its source, field count, and last-updated time. **Open** reloads a saved
-  entry back into the configurator (dataset re-fetched/re-parsed, config
-  re-applied exactly — no lossy round-trip through the export format).
-  **Copy link** copies the same URL the QR's Saved Dataset Link mode
-  encodes. **Delete** removes it.
+- **`/featurelink` hub** (linked from the top of the configurator, and from
+  the sidebar/home page) — lists every saved dataset config with its
+  source, field count, and last-updated time, plus a button to start a new
+  one. **Open** reloads a saved entry back into the configurator (dataset
+  re-fetched/re-parsed, config re-applied exactly — no lossy round-trip
+  through the export format). **Copy link** copies the same URL the QR's
+  Saved Dataset Link mode encodes. **Delete** removes it.
 
 Uploaded files and saved configs are stored under
 `CONFIG_DIR/featurelink_displayconfig/datasets/` on the console (one
@@ -75,13 +80,14 @@ This:
 2. Copies `featurelink_displayconfig.py` and
    `featurelink_displayconfig_assets/` (the page + bundled iconsets) into
    the detected infra-TAK install directory.
-3. Patches `app.py` (idempotently — safe to re-run) to:
+3. Patches `app.py` (idempotently — safe to re-run; migrates any pre-v1.2.0
+   patches to the current route/icon first) to:
    - register the module's routes at startup, following the same
      `register_routes(app, login_required)` convention infra-TAK already
      uses for its other modules
-   - add the **FeatureLink Display Config** link to the sidebar
-   - add a module card for it to the console home page (`detect_modules()`)
-   - show its name label on that card
+   - add the **FeatureLink** link (sorted last) to the sidebar
+   - add a module card for it to the console home page (`detect_modules()`),
+     also sorted last
 4. Restarts `takwerx-console` so the link and card show up immediately.
 
 ## Updating
@@ -109,9 +115,9 @@ directory by hand if you want them gone too.
 
 ## Files
 
-- `featurelink_displayconfig.py` — Flask routes serving the configurator
-  page, the admin/saved-datasets page and API, and the icon assets;
-  registered into infra-TAK's `app.py` at startup.
+- `featurelink_displayconfig.py` — Flask routes serving the `/featurelink`
+  hub, the configurator page and its API, and the icon assets; registered
+  into infra-TAK's `app.py` at startup.
 - `featurelink_displayconfig_assets/index.html` — the configurator itself
   (adds Save + saved-dataset loading + the Saved Dataset Link QR mode on
   top of the original standalone app).
