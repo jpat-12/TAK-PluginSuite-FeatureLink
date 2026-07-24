@@ -26,4 +26,8 @@
     <color name="fl_success">#4CAF50</color>
     <color name="fl_error">#FF5722</color>
 
+    <!-- Layer type badges -->
+    <color name="fl_badge_private">#FF5252</color>
+    <color name="fl_badge_public">#2196F3</color>
+
 </resources>

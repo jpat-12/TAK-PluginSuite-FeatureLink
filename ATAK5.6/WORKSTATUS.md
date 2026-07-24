@@ -44,9 +44,12 @@ app/src/main/java/com/atakmap/android/featurelink/
 
 app/src/main/res/
 ├── layout/
-│   ├── main_layout.xml       — Tab bar (Home/Layers/PLI) + FrameLayout page container
-│   ├── page_home.xml         — ArcGIS account card + feature statistics card
+│   ├── main_layout.xml       — App header (icon/title/account btn) + tab bar (Home/Layers/PLI)
+│   │                           + page container + overlay_container (pushed pages) + OAuth overlay
+│   ├── page_home.xml         — Feature statistics card only (collapsible); account moved out
+│   ├── page_account.xml      — Pushed page: ArcGIS sign-in/out, opened via header account button
 │   ├── page_layers.xml       — "My ArcGIS Layers" + "Public Layers" cards, no sub-tabs
+│   ├── page_add_layer.xml    — Pushed page: scan-QR (primary) or paste-URL (fallback) + upload prefs
 │   ├── page_pli.xml          — PLI feature layer / auto-send / QR config cards
 │   └── item_layer.xml        — Single layer row (eye icon, name, interval spinners, action btn)
 ├── values/
@@ -57,6 +60,7 @@ app/src/main/res/
     ├── bg_card.xml           — Rounded card surface (used by FL.Card)
     ├── bg_input.xml          — Rounded input bg w/ focused-state border
     ├── bg_button_primary.xml / bg_button_secondary.xml — Filled/outline button states
+    ├── ic_account.xml / ic_back.xml / ic_add.xml — Header/overlay-page icons
     └── ic_qr_scan.xml        — Vector drawable (4 corner brackets + centre square)
 
 app/src/main/AndroidManifest.xml      — Permissions (INTERNET, CAMERA) + QrScanActivity
@@ -233,6 +237,7 @@ The takdev plugin finds `main.jar` and `atak.apk` via the `../../` relative path
 | Background networking | Always use `ExecutorService`; methods in `ArcGISRestClient` are blocking |
 | ATAK credential storage | `AtakAuthenticationDatabase.getCredentials(key, "")` |
 | `onActivityResult` | Does NOT exist on `MapComponent`/`DropDownReceiver` in ATAK 5.6.0 |
+| System back button in a drop-down | Override `protected boolean onBackButtonPressed()` on `DropDownReceiver`; return `true` to consume (e.g. close an overlay page instead of the whole drop-down), `false` to fall through to default (closes the drop-down) |
 
 ---
 

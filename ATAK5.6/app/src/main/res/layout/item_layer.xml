@@ -2,51 +2,91 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="horizontal"
-    android:gravity="center_vertical"
+    android:orientation="vertical"
     android:paddingTop="@dimen/fl_space_sm"
     android:paddingBottom="@dimen/fl_space_sm">
 
-    <!-- Public/private indicator -->
-    <ImageView
-        android:id="@+id/layer_eye_icon"
-        android:layout_width="18dp"
-        android:layout_height="18dp"
-        android:layout_marginEnd="@dimen/fl_space_sm"
-        android:contentDescription="Layer visibility" />
-
-    <!-- Layer name -->
-    <TextView
-        android:id="@+id/layer_name_text"
-        android:layout_width="0dp"
+    <!-- Row 1: visibility toggle, name + type badge, action -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:textColor="@color/fl_text_primary"
-        android:textSize="@dimen/fl_text_body"
-        android:maxLines="1"
-        android:ellipsize="end" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
 
-    <!-- Refresh interval dropdown (private layers only) -->
-    <Spinner
-        android:id="@+id/layer_interval_spinner"
-        android:layout_width="56dp"
+        <ImageButton
+            android:id="@+id/layer_eye_icon"
+            android:layout_width="28dp"
+            android:layout_height="match_parent"
+            android:scaleType="centerInside"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:layout_marginEnd="@dimen/fl_space_sm"
+            android:contentDescription="Toggle layer visibility" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/layer_name_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/fl_text_primary"
+                android:textSize="@dimen/fl_text_body"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/layer_type_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:layout_marginTop="1dp" />
+
+        </LinearLayout>
+
+        <!-- Action button: ic_download → ic_refresh_circle for private; ic_menu_delete for public -->
+        <ImageButton
+            android:id="@+id/layer_action_btn"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:padding="4dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Layer action" />
+
+    </LinearLayout>
+
+    <!-- Row 2 (private layers only): refresh interval -->
+    <LinearLayout
+        android:id="@+id/layer_interval_row"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="2dp" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical|end"
+        android:layout_marginTop="2dp">
 
-    <!-- Refresh unit spinner (private layers only) -->
-    <Spinner
-        android:id="@+id/layer_unit_spinner"
-        android:layout_width="56dp"
-        android:layout_height="wrap_content"
-        android:layout_marginEnd="@dimen/fl_space_xs" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Refresh every"
+            android:layout_marginEnd="@dimen/fl_space_sm"
+            style="@style/FL.Text.Hint" />
 
-    <!-- Action button: ic_download → ic_refresh_circle for private; ic_menu_delete for public -->
-    <ImageButton
-        android:id="@+id/layer_action_btn"
-        android:layout_width="32dp"
-        android:layout_height="32dp"
-        android:padding="4dp"
-        android:background="?android:attr/selectableItemBackgroundBorderless"
-        android:contentDescription="Layer action" />
+        <Spinner
+            android:id="@+id/layer_interval_spinner"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="56dp"
+            android:layout_marginEnd="4dp" />
+
+        <Spinner
+            android:id="@+id/layer_unit_spinner"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="56dp" />
+
+    </LinearLayout>
 
 </LinearLayout>

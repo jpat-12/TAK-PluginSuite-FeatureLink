@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/fl_bg_root"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="4dp"
+            android:paddingEnd="@dimen/fl_space_md">
+
+            <ImageButton
+                android:id="@+id/add_layer_back_btn"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_back"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Back" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Add Layer"
+                style="@style/FL.Text.Title" />
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="@dimen/fl_space_md">
+
+            <!-- ── SCAN QR (primary path) ─────────────────────────────── -->
+            <LinearLayout
+                style="@style/FL.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="@dimen/fl_space_md">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Scan a layer&#8217;s config QR code to add it automatically."
+                    style="@style/FL.Text.Body"
+                    android:layout_marginBottom="@dimen/fl_space_sm" />
+
+                <Button
+                    android:id="@+id/scan_layer_qr_btn"
+                    style="@style/FL.Button.Primary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="44dp"
+                    android:drawableStart="@drawable/ic_qr_scan"
+                    android:drawablePadding="@dimen/fl_space_sm"
+                    android:text="Scan Config QR" />
+
+            </LinearLayout>
+
+            <!-- ── PASTE URL (fallback path) ──────────────────────────── -->
+            <LinearLayout
+                style="@style/FL.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="@dimen/fl_space_md">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Or paste a Feature Service URL"
+                    style="@style/FL.Text.SectionHeader"
+                    android:paddingBottom="@dimen/fl_space_sm" />
+
+                <EditText
+                    android:id="@+id/public_layer_url_edit"
+                    style="@style/FL.Input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="Feature Service URL"
+                    android:inputType="textUri"
+                    android:layout_marginBottom="@dimen/fl_space_sm" />
+
+                <Button
+                    android:id="@+id/add_public_layer_btn"
+                    style="@style/FL.Button.Secondary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="40dp"
+                    android:text="Add" />
+
+            </LinearLayout>
+
+            <!-- ── DISPLAY PREFS ───────────────────────────────────────── -->
+            <Button
+                android:id="@+id/upload_pref_btn"
+                style="@style/FL.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="40dp"
+                android:text="Upload Display Prefs (JSON)" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

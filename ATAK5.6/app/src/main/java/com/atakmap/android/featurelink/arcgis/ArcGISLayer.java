@@ -13,6 +13,7 @@ public class ArcGISLayer {
     public int recurrenceInterval = 0;    // 0 = disabled; >0 = auto-refresh every N units
     public String recurrenceUnit = "min"; // "s", "min", "hr"
     public boolean isPliLayer = false;
+    public boolean visible = true;        // whether this layer's markers show on the map
 
     public ArcGISLayer(String name, String url, String type) {
         this.name = name;
@@ -41,6 +42,7 @@ public class ArcGISLayer {
         obj.put("recurrenceInterval", recurrenceInterval);
         obj.put("recurrenceUnit",     recurrenceUnit);
         obj.put("isPliLayer",         isPliLayer);
+        obj.put("visible",            visible);
         return obj;
     }
 
@@ -53,6 +55,7 @@ public class ArcGISLayer {
         layer.lastSync        = obj.optLong("lastSync", 0);
         layer.downloadEnabled = obj.optBoolean("downloadEnabled", false);
         layer.isPliLayer      = obj.optBoolean("isPliLayer", false);
+        layer.visible         = obj.optBoolean("visible", true);
 
         if (obj.has("recurrenceInterval")) {
             layer.recurrenceInterval = obj.optInt("recurrenceInterval", 0);
