@@ -1009,6 +1009,22 @@ let symEdCtx = null;       // { ctx:'value'|'rule'|'default', idx:number, tab:'s
 let symEdIconSearch = '';
 const RULE_OPS = ['=','≠','contains','starts with','>','<','>=','<=','is empty','is not empty'];
 
+// Resolves an (iconset, filename) pair to the exact string ATAK's
+// <usericon iconsetpath="..."> needs: "<iconset-uid>/<group>/<filename>".
+// Requires the manifest's per-iconset uid + per-file group (added so the
+// plugin never needs its own copy of this mapping — see the "groups" key
+// in icons/manifest.json). Returns null if the iconset has no uid (e.g.
+// TAK-UserIcons, which isn't a custom ATAK iconset package) or the
+// manifest hasn't loaded yet.
+function resolveUsericonPath(iconsetName, iconFile) {
+  if (!iconManifest || !iconsetName || !iconFile) return null;
+  const is = iconManifest.iconsets.find(x => x.name === iconsetName);
+  if (!is || !is.uid) return null;
+  const group = (is.groups && is.groups[iconFile]) || is.defaultGroup;
+  if (!group) return null;
+  return `${is.uid}/${group}/${iconFile}`;
+}
+
 // ══════════════════════════════════════════
 //  FeatureLayer URL loading
 // ══════════════════════════════════════════
@@ -1208,6 +1224,7 @@ function parseJsonFeatures(parsed) {
 
 function processRows(rows, fileName) {
   if (!rows || !rows.length) { alert('No data rows found in file.'); return; }
+  loadManifest();   // preload (fire-and-forget) so resolveUsericonPath() has data ready for the first QR/export, not just once the Icon tab is opened
   state.rows = rows;
   state.filtered = [...rows];
   state.fields = inferFields(rows);
@@ -2311,7 +2328,7 @@ function buildSymbologyExport() {
     const adv = s.advanced;
     const symToEsri = sym => {
       if (sym.mode==='icon' && sym.icon)
-        return { type:'picture-marker', url:`icons/${sym.iconset}/${sym.icon}`, width:sym.size||24, height:sym.size||24, opacity:sym.opacity??1 };
+        return { type:'picture-marker', url:`icons/${sym.iconset}/${sym.icon}`, usericonPath: resolveUsericonPath(sym.iconset, sym.icon), width:sym.size||24, height:sym.size||24, opacity:sym.opacity??1 };
       return { type:'simple-marker', color:hexToRgba(sym.color||'#888',sym.opacity??0.85), size:sym.size||8, style:sym.shape||'circle' };
     };
     const makeWhere = r => {
@@ -2364,6 +2381,7 @@ function buildSymbologyExport() {
       symbol: {
         type: 'picture-marker',
         url: `icons/${s.icon.iconset}/${s.icon.icon}`,
+        usericonPath: resolveUsericonPath(s.icon.iconset, s.icon.icon),
         width: s.icon.size,
         height: s.icon.size,
         opacity: s.icon.opacity,
@@ -2546,10 +2564,10 @@ function buildQRPayload(mode) {
         if (s.type === 'simple') return { t:'s', c:s.simple.color, oc:s.simple.outlineColor, sz:s.simple.size, sh:s.simple.shape, op:s.simple.opacity };
         if (s.type === 'advanced') return {
           t:'adv', f:s.advanced.field,
-          vs: s.advanced.valueSymbols.slice(0,20).map(v=>({ v:v.value, c:v.symbol.color, sh:v.symbol.shape, m:v.symbol.mode, is:v.symbol.iconset, ic:v.symbol.icon })),
-          r:  s.advanced.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.symbol.color, sh:r.symbol.shape, m:r.symbol.mode })),
+          vs: s.advanced.valueSymbols.slice(0,20).map(v=>({ v:v.value, c:v.symbol.color, sh:v.symbol.shape, m:v.symbol.mode, is:v.symbol.iconset, ic:v.symbol.icon, up:resolveUsericonPath(v.symbol.iconset, v.symbol.icon) })),
+          r:  s.advanced.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.symbol.color, sh:r.symbol.shape, m:r.symbol.mode, is:r.symbol.iconset, ic:r.symbol.icon, up:resolveUsericonPath(r.symbol.iconset, r.symbol.icon) })),
         };
-        if (s.type === 'icon') return { t:'ic', is:s.icon.iconset, ic:s.icon.icon, sz:s.icon.size, op:s.icon.opacity };
+        if (s.type === 'icon') return { t:'ic', is:s.icon.iconset, ic:s.icon.icon, up:resolveUsericonPath(s.icon.iconset, s.icon.icon), sz:s.icon.size, op:s.icon.opacity };
         if (s.type === 'rulesBased') return { t:'rb', rules:s.rulesBased.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.color, sh:r.shape })), dc:s.rulesBased.defaultColor };
         if (s.type === 'uniqueValue') return { t:'uv', f:s.field, uv:s.uniqueValues.slice(0,30).map(u=>({ v:u.value, c:u.color })) };
         return { t:'cb', f:s.field, cb:s.classBreaks.map(b=>({ mn:b.min, mx:b.max, c:b.color })) };
@@ -2582,11 +2600,11 @@ function buildQRPayload(mode) {
         };
         if (s.type === 'advanced') return {
           t: 'adv', f: s.advanced.field,
-          vs: s.advanced.valueSymbols.slice(0,20).map(v=>({ v:v.value, c:v.symbol.color, sh:v.symbol.shape, m:v.symbol.mode, is:v.symbol.iconset, ic:v.symbol.icon })),
-          r: s.advanced.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.symbol.color, sh:r.symbol.shape, m:r.symbol.mode })),
+          vs: s.advanced.valueSymbols.slice(0,20).map(v=>({ v:v.value, c:v.symbol.color, sh:v.symbol.shape, m:v.symbol.mode, is:v.symbol.iconset, ic:v.symbol.icon, up:resolveUsericonPath(v.symbol.iconset, v.symbol.icon) })),
+          r: s.advanced.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.symbol.color, sh:r.symbol.shape, m:r.symbol.mode, is:r.symbol.iconset, ic:r.symbol.icon, up:resolveUsericonPath(r.symbol.iconset, r.symbol.icon) })),
         };
         if (s.type === 'icon') return {
-          t: 'ic', is: s.icon.iconset, ic: s.icon.icon, sz: s.icon.size, op: s.icon.opacity,
+          t: 'ic', is: s.icon.iconset, ic: s.icon.icon, up: resolveUsericonPath(s.icon.iconset, s.icon.icon), sz: s.icon.size, op: s.icon.opacity,
         };
         if (s.type === 'rulesBased') return {
           t: 'rb',

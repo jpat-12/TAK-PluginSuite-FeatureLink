@@ -1,6 +1,6 @@
 # Infra-TAK Module — FeatureLink
 
-**Current version: 1.3.1** — `MODULE_VERSION` in `featurelink_displayconfig.py`
+**Current version: 1.4.0** — `MODULE_VERSION` in `featurelink_displayconfig.py`
 is the single source of truth; `install.sh` reads it back out with `grep`
 after every sync. No separate CHANGELOG, the commit log is the changelog.
 
@@ -157,8 +157,8 @@ Discriminated by `t`:
 | `t` | Meaning | Fields |
 |---|---|---|
 | `s` | Simple marker | `c` color hex, `oc` outline color hex, `sz` size, `sh` shape (`circle`\|`square`\|`diamond`\|`triangle`\|`cross`\|`x`\|`star`), `op` opacity 0–1 |
-| `adv` | Rule-based + per-value (the "advanced" editor) | `f` field name, `vs`: `[{v, c, sh, m, is, ic}]` (up to 20; `m` is `shape`\|`icon`, `is`/`ic` = iconset/icon filename when `m:"icon"`), `r`: `[{f, o, v, c, sh, m}]` (rules; `o` is one of `= ≠ contains "starts with" > < >= <= "is empty" "is not empty"`) |
-| `ic` | Single icon symbol | `is` iconset name, `ic` icon filename, `sz` size (default 24), `op` opacity |
+| `adv` | Rule-based + per-value (the "advanced" editor) | `f` field name, `vs`: `[{v, c, sh, m, is, ic, up}]` (up to 20; `m` is `shape`\|`icon`, `is`/`ic` = iconset/icon filename when `m:"icon"`), `r`: `[{f, o, v, c, sh, m, is, ic, up}]` (rules; `o` is one of `= ≠ contains "starts with" > < >= <= "is empty" "is not empty"`) |
+| `ic` | Single icon symbol | `is` iconset name, `ic` icon filename, `up` **usericonPath — use this, not `is`/`ic`** (see below), `sz` size (default 24), `op` opacity |
 | `rb` | Rules-based (shape/color only, no icons) | `rules`: `[{f, o, v, c, sh}]`, `dc` default color hex — **note:** default shape/size/opacity are NOT preserved in this compact form |
 | `uv` | Unique values | `f` field, `uv`: `[{v, c}]` (up to 30) |
 | `cb` | Class breaks | `f` field, `cb`: `[{mn, mx, c}]` — **note:** this tool's own importer does not currently re-apply `cb` payloads (known gap); if your parser handles it directly this isn't a concern |
@@ -174,7 +174,39 @@ Same shape either way — one function builds it for both:
 
 `symbol` is either:
 - `{"type":"simple-marker", "color":[r,g,b,a], "size", "style", "outline":{"color","width"}}` (`color` is `[0-255,0-255,0-255,0-255]`, alpha included)
-- `{"type":"picture-marker", "url":"icons/<iconset>/<icon>.png", "width", "height", "opacity"}` — **`url` is relative to the console** (`/featurelink/featurelink-display-config/`), not an absolute URL
+- `{"type":"picture-marker", "url":"icons/<iconset>/<icon>.png", "usericonPath":"<uid>/<group>/<icon>.png", "width", "height", "opacity"}` — `url` is relative to the console (`/featurelink/featurelink-display-config/`), for browser preview only. **`usericonPath` is what ATAK needs** (see below) — `null` if the iconset has no known ATAK iconset UID (currently only `TAK-UserIcons`, ATAK's built-in team-role icons, isn't a custom-iconset package).
+
+### `usericonPath` / `up` — applying the icon on the ATAK side
+
+Every icon reference in every payload (`up` in the `sym` object, `usericonPath` in
+the Esri-style `symbol` object) is a ready-to-use value for CoT's
+`<usericon iconsetpath="...">` attribute — exactly the string ATAK's icon
+resolver needs, already fully resolved server-side (iconset UID + exact
+group folder + filename) so nothing on the plugin side has to know about
+iconsets, UIDs, or groups at all:
+
+```
+<uid>/<group>/<filename>
+```
+
+e.g. `34ae1613-9645-4222-a9d2-e5f243dea2865/Military/A10.png`. Applying it
+to a marker (see `IconDropper.java` in `CivilAirPatrol-Field-PluginV2` for
+a working reference) is just:
+
+```java
+CotDetail userIcon = new CotDetail("usericon");
+userIcon.setAttribute("iconsetpath", up);   // or symbol.usericonPath
+detail.addChild(userIcon);
+```
+
+The UID-per-iconset and filename-per-group data this is resolved from
+lives in `featurelink_displayconfig_assets/icons/manifest.json`, in each
+iconset's `uid`, `defaultGroup`, and `groups` (`{filename: group}`) keys —
+generated from the actual `iconset.xml` + folder layout of each bundled
+iconset. `null` means either the iconset field/icon wasn't set, or (for
+`TAK-UserIcons`) there's no ATAK iconset UID to resolve against — those
+must still be handled as ATAK's built-in team-role icons, not a custom
+iconset.
 
 ### External dependencies
 
