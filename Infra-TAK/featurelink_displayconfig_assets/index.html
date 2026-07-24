@@ -918,8 +918,12 @@
 
 <!-- SheetJS for Excel support -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<!-- QR code generation -->
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+<!-- QR code generation. Pinned to 1.4.4: qrcode@1.5.x removed the standalone
+     browser bundle from build/qrcode.min.js (it's now an unbundled CommonJS
+     shim requiring a bundler — throws "QRCode is not defined" when loaded
+     directly via <script>). 1.4.4's build/ is a real self-contained UMD
+     bundle; same toCanvas() API this page uses. -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
 
 <script>
 // ══════════════════════════════════════════

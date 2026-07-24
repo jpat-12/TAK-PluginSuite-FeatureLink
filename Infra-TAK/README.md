@@ -1,6 +1,6 @@
 # Infra-TAK Module — FeatureLink
 
-**Current version: 1.2.1** — `MODULE_VERSION` in `featurelink_displayconfig.py`
+**Current version: 1.2.2** — `MODULE_VERSION` in `featurelink_displayconfig.py`
 is the single source of truth; `install.sh` reads it back out with `grep`
 after every sync. No separate CHANGELOG, the commit log is the changelog.
 
@@ -63,6 +63,16 @@ Uploaded files and saved configs are stored under
 directory per saved entry: `record.json` for the config + metadata, plus
 `data.bin` for file-based sources). FeatureLayer-URL-based entries store just
 the URL and re-fetch live data on open.
+
+### External dependencies
+
+The configurator loads two libraries from public CDNs at runtime: SheetJS
+(`cdn.sheetjs.com`, for `.xlsx` uploads) and the `qrcode` npm package
+(`cdn.jsdelivr.net`, for QR generation — pinned to **1.4.4**, not latest:
+1.5.x's `build/qrcode.min.js` is an unbundled CommonJS shim that throws
+`QRCode is not defined` when loaded directly via `<script>`; 1.4.4's is a
+real standalone UMD bundle). Both need the browser viewing this page to
+have outbound internet access — there's no offline/vendored fallback yet.
 
 ### Iconsets
 
