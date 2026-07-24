@@ -67,6 +67,7 @@ echo "==> Synced featurelink_displayconfig.py (v${MODULE_VERSION:-unknown}) + fe
 
 # --- 4. Patch app.py (idempotent) ---------------------------------------
 python3 - "$CONSOLE_DIR/app.py" <<'PYEOF'
+import re
 import sys
 
 path = sys.argv[1]
@@ -124,13 +125,15 @@ else:
 
 MODULE_ENTRY_MARKER = "modules['featurelink_displayconfig']"
 if MODULE_ENTRY_MARKER not in src:
-    DETECT_MODULES_ANCHOR = (
-        "        'requires': ['nodered'],\n"
-        "    }\n"
-        "    # CloudTAK (local or remote deployment target)\n"
-    )
-    if DETECT_MODULES_ANCHOR not in src:
-        print("ERROR: could not find esri_cot_bridge block in detect_modules() — home page module card NOT added", file=sys.stderr)
+    # Anchor on the TAK Server entry rather than esri_cot_bridge: it's a
+    # simple, stable dict assignment (`modules['takserver'] = {...}`, no
+    # extra keys/comments) present in every detect_modules(), so it's far
+    # less likely to drift across infra-TAK versions than a multi-line block
+    # whose interior keys/comments change more often. Non-greedy + DOTALL
+    # since the literal itself may wrap across a couple of lines.
+    m = re.search(r"modules\['takserver'\] = \{.*?\}\n", src, re.S)
+    if not m:
+        print("ERROR: could not find modules['takserver'] entry in detect_modules() — home page module card NOT added", file=sys.stderr)
         sys.exit(1)
     MODULE_ENTRY = (
         "    # FeatureLink Display Config — static configurator page; installed once\n"
@@ -143,23 +146,25 @@ if MODULE_ENTRY_MARKER not in src:
         "        'icon': '\\U0001f3a8',\n"
         "        'icon_url': FEATURELINK_DISPLAYCONFIG_ICON_URL,\n"
         "        'route': '/featurelink-display-config',\n"
-        "        'priority': 7,\n"
+        "        'priority': 2,\n"
         "    }\n"
     )
-    src = src.replace(DETECT_MODULES_ANCHOR, DETECT_MODULES_ANCHOR + MODULE_ENTRY, 1)
+    src = src[:m.end()] + MODULE_ENTRY + src[m.end():]
     print("    + added home page module card entry")
 else:
     print("    = home page module card entry already present")
 
+# Cosmetic only (whether the name label shows under the icon on the card) —
+# warn and continue rather than aborting the install if this doesn't match.
 CARD_WHITELIST_OLD = "'takportal', 'fedhub', 'emailrelay', 'fail2ban', 'webodm', 'tak_video_restreamer', 'netbird'"
 CARD_WHITELIST_NEW = CARD_WHITELIST_OLD + ", 'featurelink_displayconfig'"
 if CARD_WHITELIST_NEW not in src:
     n = src.count(CARD_WHITELIST_OLD)
     if n == 0:
-        print("ERROR: could not find module-card icon_url whitelist in app.py — name label NOT shown on card", file=sys.stderr)
-        sys.exit(1)
-    src = src.replace(CARD_WHITELIST_OLD, CARD_WHITELIST_NEW)
-    print(f"    + added to module-card name-label whitelist ({n} occurrence(s))")
+        print("    ⚠ could not find module-card icon_url whitelist in app.py — card will show icon only, no name label (cosmetic, non-fatal)", file=sys.stderr)
+    else:
+        src = src.replace(CARD_WHITELIST_OLD, CARD_WHITELIST_NEW)
+        print(f"    + added to module-card name-label whitelist ({n} occurrence(s))")
 else:
     print("    = module-card name-label whitelist already includes this module")
 

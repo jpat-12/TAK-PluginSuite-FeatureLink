@@ -1,6 +1,6 @@
 # Infra-TAK Module — FeatureLink Display Configurator
 
-**Current version: 1.1.0** — `MODULE_VERSION` in `featurelink_displayconfig.py`
+**Current version: 1.1.1** — `MODULE_VERSION` in `featurelink_displayconfig.py`
 is the single source of truth; `install.sh` reads it back out with `grep`
 after every sync. No separate CHANGELOG, the commit log is the changelog.
 

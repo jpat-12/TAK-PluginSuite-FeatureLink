@@ -32,7 +32,7 @@ from flask import (
     send_file, send_from_directory,
 )
 
-MODULE_VERSION = '1.1.0'
+MODULE_VERSION = '1.1.1'
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'featurelink_displayconfig_assets')
 

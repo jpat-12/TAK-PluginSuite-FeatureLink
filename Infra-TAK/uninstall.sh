@@ -93,7 +93,7 @@ MODULE_ENTRY = (
     "        'icon': '\\U0001f3a8',\n"
     "        'icon_url': FEATURELINK_DISPLAYCONFIG_ICON_URL,\n"
     "        'route': '/featurelink-display-config',\n"
-    "        'priority': 7,\n"
+    "        'priority': 2,\n"
     "    }\n"
 )
 if MODULE_ENTRY in src:
