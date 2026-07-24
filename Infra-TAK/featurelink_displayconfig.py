@@ -33,7 +33,7 @@ from flask import (
     send_file, send_from_directory,
 )
 
-MODULE_VERSION = '1.2.0'
+MODULE_VERSION = '1.2.1'
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'featurelink_displayconfig_assets')
 
@@ -41,18 +41,6 @@ CONFIG_DIR = os.environ.get('CONFIG_DIR') or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '.config'
 )
 DATASETS_DIR = os.path.join(CONFIG_DIR, 'featurelink_displayconfig', 'datasets')
-
-# FeatureLink's own icon (same layered-map mark as the ATAK plugin's launcher
-# icon, ATAK5.6/app/src/main/res/drawable/ic_launcher.xml) as an inline SVG
-# data URI — same convention infra-TAK uses for other modules' `icon_data`
-# (e.g. CLOUDTAK_ICON), so no external asset/network dependency.
-ICON_DATA = (
-    'data:image/svg+xml;base64,'
-    'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+'
-    'PHBhdGggZmlsbD0iIzAwOTlDQyIgZD0iTTI0LDQwIEw0LDMyIEwyNCwyNCBMNDQsMzIgWiIvPjxwYXRo'
-    'IGZpbGw9IiMwMEJCRUUiIGQ9Ik0yNCwzMiBMNCwyNCBMMjQsMTYgTDQ0LDI0IFoiLz48cGF0aCBmaWxs'
-    'PSIjRkZGRkZGIiBkPSJNMjQsMjQgTDQsMTYgTDI0LDggTDQ0LDE2IFoiLz48L3N2Zz4='
-)
 
 _ID_RE = re.compile(r'[^a-fA-F0-9]')
 
@@ -155,101 +143,125 @@ def delete_dataset(dataset_id):
         shutil.rmtree(d)
 
 
+# Same design system as infra-TAK's other module pages (esri.py's
+# ESRI_TEMPLATE, etc.) — shared CSS variables/classes so /featurelink reads
+# as part of the console rather than a bolted-on standalone page.
+# {{ sidebar_html }} is auto-injected by app.py's context_processor for any
+# non-/api route, same as every other module page — nothing to pass here.
 HUB_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>FeatureLink — infra-TAK</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
 <style>
-:root{--bg:#1a1d23;--surface:#22262f;--surface2:#2b3040;--border:#3a3f50;--accent:#0078d4;--accent2:#005a9e;
---accent-green:#107c10;--text:#e8eaf0;--text-muted:#8b92a8;--danger:#d13438;--radius:6px}
+:root{--bg-deep:#080b14;--bg-surface:#0f1219;--bg-card:#161b26;--border:#1e2736;--text-primary:#f1f5f9;--text-secondary:#cbd5e1;--text-dim:#94a3b8;--accent:#3b82f6;--cyan:#06b6d4;--green:#10b981;--red:#ef4444;--yellow:#eab308}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-header{background:var(--surface);border-bottom:1px solid var(--border);padding:0 20px;height:52px;
-display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:10}
-header img.logo{height:24px;width:auto}
-header h1{font-size:16px;font-weight:600}
-header .spacer{flex:1}
-header a.back-link{color:var(--text-muted);text-decoration:none;font-size:13px}
-header a.back-link:hover{color:var(--text)}
-.new-btn{background:var(--accent-green);border:none;color:#fff;padding:8px 18px;border-radius:var(--radius);
-cursor:pointer;font-size:13px;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
-.new-btn:hover{opacity:.85}
-main{max-width:1000px;margin:0 auto;padding:28px 20px}
-.section-title{font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;
-margin:0 0 12px}
-.empty{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:48px;text-align:center;color:var(--text-muted)}
-.empty a{color:var(--accent)}
-.list{display:flex;flex-direction:column;gap:10px}
-.row{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;
-display:flex;align-items:center;gap:16px}
-.row-main{flex:1;min-width:0}
-.row-name{font-size:14px;font-weight:600;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.row-meta{font-size:12px;color:var(--text-muted);display:flex;gap:10px;flex-wrap:wrap}
-.row-meta .src{font-family:monospace;overflow:hidden;text-overflow:ellipsis;max-width:360px;white-space:nowrap}
-.row-actions{display:flex;gap:8px;flex-shrink:0}
-.row-actions button, .row-actions a{background:var(--surface2);border:1px solid var(--border);color:var(--text);
-padding:7px 12px;border-radius:var(--radius);cursor:pointer;font-size:12px;text-decoration:none;white-space:nowrap}
-.row-actions a.open-btn{background:var(--accent);border-color:var(--accent)}
-.row-actions button.del-btn:hover{background:var(--danger);border-color:var(--danger)}
-.row-actions a:hover, .row-actions button:hover{opacity:.85}
-.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:600;
-z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;background:var(--accent);color:#fff}
+body{background:var(--bg-deep);color:var(--text-primary);font-family:'DM Sans',sans-serif;min-height:100vh;display:flex;flex-direction:row}
+.sidebar{width:220px;min-width:220px;background:var(--bg-surface);border-right:1px solid var(--border);padding:24px 0;flex-shrink:0}
+.material-symbols-outlined{font-family:'Material Symbols Outlined';font-weight:400;font-style:normal;font-size:20px;line-height:1;letter-spacing:normal;white-space:nowrap;direction:ltr;-webkit-font-smoothing:antialiased}
+.nav-icon.material-symbols-outlined{font-size:22px;width:22px;text-align:center}
+.sidebar-logo{padding:0 20px 24px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.sidebar-logo span{font-size:15px;font-weight:700}.sidebar-logo small{display:block;font-size:10px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;margin-top:2px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;color:var(--text-secondary);text-decoration:none;font-size:13px;font-weight:500;transition:all .15s;border-left:2px solid transparent}
+.nav-item:hover{color:var(--text-primary);background:rgba(255,255,255,.03)}.nav-item.active{color:var(--cyan);background:rgba(6,182,212,.06);border-left-color:var(--cyan)}
+.nav-icon{font-size:15px;width:18px;text-align:center}
+.main{flex:1;min-width:0;overflow-y:auto;padding:32px}
+.page-header{margin-bottom:28px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.page-header h1{font-size:22px;font-weight:700;display:flex;align-items:center;gap:10px}
+.page-header p{color:var(--text-secondary);font-size:13px;margin-top:4px}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:20px}
+.card-title{font-size:13px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.08em;margin-bottom:16px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:opacity .15s;text-decoration:none}
+.btn:hover{opacity:.85}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-ghost{background:rgba(255,255,255,.05);color:var(--text-secondary);border:1px solid var(--border)}
+.btn-sm{padding:7px 14px;font-size:12px}
+.btn-danger-ghost{background:rgba(239,68,68,.08);color:var(--red);border:1px solid rgba(239,68,68,.2)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 12px;color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--border)}
+td{padding:10px 12px;border-bottom:1px solid rgba(30,39,54,.6);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.src-cell{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-dim);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600}
+.badge-cyan{background:rgba(6,182,212,.15);color:var(--cyan)}
+.badge-green{background:rgba(16,185,129,.15);color:var(--green)}
+.row-actions{display:flex;gap:8px;justify-content:flex-end}
+.empty-state{text-align:center;padding:48px;color:var(--text-secondary)}
+.empty-state a{color:var(--cyan)}
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none}
 .toast.show{opacity:1}
+.toast.success{background:var(--green);color:#fff}
+.toast.error{background:var(--red);color:#fff}
 </style>
 </head>
 <body>
-<header>
-<img class="logo" src="{{ icon_data }}" alt="">
-<h1>FeatureLink</h1>
-<span class="spacer"></span>
-<a class="back-link" href="/console">&larr; Console</a>
-<a class="new-btn" href="/featurelink/featurelink-display-config">+ New Dataset Config</a>
-</header>
-<main>
-<div class="section-title">Saved Dataset Configs</div>
-{% if not datasets %}
-<div class="empty">
-  No saved dataset configs yet.<br><br>
-  <a href="/featurelink/featurelink-display-config">Open the Display Configurator</a> to upload a
-  dataset, set up its display config, and click <strong>Save</strong> — it'll show up here.
-</div>
-{% else %}
-<div class="list" id="dataset-list">
-{% for d in datasets %}
-<div class="row" data-id="{{ d.id }}">
-  <div class="row-main">
-    <div class="row-name">{{ d.name }}</div>
-    <div class="row-meta">
-      <span>{{ d.field_count }} field{{ 's' if d.field_count != 1 else '' }}</span>
-      <span class="src">{% if d.source_type == 'url' %}&#128279; {{ d.source_url }}{% else %}&#128196; {{ d.file_name }}{% endif %}</span>
-      <span>updated {{ d.updated_at.split('T')[0] if d.updated_at else '' }}</span>
+{{ sidebar_html }}
+<div class="main">
+  <div class="page-header">
+    <div>
+      <h1>&#127912; FeatureLink</h1>
+      <p>Saved display configs for FeatureLayer exports — symbology, labels, popups, and QR sharing for the FeatureLink ATAK plugin.</p>
     </div>
+    <a class="btn btn-primary" href="/featurelink/featurelink-display-config">+ New Dataset Config</a>
   </div>
-  <div class="row-actions">
-    <a class="open-btn" href="/featurelink/featurelink-display-config?load={{ d.id }}">Open</a>
-    <button onclick="copyLink('{{ d.id }}')">Copy link</button>
-    <button class="del-btn" onclick="deleteDataset('{{ d.id }}')">Delete</button>
+
+  <div class="card">
+    <div class="card-title">Saved Dataset Configs</div>
+    {% if not datasets %}
+    <div class="empty-state">
+      No saved dataset configs yet.<br><br>
+      <a href="/featurelink/featurelink-display-config">Open the Display Configurator</a> to upload a
+      dataset, set up its display config, and click <strong>Save</strong> — it'll show up here.
+    </div>
+    {% else %}
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Source</th><th>Fields</th><th>Updated</th><th></th></tr>
+      </thead>
+      <tbody id="dataset-list">
+        {% for d in datasets %}
+        <tr data-id="{{ d.id }}">
+          <td>{{ d.name }}</td>
+          <td>
+            {% if d.source_type == 'url' %}
+            <span class="badge badge-cyan">URL</span> <span class="src-cell" title="{{ d.source_url }}">{{ d.source_url }}</span>
+            {% else %}
+            <span class="badge badge-green">File</span> <span class="src-cell" title="{{ d.file_name }}">{{ d.file_name }}</span>
+            {% endif %}
+          </td>
+          <td>{{ d.field_count }}</td>
+          <td>{{ d.updated_at.split('T')[0] if d.updated_at else '' }}</td>
+          <td>
+            <div class="row-actions">
+              <a class="btn btn-primary btn-sm" href="/featurelink/featurelink-display-config?load={{ d.id }}">Open</a>
+              <button class="btn btn-ghost btn-sm" onclick="copyLink('{{ d.id }}')">Copy link</button>
+              <button class="btn btn-danger-ghost btn-sm" onclick="deleteDataset('{{ d.id }}')">Delete</button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
   </div>
 </div>
-{% endfor %}
-</div>
-{% endif %}
-</main>
 <div class="toast" id="toast"></div>
 <script>
 let toastTimer;
-function showToast(msg){
+function showToast(msg, kind){
   const el = document.getElementById('toast');
   el.textContent = msg;
-  el.classList.add('show');
+  el.className = 'toast show' + (kind ? ' ' + kind : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
+  toastTimer = setTimeout(() => { el.classList.remove('show'); }, 2600);
 }
 function copyLink(id){
   const url = window.location.origin + '/featurelink/featurelink-display-config?load=' + encodeURIComponent(id);
   navigator.clipboard.writeText(url).then(
-    () => showToast('Link copied — scan or share it to open this config directly'),
+    () => showToast('Link copied — scan or share it to open this config directly', 'success'),
     () => showToast(url)
   );
 }
@@ -258,13 +270,13 @@ async function deleteDataset(id){
   try {
     const r = await fetch('/api/featurelink/datasets/' + encodeURIComponent(id), { method: 'DELETE' });
     if (!r.ok) throw new Error('delete failed');
-    const row = document.querySelector('.row[data-id="' + id + '"]');
+    const row = document.querySelector('tr[data-id="' + id + '"]');
     if (row) row.remove();
     const list = document.getElementById('dataset-list');
     if (list && !list.children.length) location.reload();
-    showToast('Deleted');
+    showToast('Deleted', 'success');
   } catch (e) {
-    showToast('Could not delete — try again');
+    showToast('Could not delete — try again', 'error');
   }
 }
 </script>
@@ -279,7 +291,7 @@ def register_routes(app, login_required):
     @login_required
     def featurelink_hub_page():
         resp = make_response(render_template_string(
-            HUB_TEMPLATE, datasets=list_datasets(), icon_data=ICON_DATA,
+            HUB_TEMPLATE, datasets=list_datasets(),
         ))
         resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
         return resp

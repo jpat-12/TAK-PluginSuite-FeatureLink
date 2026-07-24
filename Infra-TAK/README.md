@@ -1,6 +1,6 @@
 # Infra-TAK Module — FeatureLink
 
-**Current version: 1.2.0** — `MODULE_VERSION` in `featurelink_displayconfig.py`
+**Current version: 1.2.1** — `MODULE_VERSION` in `featurelink_displayconfig.py`
 is the single source of truth; `install.sh` reads it back out with `grep`
 after every sync. No separate CHANGELOG, the commit log is the changelog.
 
@@ -19,6 +19,12 @@ top so configs don't just live in a downloaded file.
 `/featurelink-display-config` directly, old icon was a tak.gov logo
 placeholder) — just re-run it, no manual cleanup needed. The old routes also
 redirect to the new ones, so previously shared links/QR codes keep working.
+
+The `/featurelink` hub uses infra-TAK's actual design system (same CSS
+variables/classes as `/esri`, `/takserver`, etc., plus the real console
+sidebar) rather than a bespoke look, so it reads as part of the console. The
+configurator itself (`/featurelink/featurelink-display-config`) keeps its
+own distinct look — that's the original standalone app's UI, unchanged.
 
 ## What it does
 
