@@ -56,7 +56,31 @@
       font-weight: 600;
     }
     header .spacer { flex: 1; }
-    header button.export-btn {
+    header a.admin-link-btn {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      padding: 7px 10px;
+      border-radius: var(--radius);
+      transition: color .15s, background .15s;
+    }
+    header a.admin-link-btn:hover { color: var(--text); background: var(--surface2); }
+    header span.saved-badge {
+      display: none;
+      align-items: center;
+      gap: 5px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 20px;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    header button.export-btn, header button.save-btn {
       background: var(--accent-green);
       border: none;
       color: #fff;
@@ -70,8 +94,9 @@
       gap: 6px;
       transition: opacity .15s;
     }
-    header button.export-btn:hover { opacity: .85; }
-    header button.export-btn:disabled { opacity: .4; cursor: default; }
+    header button.save-btn { background: var(--accent); }
+    header button.export-btn:hover, header button.save-btn:hover { opacity: .85; }
+    header button.export-btn:disabled, header button.save-btn:disabled { opacity: .4; cursor: default; }
 
     /* ── Main layout ── */
     .workspace {
@@ -760,7 +785,12 @@
   </svg>
   <h1>FeatureLayer Display Configurator</h1>
   <span class="badge">FeatureLink</span>
+  <span class="saved-badge" id="saved-name-badge" title="Currently editing this saved config"></span>
   <span class="spacer"></span>
+  <a class="admin-link-btn" href="/featurelink-display-config/admin">&#128194; Saved Configs</a>
+  <button class="save-btn" id="save-btn" disabled onclick="saveDataset()">
+    &#128190; Save
+  </button>
   <button class="export-btn" id="export-btn" disabled onclick="exportConfig()">
     ⬇ Export Config JSON
   </button>
@@ -846,7 +876,10 @@
     <p>
       Scan this QR code with another device running this configurator to instantly load your
       display settings. Use <strong>URL + Config</strong> mode (when loaded from a URL) to also
-      encode the data source so the receiver auto-loads everything in one scan.
+      encode the data source so the receiver auto-loads everything in one scan. Once you've
+      <strong>Save</strong>d this dataset, use <strong>Saved Dataset Link</strong> mode to get a
+      plain link — scanning it with any camera app opens this exact dataset + config straight in
+      the browser, no app required.
     </p>
     <div class="qr-size-toggle">
       <label>Payload:</label>
@@ -854,6 +887,7 @@
         <option value="compact">Compact (symbology + labels + layer)</option>
         <option value="full">Full config (all settings)</option>
         <option value="urlcfg" id="qr-mode-urlcfg" disabled>URL + Config (load &amp; apply)</option>
+        <option value="link" id="qr-mode-link" disabled>Saved Dataset Link (scan to open)</option>
       </select>
       <label style="margin-left:12px">Size:</label>
       <select id="qr-px" onchange="generateQR()">
@@ -895,6 +929,9 @@ let state = {
   fileName: null,
   featureLayerUrl: null,
   pendingConfig: null,
+  rawFile: null,          // File object for the currently loaded local file, if any (re-sent on Save)
+  savedDatasetId: null,   // set once this session is linked to a saved dataset (admin page)
+  savedDatasetName: null,
   rows: [],
   fields: [],        // [{name, type, samples}]
   filtered: [],
@@ -1022,6 +1059,7 @@ async function loadFromUrl() {
     if (!allFeatures.length) throw new Error('Service returned 0 features');
 
     state.featureLayerUrl = baseUrl;
+    state.rawFile = null;
     const rows = parseJsonFeatures({ features: allFeatures });
     processRows(rows, layerName);
     // status is hidden by renderFileChip, but set a success note just in case
@@ -1059,6 +1097,7 @@ fileInput.addEventListener('change', () => {
 
 function handleFile(file) {
   state.fileName = file.name;
+  state.rawFile = file;
   const ext = file.name.split('.').pop().toLowerCase();
   const reader = new FileReader();
 
@@ -1178,11 +1217,22 @@ function processRows(rows, fileName) {
   renderTable();
   renderAllTabs();
   document.getElementById('export-btn').disabled = false;
+  document.getElementById('save-btn').disabled = false;
   showToast(`Loaded ${rows.length.toLocaleString()} rows · ${state.fields.length} fields`);
 
-  // Apply a pending config (e.g. from a v:2 URL+Config QR import)
+  // Apply a pending config — either a QR/import payload (v:1/2 or _version), or
+  // a saved-dataset internal config (lossless, applied straight into state.cfg).
   if (state.pendingConfig) {
-    try { applyConfigPayload(state.pendingConfig); renderAllTabs(); showToast('Config applied from QR'); } catch(e) {}
+    try {
+      if (state.pendingConfig._internal) {
+        state.cfg = JSON.parse(JSON.stringify(state.pendingConfig.cfg));
+        showToast('Saved config applied');
+      } else {
+        applyConfigPayload(state.pendingConfig);
+        showToast('Config applied from QR');
+      }
+      renderAllTabs();
+    } catch(e) {}
     state.pendingConfig = null;
   }
 
@@ -1218,6 +1268,8 @@ function renderFileChip(name, count) {
 
 function clearFile() {
   state.rows = []; state.filtered = []; state.fields = []; state.fileName = null; state.featureLayerUrl = null; state.pendingConfig = null;
+  state.rawFile = null; state.savedDatasetId = null; state.savedDatasetName = null;
+  updateSavedBadge();
   document.getElementById('file-chip').style.display = 'none';
   document.getElementById('drop-zone').style.display = '';
   document.getElementById('url-zone').style.display = '';
@@ -1234,6 +1286,7 @@ function clearFile() {
     <p style="font-size:12px; color: var(--text-muted);">Supports CSV, JSON, GeoJSON, TSV, Excel · or an ArcGIS FeatureLayer REST URL</p>
   </div>`;
   document.getElementById('export-btn').disabled = true;
+  document.getElementById('save-btn').disabled = true;
   fileInput.value = '';
 }
 
@@ -2353,6 +2406,102 @@ function hexToRgba(hex, alpha) {
 }
 
 // ══════════════════════════════════════════
+//  Save / load saved datasets (admin page)
+// ══════════════════════════════════════════
+function updateSavedBadge() {
+  const el = document.getElementById('saved-name-badge');
+  if (!el) return;
+  if (state.savedDatasetName) {
+    el.textContent = '💾 ' + state.savedDatasetName;
+    el.style.display = 'inline-flex';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+function arrayBufferToBase64(buf) {
+  let binary = '';
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function saveDataset() {
+  if (!state.rows.length) { showToast('Load a dataset first'); return; }
+
+  const defaultName = state.savedDatasetName || state.cfg.layer.name || state.fileName || 'Untitled';
+  const input = prompt('Save as name:', defaultName);
+  if (input === null) return;
+  const name = input.trim() || defaultName;
+
+  const sourceType = state.featureLayerUrl ? 'url' : 'file';
+  const payload = {
+    id: state.savedDatasetId || undefined,
+    name,
+    source_type: sourceType,
+    source_url: state.featureLayerUrl || '',
+    file_name: state.rawFile ? state.rawFile.name : (state.fileName || ''),
+    state: { cfg: state.cfg, fields: state.fields },
+  };
+
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true;
+  try {
+    if (sourceType === 'file') {
+      if (!state.rawFile) throw new Error('original file no longer available — reload it first');
+      const buf = await state.rawFile.arrayBuffer();
+      payload.file_content_b64 = arrayBufferToBase64(buf);
+    }
+
+    const resp = await fetch('/api/featurelink-display-config/datasets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || 'save failed');
+    const saved = await resp.json();
+    state.savedDatasetId = saved.id;
+    state.savedDatasetName = saved.name;
+    updateSavedBadge();
+    generateQR();
+    showToast('Saved! Find it under Saved Configs.');
+  } catch (e) {
+    showToast(`✗ Save failed: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadSavedDataset(id) {
+  try {
+    const resp = await fetch(`/api/featurelink-display-config/datasets/${encodeURIComponent(id)}`);
+    if (!resp.ok) throw new Error('saved dataset not found');
+    const rec = await resp.json();
+
+    state.savedDatasetId = rec.id;
+    state.savedDatasetName = rec.name;
+    updateSavedBadge();
+    state.pendingConfig = { _internal: true, cfg: (rec.state || {}).cfg || {} };
+
+    if (rec.source_type === 'url' && rec.source_url) {
+      document.getElementById('layer-url-input').value = rec.source_url;
+      await loadFromUrl();
+    } else {
+      const fileResp = await fetch(`/api/featurelink-display-config/datasets/${encodeURIComponent(id)}/file`);
+      if (!fileResp.ok) throw new Error('saved dataset file is missing');
+      const blob = await fileResp.blob();
+      const file = new File([blob], rec.file_name || (rec.name + '.csv'));
+      handleFile(file);
+    }
+  } catch (e) {
+    showToast(`Could not load saved dataset: ${e.message}`);
+  }
+}
+
+// ══════════════════════════════════════════
 //  Toast
 // ══════════════════════════════════════════
 let toastTimer;
@@ -2370,6 +2519,11 @@ function showToast(msg) {
 const QR_BYTE_LIMIT = 2900;  // conservative QR binary capacity at error-correction L
 
 function buildQRPayload(mode) {
+  if (mode === 'link') {
+    if (!state.savedDatasetId) return buildQRPayload('compact');
+    return `${window.location.origin}/featurelink-display-config?load=${encodeURIComponent(state.savedDatasetId)}`;
+  }
+
   if (mode === 'urlcfg') {
     if (!state.featureLayerUrl) return buildQRPayload('compact');
     const s = state.cfg.symbology;
@@ -2616,6 +2770,13 @@ function generateQR() {
       ? 'URL + Config (load & apply) ✓'
       : 'URL + Config (requires URL source)';
   }
+  const linkOpt = document.getElementById('qr-mode-link');
+  if (linkOpt) {
+    linkOpt.disabled = !state.savedDatasetId;
+    linkOpt.textContent = state.savedDatasetId
+      ? 'Saved Dataset Link (scan to open) ✓'
+      : 'Saved Dataset Link (Save first)';
+  }
 
   document.getElementById('qr-section').classList.remove('hidden');
   const mode = document.getElementById('qr-mode').value;
@@ -2678,6 +2839,14 @@ function scheduleQRRefresh() {
 
 // Init empty tabs
 renderAllTabs();
+
+// If opened as /featurelink-display-config?load=<id> (from the admin page, a
+// copied link, or a scanned "Saved Dataset Link" QR), load that dataset + its
+// saved config automatically.
+(function initFromQuery() {
+  const loadId = new URLSearchParams(window.location.search).get('load');
+  if (loadId) loadSavedDataset(loadId);
+})();
 </script>
 </body>
 </html>

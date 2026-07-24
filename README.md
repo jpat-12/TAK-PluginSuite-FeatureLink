@@ -30,11 +30,18 @@ Adds a **FeatureLink Display Config** link to an existing
 [infra-TAK](https://github.com/jpat-12/infra-TAK) console — a browser-based
 tool for building display configs (symbology, labels, popups, layer
 properties) for FeatureLink exports, with QR code sharing to the plugin.
-On the infra-TAK console host, as root:
+On the infra-TAK console host, as root — this uses a sparse, partial clone
+so the console only pulls down `Infra-TAK/`, not the ATAK/WinTAK plugin
+folders (Android SDKs, gradle caches, keystores — several hundred MB of
+stuff a console box has no use for):
 
 ```bash
-git clone https://github.com/jpat-12/TAK-PluginSuite-FeatureLink.git
-cd TAK-PluginSuite-FeatureLink/Infra-TAK
+git clone --no-checkout --depth 1 --filter=blob:none \
+  https://github.com/jpat-12/TAK-PluginSuite-FeatureLink.git
+cd TAK-PluginSuite-FeatureLink
+git sparse-checkout set Infra-TAK
+git checkout
+cd Infra-TAK
 sudo bash install.sh
 ```
 
@@ -42,6 +49,10 @@ This copies the module into the console's install directory, patches its
 `app.py` to register the module's routes and sidebar link, and restarts the
 console service. See [`Infra-TAK/README.md`](Infra-TAK/README.md) for
 details, updating, and uninstalling.
+
+To update later, `git pull` from `TAK-PluginSuite-FeatureLink/` (the sparse
+checkout is sticky — it won't suddenly pull in ATAK/WinTAK) and re-run
+`install.sh`, or just let `install.sh` do the pull for you (see below).
 
 This module replaces the old standalone `FeatureLink-DisplayConfig`
 GitHub Pages app, which is now deprecated in favor of running the same
