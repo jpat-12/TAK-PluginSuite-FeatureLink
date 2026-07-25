@@ -883,7 +883,7 @@
     </p>
     <div class="qr-size-toggle">
       <label>Payload:</label>
-      <select id="qr-mode" onchange="generateQR()">
+      <select id="qr-mode" onchange="qrModeUserTouched = true; generateQR()">
         <option value="compact">Compact (symbology + labels + layer)</option>
         <option value="full">Full config (all settings)</option>
         <option value="urlcfg" id="qr-mode-urlcfg" disabled>URL + Config (load &amp; apply)</option>
@@ -2799,16 +2799,30 @@ function applyConfigPayload(p) {
   throw new Error('Unrecognised payload format (expected v:1/2 or _version field)');
 }
 
+// Tracks whether the user has explicitly picked a Payload mode — until they
+// have, default to "URL + Config" once it's available. Otherwise a field
+// user scanning the QR right after loading a FeatureLayer URL gets the
+// display-only "Compact" mode instead (requires a layer to already exist in
+// ATAK, applied via a manual picker dialog) — easy to mistake for "the
+// config didn't apply" when really the layer + config were just never
+// added together in the first place.
+let qrModeUserTouched = false;
+
 function generateQR() {
   if (!state.rows.length) return;
 
   // Enable/disable URL+Config option based on whether data came from a URL
+  const modeSelect = document.getElementById('qr-mode');
   const urlOpt = document.getElementById('qr-mode-urlcfg');
   if (urlOpt) {
+    const wasDisabled = urlOpt.disabled;
     urlOpt.disabled = !state.featureLayerUrl;
     urlOpt.textContent = state.featureLayerUrl
       ? 'URL + Config (load & apply) ✓'
       : 'URL + Config (requires URL source)';
+    if (wasDisabled && !urlOpt.disabled && !qrModeUserTouched) {
+      modeSelect.value = 'urlcfg';
+    }
   }
   const linkOpt = document.getElementById('qr-mode-link');
   if (linkOpt) {
@@ -2819,7 +2833,7 @@ function generateQR() {
   }
 
   document.getElementById('qr-section').classList.remove('hidden');
-  const mode = document.getElementById('qr-mode').value;
+  const mode = modeSelect.value;
   const px   = parseInt(document.getElementById('qr-px').value, 10);
   const payload = buildQRPayload(mode);
   const bytes = new TextEncoder().encode(payload).length;
