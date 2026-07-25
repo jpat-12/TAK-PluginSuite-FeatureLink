@@ -1077,6 +1077,7 @@ const SHAPES = ['circle','square','diamond','triangle','cross','x','star'];
 
 let iconManifest = null;
 let iconSearchTerm = '';
+let customIconUploadOpen = false;
 let symEdCtx = null;       // { ctx:'value'|'rule'|'default', idx:number, tab:'shape'|'icon' }
 let symEdIconSearch = '';
 const RULE_OPS = ['=','≠','contains','starts with','>','<','>=','<=','is empty','is not empty'];
@@ -1618,19 +1619,7 @@ function renderSymbologyTab() {
           <option value="">— Choose iconset —</option>${setOpts}
         </select>
       </div>
-      <div class="cfg-section">
-        <div class="cfg-label">Custom Icon Sets</div>
-        ${customIconSetsListHtml()}
-        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-          <input type="text" id="custom-icon-set-name" placeholder="Set name" style="flex:1;min-width:120px" />
-          <input type="file" id="custom-icon-set-files" accept="image/png,image/*" multiple style="flex:2;min-width:160px" />
-          <button class="btn-sm" onclick="uploadCustomIconSet()">Upload</button>
-        </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
-          Uploaded icons preview here and in search, but ATAK doesn't yet render arbitrary custom images as map markers —
-          selecting one falls back to the plugin's default marker styling until that's supported.
-        </div>
-      </div>
+      ${customIconUploadHtml()}
       ${(s.icon.iconset || iconSearchTerm) ? `
         <div class="cfg-section">
           <div id="icon-grid-container"></div>
@@ -1991,8 +1980,43 @@ function renderIconGrid() {
     </div>${moreNote}`;
 }
 
-function customIconSetsListHtml() {
+/** Custom-icon upload/manage panel, shared by every icon picker (single-icon mode
+ * and each per-value/per-rule symbol editor in Advanced/Rule-Based mode) so a
+ * set uploaded from any of them is immediately usable in all the others. */
+function customIconUploadHtml() {
+  const hasCustom = (iconManifest?.iconsets || []).some(is => is.custom);
+  return `
+    <div class="cfg-section">
+      <div class="cfg-label" style="cursor:pointer" onclick="toggleCustomIconUpload()">
+        + Upload your own icons ${hasCustom ? `<span style="font-weight:400;color:var(--text-muted)">(${customIconSetsListHtml(true)})</span>` : ''}
+        <span style="float:right">${customIconUploadOpen ? '▲' : '▼'}</span>
+      </div>
+      ${customIconUploadOpen ? `
+        <div style="margin-top:6px">
+          ${customIconSetsListHtml()}
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <input type="text" id="custom-icon-set-name" placeholder="Set name (e.g. 'Team Logos')" style="flex:1;min-width:120px" />
+            <input type="file" id="custom-icon-set-files" accept="image/png,image/*" multiple style="flex:2;min-width:160px" />
+            <button class="btn-sm" onclick="uploadCustomIconSet()">Upload</button>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+            Pick any image file(s) and a name — your set then shows up in the iconset list and search above, here and
+            anywhere else you pick icons. Note: ATAK doesn't yet render arbitrary uploaded images as map markers, so a
+            custom icon falls back to the plugin's default marker styling in the field until that's supported.
+          </div>
+        </div>
+      ` : ''}
+    </div>`;
+}
+
+function toggleCustomIconUpload() {
+  customIconUploadOpen = !customIconUploadOpen;
+  renderSymbologyTab();
+}
+
+function customIconSetsListHtml(compact) {
   const sets = (iconManifest?.iconsets || []).filter(is => is.custom);
+  if (compact) return sets.length ? `${sets.length} custom set${sets.length===1?'':'s'}` : '';
   if (!sets.length) return '<div style="color:var(--text-muted);font-size:12px">No custom icon sets uploaded yet.</div>';
   return `<div style="display:flex;flex-direction:column;gap:4px">${sets.map(s => {
     const nameEsc = s.name.replace(/"/g,'&quot;');
@@ -2134,6 +2158,7 @@ function renderSymEdHtml(sym) {
       <select onchange="setSymIconset(this.value)" style="margin-bottom:6px">
         <option value="">— choose iconset —</option>${setOpts}
       </select>
+      ${customIconUploadHtml()}
       <div class="sym-ed-icon-grid">${gridHtml}</div>${moreNote}
       ${sym.icon ? `
         <div class="cfg-label" style="margin-top:8px">Size</div>
