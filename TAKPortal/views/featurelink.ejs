@@ -53,17 +53,16 @@
     });
   }
 
-  // Custom-scheme intent links need to fire synchronously inside the click handler —
-  // an async fetch() beforehand loses the user-gesture context Android/Chrome requires
-  // to hand off to the app. Matches the exact technique setup-my-device.ejs's "Open URL"
-  // button already uses successfully for enrollment links: pre-fetch the payload
-  // ahead of time, then on click just create+click a real <a> synchronously.
-  //
-  // Uses Chrome's intent:// syntax rather than a bare featurelink:// link — a bare
-  // custom scheme handed to a JS-created <a>.click() is unreliable on Android/Chrome
-  // (frequently just opens a new blank/error tab instead of the app, especially the
-  // first time that scheme's ever been invoked in that browser). intent:// explicitly
-  // names the target package, so there's no ambiguity for Chrome to get wrong.
+  // Confirmed via `adb shell am start -a android.intent.action.VIEW -d
+  // "featurelink://import?..."` that Android resolves and launches
+  // ImportConfigActivity cleanly — the plugin side is not the problem.
+  // What doesn't work is a JS-synthesized element.click(): Chrome's external-
+  // app handoff heuristics specifically distrust synthetic clicks (isTrusted:
+  // false) more than a real finger-tap on visible link markup, and silently
+  // decline to hand off — no error, it just does nothing (or falls back).
+  // So this renders a REAL <a href="intent://..."> in the page once the
+  // config's ready, and the user taps it directly — a genuinely trusted
+  // click event, which is what Chrome's handoff logic actually wants to see.
   const FEATURELINK_PLUGIN_PACKAGE = 'com.atakmap.android.featurelink.plugin';
 
   function buildImportIntentUri(config) {
@@ -74,19 +73,11 @@
       ';S.browser_fallback_url=' + fallback + ';end';
   }
 
-  function openLinkSync(url) {
-    const a = document.createElement('a');
-    a.href = url;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-
   function renderCard(c) {
     const div = document.createElement('div');
     div.className = 'fl-card';
     const actions = c.hasLiveLayer
-      ? '<button type="button" class="btn openAtakBtn" data-id="' + c.id + '" disabled>Loading...</button>' +
+      ? '<a class="btn openAtakBtn" data-id="' + c.id + '" href="#" aria-disabled="true">Loading...</a>' +
         '<a class="btn" href="/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download">Download</a>'
       : '<span class="muted">No live FeatureLayer configured yet</span>';
     div.innerHTML =
@@ -94,18 +85,21 @@
       '<span class="muted">Updated ' + (c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—') + '</span>' +
       '<div class="fl-card-actions">' + actions + '</div>';
 
-    const openBtn = div.querySelector('.openAtakBtn');
-    if (openBtn) {
-      // Pre-fetch now, off the click path, so the click itself is fully synchronous.
+    const openLink = div.querySelector('.openAtakBtn');
+    if (openLink) {
+      openLink.addEventListener('click', (e) => {
+        if (openLink.getAttribute('aria-disabled') === 'true') e.preventDefault();
+      });
+      // Pre-fetch now, so the link is a real, already-live href by the time the
+      // user can tap it — no async work happens inside the click itself.
       fetch('/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download', { credentials: 'same-origin' })
         .then((r) => r.json())
         .then((config) => {
-          const uri = buildImportIntentUri(config);
-          openBtn.textContent = 'Open in ATAK';
-          openBtn.disabled = false;
-          openBtn.addEventListener('click', () => openLinkSync(uri));
+          openLink.href = buildImportIntentUri(config);
+          openLink.textContent = 'Open in ATAK';
+          openLink.removeAttribute('aria-disabled');
         })
-        .catch(() => { openBtn.textContent = 'Failed to load'; });
+        .catch(() => { openLink.textContent = 'Failed to load'; });
     }
     return div;
   }
