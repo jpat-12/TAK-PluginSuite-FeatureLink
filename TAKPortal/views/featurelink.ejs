@@ -56,18 +56,14 @@
   // Confirmed via `adb shell am start -a android.intent.action.VIEW -d
   // "featurelink://import?..."` that Android resolves and launches
   // ImportConfigActivity cleanly — the plugin side was never the problem.
-  // A real (not JS-synthesized) tap on a bare featurelink:// link, and on an
-  // intent:// wrapped version of it, both still failed to hand off from
-  // Chrome. TAK Portal's own enrollment QR flow's "Open URL" button hands
-  // off successfully using a bare tak://com.atakmap.app/enroll?... link with
-  // no intent:// wrapper — so this mirrors that exact scheme choice instead,
-  // nested under our own package name as the host (ImportConfigActivity now
-  // has a second intent-filter for this — see AndroidManifest.xml) so it
-  // can't collide with ATAK core's own tak://com.atakmap.app/... links.
-  const TAK_IMPORT_HOST = 'com.atakmap.android.featurelink.plugin';
-
+  // Tried nesting under tak:// instead (matching the enrollment flow's
+  // pattern) — confirmed via adb that ATAK core claims the entire "tak"
+  // scheme centrally regardless of host and swallows it before our plugin
+  // ever sees it, so that's a dead end. Reverted to featurelink://, but as a
+  // BARE link (no intent:// wrapper) — the real-tap fix so far was only
+  // tested with the intent:// wrapped form, not this exact combination.
   function buildImportUri(config) {
-    return 'tak://' + TAK_IMPORT_HOST + '/import?config=' + encodeURIComponent(JSON.stringify(config));
+    return 'featurelink://import?config=' + encodeURIComponent(JSON.stringify(config));
   }
 
   function renderCard(c) {
