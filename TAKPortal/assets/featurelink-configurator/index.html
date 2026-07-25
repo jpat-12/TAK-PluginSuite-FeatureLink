@@ -1555,13 +1555,14 @@ function renderStage3() {
       ${customIconSetsListHtml()}
       <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
         <input type="text" id="custom-icon-set-name" placeholder="Set name (e.g. 'Team Logos')" style="flex:1;min-width:120px" />
-        <input type="file" id="custom-icon-set-files" accept="image/png,image/*" multiple style="flex:2;min-width:160px" />
+        <input type="file" id="custom-icon-set-files" accept="image/png,image/*,.zip,application/zip" multiple style="flex:2;min-width:160px" />
         <button class="btn-sm" onclick="uploadCustomIconSet()">Upload</button>
       </div>
       <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
-        Note: ATAK doesn't yet render arbitrary uploaded images as map markers — an assigned
-        custom icon falls back to the plugin's default marker styling in the field until that's
-        supported.
+        Pick individual images, or a single .zip of a whole iconset — it's unpacked
+        automatically (non-image files inside, like an iconset.xml, are skipped). Note: ATAK
+        doesn't yet render arbitrary uploaded images as map markers — an assigned custom icon
+        falls back to the plugin's default marker styling in the field until that's supported.
       </div>
     </div>`;
   if (!iconManifest) loadManifest().then(() => { if (currentStage === 'iconsets') renderStage3(); });
@@ -2029,13 +2030,15 @@ function customIconUploadHtml() {
           ${customIconSetsListHtml()}
           <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
             <input type="text" id="custom-icon-set-name" placeholder="Set name (e.g. 'Team Logos')" style="flex:1;min-width:120px" />
-            <input type="file" id="custom-icon-set-files" accept="image/png,image/*" multiple style="flex:2;min-width:160px" />
+            <input type="file" id="custom-icon-set-files" accept="image/png,image/*,.zip,application/zip" multiple style="flex:2;min-width:160px" />
             <button class="btn-sm" onclick="uploadCustomIconSet()">Upload</button>
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
-            Pick any image file(s) and a name — your set then shows up in the iconset list and search above, here and
-            anywhere else you pick icons. Note: ATAK doesn't yet render arbitrary uploaded images as map markers, so a
-            custom icon falls back to the plugin's default marker styling in the field until that's supported.
+            Pick image file(s), or a single .zip of a whole iconset (unpacked automatically) — your
+            set then shows up in the iconset list and search above, here and anywhere else you pick
+            icons. Note: ATAK doesn't yet render arbitrary uploaded images as map markers, so a
+            custom icon falls back to the plugin's default marker styling in the field until that's
+            supported.
           </div>
         </div>
       ` : ''}

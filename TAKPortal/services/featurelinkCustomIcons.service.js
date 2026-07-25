@@ -19,6 +19,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const unzipper = require("unzipper");
 
 const DATA_DIR = path.join(__dirname, "..", "data", "featurelink-configs");
 const CUSTOM_ICONS_DIR = path.join(DATA_DIR, "custom-icons");
@@ -26,6 +27,9 @@ const MANIFEST_PATH = path.join(CUSTOM_ICONS_DIR, "manifest.json");
 
 const NAME_RE = /[^a-zA-Z0-9 _-]/g;
 const FILE_RE = /[^a-zA-Z0-9._-]/g;
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|bmp|webp)$/i;
+const ZIP_ENTRY_LIMIT = 500; // guards against zip-bomb-style entry counts
+const ZIP_ENTRY_MAX_BYTES = 5 * 1024 * 1024; // per-icon uncompressed size cap
 
 function ensureDir() {
   if (!fs.existsSync(CUSTOM_ICONS_DIR)) fs.mkdirSync(CUSTOM_ICONS_DIR, { recursive: true });
@@ -56,11 +60,52 @@ function listCustomIconSets() {
   return readManifest();
 }
 
+function isZipUpload(file) {
+  return /\.zip$/i.test(file.originalname || "")
+    || file.mimetype === "application/zip"
+    || file.mimetype === "application/x-zip-compressed";
+}
+
+/** Renames on collision (icon_2.png, icon_3.png, ...) so a repeat upload never clobbers an existing icon. */
+function uniqueFileName(dir, fileName) {
+  if (!fs.existsSync(path.join(dir, fileName))) return fileName;
+  const ext = path.extname(fileName);
+  const base = fileName.slice(0, fileName.length - ext.length);
+  let i = 2;
+  while (fs.existsSync(path.join(dir, `${base}_${i}${ext}`))) i++;
+  return `${base}_${i}${ext}`;
+}
+
 /**
- * Adds (or appends to, if the set name already exists) a custom icon set.
- * files: [{ path, originalname }] (from multer's disk storage).
+ * Unpacks a .zip iconset (the common ATAK iconset packaging — a flat or nested folder
+ * of icon images, sometimes alongside an iconset.xml the plugin doesn't need here) into
+ * individual icon files. Non-image entries (manifests, __MACOSX junk, directories) are
+ * skipped; nested folder structure is flattened since custom sets are stored flat.
  */
-function addCustomIcons(setName, files, actorUsername) {
+async function extractZipIcons(zipPath, setDir, entry) {
+  const directory = await unzipper.Open.file(zipPath);
+  let extracted = 0;
+  for (const zipEntry of directory.files) {
+    if (zipEntry.type !== "File") continue;
+    if (extracted >= ZIP_ENTRY_LIMIT) break;
+    const baseName = path.basename(zipEntry.path);
+    if (!IMAGE_EXT_RE.test(baseName)) continue;
+    if ((zipEntry.vars?.uncompressedSize || 0) > ZIP_ENTRY_MAX_BYTES) continue;
+    const safeName = uniqueFileName(setDir, baseName.replace(FILE_RE, "_"));
+    const buffer = await zipEntry.buffer();
+    fs.writeFileSync(path.join(setDir, safeName), buffer);
+    entry.icons.push(safeName);
+    extracted++;
+  }
+  return extracted;
+}
+
+/**
+ * Adds (or appends to, if the set name already exists) a custom icon set. .zip uploads
+ * are unpacked into their individual icon images; anything else is stored as one icon.
+ * files: [{ path, originalname, mimetype }] (from multer's disk storage).
+ */
+async function addCustomIcons(setName, files, actorUsername) {
   const name = cleanSetName(setName);
   if (!name) return { success: false, error: "Icon set name is required." };
   if (!files || !files.length) return { success: false, error: "At least one icon file is required." };
@@ -76,11 +121,19 @@ function addCustomIcons(setName, files, actorUsername) {
     sets.push(entry);
   }
 
+  let totalExtracted = 0;
   for (const file of files) {
-    const safeName = (file.originalname || "icon.png").replace(FILE_RE, "_");
-    fs.copyFileSync(file.path, path.join(setDir, safeName));
-    if (!entry.icons.includes(safeName)) entry.icons.push(safeName);
+    if (isZipUpload(file)) {
+      totalExtracted += await extractZipIcons(file.path, setDir, entry);
+    } else {
+      const safeName = uniqueFileName(setDir, (file.originalname || "icon.png").replace(FILE_RE, "_"));
+      fs.copyFileSync(file.path, path.join(setDir, safeName));
+      entry.icons.push(safeName);
+      totalExtracted++;
+    }
   }
+
+  if (!totalExtracted) return { success: false, error: "No image files found — check the zip contains PNG/JPG/GIF/BMP/WEBP images." };
 
   writeManifest(sets);
   return { success: true, set: entry };

@@ -27,7 +27,7 @@ const upload = multer({
       cb(null, `flicon_${Date.now()}_${Math.random().toString(16).slice(2)}_${base}`);
     },
   }),
-  limits: { fileSize: 5 * 1024 * 1024, files: 200 }, // icon images are small
+  limits: { fileSize: 25 * 1024 * 1024, files: 200 }, // individual icons are tiny, but a zipped iconset can be a few MB
 });
 
 function cleanupTempFiles(files) {
@@ -47,12 +47,12 @@ router.get("/", (req, res) => {
   }
 });
 
-/** POST /api/featurelink/admin/custom-icons — multipart: name + icons (multiple files). */
-router.post("/", upload.array("icons", 200), (req, res) => {
+/** POST /api/featurelink/admin/custom-icons — multipart: name + icons (multiple files, .zip iconsets unpacked). */
+router.post("/", upload.array("icons", 200), async (req, res) => {
   try {
     const name = req.body && req.body.name;
     const username = req.authentikUser && req.authentikUser.username;
-    const result = customIconsSvc.addCustomIcons(name, req.files, username);
+    const result = await customIconsSvc.addCustomIcons(name, req.files, username);
     cleanupTempFiles(req.files);
     if (!result.success) return res.status(400).json({ ok: false, error: result.error });
     res.json({ ok: true, set: result.set });
