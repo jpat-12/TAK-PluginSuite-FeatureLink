@@ -12,138 +12,158 @@
     <h2 style="margin-top: 0;">Configs</h2>
     <div id="configsMsg" class="msg"></div>
     <div id="configsLoading" class="muted">Loading...</div>
-    <table id="configsTable" style="display: none; width: 100%; border-collapse: collapse;">
+    <table id="configsTable" class="table" style="display: none;">
       <thead>
         <tr>
-          <th style="text-align: left; padding: 8px;">Name</th>
-          <th style="text-align: left; padding: 8px;">Target</th>
-          <th style="text-align: left; padding: 8px;">Source</th>
-          <th style="text-align: left; padding: 8px;">Updated</th>
-          <th style="text-align: left; padding: 8px;"></th>
+          <th>Name</th>
+          <th>Target</th>
+          <th>Source</th>
+          <th>Updated</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="configsBody"></tbody>
     </table>
-    <div id="configsEmpty" style="display: none; margin-top: 16px; color: var(--muted);">
+    <div id="configsEmpty" class="muted" style="display: none; margin-top: 16px;">
       No configs yet — add one below.
     </div>
   </div>
 
-  <details class="card settings-section" style="margin-top: 24px;" open>
-    <summary class="settings-summary" style="cursor: pointer; padding: 4px 0;">Add Config</summary>
-    <div class="settings-body" style="margin-top: 12px;">
-      <div class="row" style="flex-wrap: wrap; gap: 16px;">
-        <div style="flex: 1; min-width: 240px;">
+  <details class="card" open>
+    <summary class="fl-summary">Add Config</summary>
+    <div style="margin-top: 16px;">
+      <div class="row" style="align-items: flex-start;">
+        <div class="col" style="flex: 1; min-width: 240px;">
           <label>Name
-            <input type="text" id="newName" placeholder="e.g. County Boundaries" style="width: 100%;" />
+            <input type="text" id="newName" placeholder="e.g. County Boundaries" />
           </label>
-          <label style="margin-top: 8px;">Description (optional)
-            <input type="text" id="newDescription" style="width: 100%;" />
+          <label>Description (optional)
+            <input type="text" id="newDescription" />
           </label>
-          <label style="margin-top: 8px;">Target
-            <select id="newTargetApp" style="width: 100%;">
+          <label>Target
+            <select id="newTargetApp">
               <option value="Both" selected>Both</option>
               <option value="ATAK">ATAK</option>
               <option value="WinTAK">WinTAK</option>
             </select>
           </label>
         </div>
-        <div style="flex: 1; min-width: 240px;">
-          <label>Upload config file
-            <input type="file" id="newFile" />
+        <div class="col" style="flex: 1; min-width: 240px;">
+          <label class="btn" style="justify-content: flex-start;">Choose File
+            <input type="file" id="newFile" style="display: none;" />
           </label>
-          <p class="muted" style="margin: 8px 0; text-align: center;">— or —</p>
-          <label>ArcGIS FeatureLayer URL (enables display styling below)
-            <input type="url" id="newSourceUrl" placeholder="https://.../FeatureServer/0" style="width: 100%;" />
+          <span id="newFileName" class="muted" style="font-size: 12px;">No file chosen</span>
+          <p class="muted fl-or">— or —</p>
+          <label>ArcGIS FeatureLayer URL <span class="muted">(enables display styling below)</span>
+            <input type="url" id="newSourceUrl" placeholder="https://.../FeatureServer/0" />
           </label>
         </div>
       </div>
 
       <!-- Display Configurator — only meaningful for a FeatureLayer URL source -->
-      <div id="displayConfigurator" style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);">
-        <h3 style="margin: 0 0 8px;">Display Styling</h3>
-        <p class="muted" style="margin: 0 0 12px;">
+      <div id="displayConfigurator" class="fl-configurator">
+        <h2>Display Styling</h2>
+        <p class="muted" style="margin-top: -6px;">
           Applies when this config is opened in the FeatureLink plugin (download or Open in ATAK).
           Leave everything below at its default to use the plugin's plain styling.
         </p>
 
-        <div class="row" style="flex-wrap: wrap; gap: 16px;">
-          <label>Layer opacity
-            <input type="range" id="symLayerOpacity" min="0" max="1" step="0.05" value="1" />
-          </label>
-          <label><input type="checkbox" id="symLayerVisible" checked /> Visible by default</label>
-        </div>
-
-        <h4 style="margin: 16px 0 4px;">Symbology</h4>
-        <label>Type
-          <select id="symType" style="width: 100%; max-width: 260px;">
-            <option value="s">Simple (one color/shape)</option>
-            <option value="uv">Unique Value (by field)</option>
-            <option value="rb">Rule-Based</option>
-            <option value="cb">Class Breaks (numeric ranges)</option>
-          </select>
-        </label>
-
-        <div id="symSimple" class="symSection">
-          <div class="row" style="flex-wrap: wrap; gap: 12px; margin-top: 8px;">
-            <label>Color <input type="color" id="symColor" value="#3388ff" /></label>
-            <label>Outline <input type="color" id="symOutlineColor" value="#000000" /></label>
-            <label>Size (px) <input type="number" id="symSize" value="12" min="1" style="width: 70px;" /></label>
-            <label>Shape
-              <select id="symShape">
-                <option value="circle">Circle</option>
-                <option value="square">Square</option>
-                <option value="diamond">Diamond</option>
-                <option value="triangle">Triangle</option>
-                <option value="cross">Cross</option>
-                <option value="x">X</option>
-              </select>
+        <div class="fl-subcard">
+          <h3>Layer</h3>
+          <div class="row" style="align-items: center;">
+            <label style="flex: 1; min-width: 200px;">Opacity
+              <span class="row" style="gap: 8px;">
+                <input type="range" id="symLayerOpacity" min="0" max="1" step="0.05" value="1" style="flex: 1;" />
+                <span class="fl-range-value" id="symLayerOpacityVal">100%</span>
+              </span>
             </label>
-            <label>Opacity <input type="range" id="symOpacity" min="0" max="1" step="0.05" value="1" /></label>
+            <label class="fl-check"><input type="checkbox" id="symLayerVisible" checked /> Visible by default</label>
           </div>
         </div>
 
-        <div id="symUv" class="symSection" style="display: none;">
-          <label style="margin-top: 8px;">Field name
-            <input type="text" id="symUvField" placeholder="e.g. STATUS" style="width: 100%; max-width: 260px;" />
+        <div class="fl-subcard">
+          <h3>Symbology</h3>
+          <label style="max-width: 280px;">Type
+            <select id="symType">
+              <option value="s">Simple (one color/shape)</option>
+              <option value="uv">Unique Value (by field)</option>
+              <option value="rb">Rule-Based</option>
+              <option value="cb">Class Breaks (numeric ranges)</option>
+            </select>
           </label>
-          <div id="symUvRows" style="margin-top: 8px;"></div>
-          <button class="btn" type="button" id="symUvAddRow" style="margin-top: 8px;">Add Value</button>
+
+          <div id="symSimple" class="symSection">
+            <div class="row" style="margin-top: 12px; align-items: center;">
+              <label>Color <input type="color" id="symColor" value="#3388ff" /></label>
+              <label>Outline <input type="color" id="symOutlineColor" value="#000000" /></label>
+              <label>Size (px) <input type="number" id="symSize" value="12" min="1" style="width: 70px;" /></label>
+              <label>Shape
+                <select id="symShape">
+                  <option value="circle">Circle</option>
+                  <option value="square">Square</option>
+                  <option value="diamond">Diamond</option>
+                  <option value="triangle">Triangle</option>
+                  <option value="cross">Cross</option>
+                  <option value="x">X</option>
+                </select>
+              </label>
+              <label style="min-width: 140px;">Opacity
+                <span class="row" style="gap: 8px;">
+                  <input type="range" id="symOpacity" min="0" max="1" step="0.05" value="1" style="flex: 1;" />
+                  <span class="fl-range-value" id="symOpacityVal">100%</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div id="symUv" class="symSection" style="display: none;">
+            <label style="margin-top: 12px; max-width: 280px;">Field name
+              <input type="text" id="symUvField" placeholder="e.g. STATUS" />
+            </label>
+            <div id="symUvRows" class="fl-dynlist"></div>
+            <button class="btn" type="button" id="symUvAddRow">+ Add Value</button>
+          </div>
+
+          <div id="symRb" class="symSection" style="display: none;">
+            <label style="margin-top: 12px; max-width: 280px;">Default color (no rule matches)
+              <input type="color" id="symRbDefaultColor" value="#3388ff" />
+            </label>
+            <div id="symRbRows" class="fl-dynlist"></div>
+            <button class="btn" type="button" id="symRbAddRow">+ Add Rule</button>
+          </div>
+
+          <div id="symCb" class="symSection" style="display: none;">
+            <label style="margin-top: 12px; max-width: 280px;">Field name (numeric)
+              <input type="text" id="symCbField" placeholder="e.g. POPULATION" />
+            </label>
+            <div id="symCbRows" class="fl-dynlist"></div>
+            <button class="btn" type="button" id="symCbAddRow">+ Add Break</button>
+          </div>
         </div>
 
-        <div id="symRb" class="symSection" style="display: none;">
-          <label style="margin-top: 8px;">Default color (no rule matches)
-            <input type="color" id="symRbDefaultColor" value="#3388ff" />
-          </label>
-          <div id="symRbRows" style="margin-top: 8px;"></div>
-          <button class="btn" type="button" id="symRbAddRow" style="margin-top: 8px;">Add Rule</button>
+        <div class="fl-subcard">
+          <h3>Labels</h3>
+          <label class="fl-check"><input type="checkbox" id="lblEnabled" /> Show labels</label>
+          <div class="row" id="lblFields" style="margin-top: 12px; align-items: center; opacity: 0.5;">
+            <label>Field <input type="text" id="lblField" style="width: 160px;" disabled /></label>
+            <label>Size (sp) <input type="number" id="lblSize" value="12" min="1" style="width: 70px;" disabled /></label>
+            <label>Color <input type="color" id="lblColor" value="#ffffff" disabled /></label>
+            <label class="fl-check"><input type="checkbox" id="lblBold" disabled /> Bold</label>
+            <label class="fl-check"><input type="checkbox" id="lblItalic" disabled /> Italic</label>
+          </div>
         </div>
 
-        <div id="symCb" class="symSection" style="display: none;">
-          <label style="margin-top: 8px;">Field name (numeric)
-            <input type="text" id="symCbField" placeholder="e.g. POPULATION" style="width: 100%; max-width: 260px;" />
-          </label>
-          <div id="symCbRows" style="margin-top: 8px;"></div>
-          <button class="btn" type="button" id="symCbAddRow" style="margin-top: 8px;">Add Break</button>
+        <div class="fl-subcard">
+          <h3>Popup</h3>
+          <label class="fl-check"><input type="checkbox" id="popupEnabled" /> Show popup fields as ATAK remarks</label>
+          <div id="popupFields" style="margin-top: 12px; opacity: 0.5;">
+            <label style="max-width: 280px;">Title field
+              <input type="text" id="popupTitleField" disabled />
+            </label>
+            <div id="popupRows" class="fl-dynlist" style="margin-top: 8px;"></div>
+            <button class="btn" type="button" id="popupAddRow" disabled>+ Add Field</button>
+          </div>
         </div>
-
-        <h4 style="margin: 16px 0 4px;">Labels</h4>
-        <label><input type="checkbox" id="lblEnabled" /> Show labels</label>
-        <div class="row" style="flex-wrap: wrap; gap: 12px; margin-top: 8px;">
-          <label>Field <input type="text" id="lblField" style="width: 160px;" /></label>
-          <label>Size (sp) <input type="number" id="lblSize" value="12" min="1" style="width: 70px;" /></label>
-          <label>Color <input type="color" id="lblColor" value="#ffffff" /></label>
-          <label><input type="checkbox" id="lblBold" /> Bold</label>
-          <label><input type="checkbox" id="lblItalic" /> Italic</label>
-        </div>
-
-        <h4 style="margin: 16px 0 4px;">Popup</h4>
-        <label><input type="checkbox" id="popupEnabled" /> Show popup fields as ATAK remarks</label>
-        <label style="margin-top: 8px;">Title field
-          <input type="text" id="popupTitleField" style="width: 100%; max-width: 260px;" />
-        </label>
-        <div id="popupRows" style="margin-top: 8px;"></div>
-        <button class="btn" type="button" id="popupAddRow" style="margin-top: 8px;">Add Field</button>
       </div>
 
       <button class="btn" type="button" id="addConfigBtn" style="margin-top: 16px;">Add Config</button>
@@ -153,10 +173,81 @@
 </main>
 
 <style>
-  #displayConfigurator .row label { display: flex; align-items: center; gap: 6px; }
-  .dynRow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
-  .dynRow input[type="text"] { width: 120px; }
-  .dynRow input[type="number"] { width: 90px; }
+  /* Native <details>/<summary> has no site styling — give it one that matches .card conventions */
+  .fl-summary {
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--muted);
+    font-weight: 600;
+    list-style: none;
+  }
+  .fl-summary::-webkit-details-marker { display: none; }
+  .fl-summary::before { content: '▸ '; }
+  details[open] .fl-summary::before { content: '▾ '; }
+
+  .fl-or { text-align: center; margin: 6px 0; }
+
+  .fl-configurator {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+  }
+  .fl-configurator h2 { margin-bottom: 4px; }
+
+  /* Nested grouping inside Display Styling — a step darker/lighter than the outer .card */
+  .fl-subcard {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+    margin-top: 14px;
+  }
+  .fl-subcard h3 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* Checkbox + text on one line — the site's global `label{flex-direction:column}` stacks them
+     otherwise, same pattern as .groupItem elsewhere in the app. */
+  .fl-check {
+    flex-direction: row !important;
+    align-items: center;
+    gap: 8px !important;
+    cursor: pointer;
+  }
+  .fl-check input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    padding: 0;
+  }
+
+  .fl-range-value {
+    font-size: 12px;
+    color: var(--muted);
+    min-width: 3.5em;
+    text-align: right;
+  }
+
+  /* Dynamic rows (Unique Value / Rule-Based / Class Breaks / Popup fields) */
+  .fl-dynlist { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .dynRow {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .dynRow label { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .dynRow input[type="text"],
+  .dynRow input[type="number"] { width: 110px; }
+  .dynRow .removeRowBtn { margin-left: auto; background: var(--danger); }
 </style>
 
 <script>
@@ -177,6 +268,7 @@
   // Source type toggle: styling only makes sense for a FeatureLayer URL
   // ---------------------------------------------------------------------
   const newFile = document.getElementById('newFile');
+  const newFileName = document.getElementById('newFileName');
   const newSourceUrl = document.getElementById('newSourceUrl');
   const displayConfigurator = document.getElementById('displayConfigurator');
 
@@ -185,10 +277,41 @@
   }
   newSourceUrl.addEventListener('input', syncConfiguratorVisibility);
   newFile.addEventListener('change', function () {
+    newFileName.textContent = newFile.files.length ? newFile.files[0].name : 'No file chosen';
     if (newFile.files.length) newSourceUrl.value = '';
     syncConfiguratorVisibility();
   });
   syncConfiguratorVisibility();
+
+  // ---------------------------------------------------------------------
+  // Live range readouts
+  // ---------------------------------------------------------------------
+  function wireRange(rangeId, outId) {
+    const range = document.getElementById(rangeId);
+    const out = document.getElementById(outId);
+    const update = () => { out.textContent = Math.round(parseFloat(range.value) * 100) + '%'; };
+    range.addEventListener('input', update);
+    update();
+  }
+  wireRange('symLayerOpacity', 'symLayerOpacityVal');
+  wireRange('symOpacity', 'symOpacityVal');
+
+  // ---------------------------------------------------------------------
+  // Enable/disable Labels + Popup fields based on their checkboxes
+  // ---------------------------------------------------------------------
+  function wireEnableToggle(checkboxId, fieldsContainerId) {
+    const checkbox = document.getElementById(checkboxId);
+    const container = document.getElementById(fieldsContainerId);
+    const update = () => {
+      const on = checkbox.checked;
+      container.style.opacity = on ? '1' : '0.5';
+      container.querySelectorAll('input, select, button').forEach((el) => { el.disabled = !on; });
+    };
+    checkbox.addEventListener('change', update);
+    update();
+  }
+  wireEnableToggle('lblEnabled', 'lblFields');
+  wireEnableToggle('popupEnabled', 'popupFields');
 
   // ---------------------------------------------------------------------
   // Symbology type sections
@@ -210,7 +333,7 @@
   function addRow(container, html) {
     const div = document.createElement('div');
     div.className = 'dynRow';
-    div.innerHTML = html + ' <button type="button" class="btn removeRowBtn">Remove</button>';
+    div.innerHTML = html + '<button type="button" class="btn removeRowBtn">Remove</button>';
     div.querySelector('.removeRowBtn').addEventListener('click', () => div.remove());
     container.appendChild(div);
     return div;
@@ -218,28 +341,31 @@
 
   document.getElementById('symUvAddRow').addEventListener('click', () => {
     addRow(document.getElementById('symUvRows'),
-      'Value <input type="text" class="uvValue" /> Color <input type="color" class="uvColor" value="#3388ff" />');
+      '<label>Value <input type="text" class="uvValue" /></label>' +
+      '<label>Color <input type="color" class="uvColor" value="#3388ff" /></label>');
   });
 
   const RULE_OPS = ['=', '≠', 'contains', 'starts with', 'is empty', 'is not empty', '>', '<', '>=', '<='];
   document.getElementById('symRbAddRow').addEventListener('click', () => {
     const opsHtml = RULE_OPS.map((o) => '<option value="' + escapeHtml(o) + '">' + escapeHtml(o) + '</option>').join('');
     addRow(document.getElementById('symRbRows'),
-      'Field <input type="text" class="rbField" /> ' +
-      'Op <select class="rbOp">' + opsHtml + '</select> ' +
-      'Value <input type="text" class="rbValue" /> ' +
-      'Color <input type="color" class="rbColor" value="#3388ff" />');
+      '<label>Field <input type="text" class="rbField" /></label>' +
+      '<label>Op <select class="rbOp">' + opsHtml + '</select></label>' +
+      '<label>Value <input type="text" class="rbValue" /></label>' +
+      '<label>Color <input type="color" class="rbColor" value="#3388ff" /></label>');
   });
 
   document.getElementById('symCbAddRow').addEventListener('click', () => {
     addRow(document.getElementById('symCbRows'),
-      'Min <input type="number" class="cbMin" /> Max <input type="number" class="cbMax" /> ' +
-      'Color <input type="color" class="cbColor" value="#3388ff" />');
+      '<label>Min <input type="number" class="cbMin" /></label>' +
+      '<label>Max <input type="number" class="cbMax" /></label>' +
+      '<label>Color <input type="color" class="cbColor" value="#3388ff" /></label>');
   });
 
   document.getElementById('popupAddRow').addEventListener('click', () => {
     addRow(document.getElementById('popupRows'),
-      'Field <input type="text" class="popupField" /> Alias <input type="text" class="popupAlias" />');
+      '<label>Field <input type="text" class="popupField" /></label>' +
+      '<label>Alias <input type="text" class="popupAlias" /></label>');
   });
 
   // ---------------------------------------------------------------------
@@ -321,11 +447,11 @@
     const styled = c.sourceType === 'url' && c.display ? ' <span class="muted">(styled)</span>' : '';
     const tr = document.createElement('tr');
     tr.innerHTML =
-      '<td style="padding: 8px;">' + escapeHtml(c.name) + (c.description ? '<br><span class="muted">' + escapeHtml(c.description) + '</span>' : '') + '</td>' +
-      '<td style="padding: 8px;">' + escapeHtml(c.targetApp) + '</td>' +
-      '<td style="padding: 8px; word-break: break-all;">' + source + styled + '</td>' +
-      '<td style="padding: 8px;">' + new Date(c.updatedAt).toLocaleString() + '</td>' +
-      '<td style="padding: 8px;"><button class="btn deleteBtn" data-id="' + c.id + '">Delete</button></td>';
+      '<td>' + escapeHtml(c.name) + (c.description ? '<br><span class="muted">' + escapeHtml(c.description) + '</span>' : '') + '</td>' +
+      '<td>' + escapeHtml(c.targetApp) + '</td>' +
+      '<td style="word-break: break-all;">' + source + styled + '</td>' +
+      '<td>' + new Date(c.updatedAt).toLocaleString() + '</td>' +
+      '<td><button class="btn danger deleteBtn" data-id="' + c.id + '">Delete</button></td>';
     return tr;
   }
 
@@ -393,6 +519,7 @@
         document.getElementById('newName').value = '';
         document.getElementById('newDescription').value = '';
         newFile.value = '';
+        newFileName.textContent = 'No file chosen';
         newSourceUrl.value = '';
         syncConfiguratorVisibility();
         loadConfigs();
