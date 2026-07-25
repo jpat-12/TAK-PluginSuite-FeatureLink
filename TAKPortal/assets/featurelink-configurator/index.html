@@ -908,21 +908,11 @@
       <button class="panel-toggle-btn" onclick="togglePanel('right')" title="Collapse/expand">⟨⟩</button>
     </div>
     <div class="panel-resizer" id="panel-right-resizer"></div>
-    <div class="style-tabs">
-      <button class="active" onclick="switchTab('symbology')">Symbols</button>
-      <button onclick="switchTab('labels')">Labels</button>
-      <button onclick="switchTab('popup')">Popup</button>
-      <button onclick="switchTab('layer')">Layer</button>
-      <button onclick="switchTab('cotmapping')">CoT Mapping</button>
-      <button onclick="switchTab('linkqr')">Link QR</button>
-    </div>
+    <div class="style-tabs" id="stage-stepper"></div>
     <div class="panel-scroll" id="cfg-panel">
-      <div id="tab-symbology"></div>
-      <div id="tab-labels" style="display:none"></div>
-      <div id="tab-popup" style="display:none"></div>
-      <div id="tab-layer" style="display:none"></div>
-      <div id="tab-cotmapping" style="display:none"></div>
-      <div id="tab-linkqr" style="display:none"></div>
+      <div id="stage-content"></div>
+      <div id="advanced-settings-wrap"></div>
+      <div id="linkqr-wrap-outer"></div>
     </div>
   </div>
 
@@ -1500,26 +1490,137 @@ function filterTable() {
 // ══════════════════════════════════════════
 //  Tabs
 // ══════════════════════════════════════════
-const TAB_NAMES = ['symbology','labels','popup','layer','cotmapping','linkqr'];
+const STAGE_NAMES = ['basics', 'cotmapping', 'iconsets', 'rendercolumn'];
+const STAGE_LABELS = {
+  basics: '1. Layer & Labels',
+  cotmapping: '2. CoT Mapping',
+  iconsets: '3. Icon Sets',
+  rendercolumn: '4. Render by Column',
+};
+let currentStage = 'basics';
+let advancedSettingsOpen = false;
+let linkQRPanelOpen = false;
 
-function switchTab(name) {
-  TAB_NAMES.forEach(t => {
-    document.getElementById('tab-'+t).style.display = t === name ? '' : 'none';
-  });
-  document.querySelectorAll('.style-tabs button').forEach((btn, i) => {
-    btn.classList.toggle('active', TAB_NAMES[i] === name);
-  });
-  if (name === 'cotmapping') renderCotMappingTab();
-  if (name === 'linkqr') renderLinkQRTab();
+function renderStageStepper() {
+  document.getElementById('stage-stepper').innerHTML = STAGE_NAMES.map(name =>
+    `<button class="${name===currentStage?'active':''}" onclick="goToStage('${name}')">${STAGE_LABELS[name]}</button>`
+  ).join('');
+}
+
+function goToStage(name) {
+  currentStage = name;
+  renderStageStepper();
+  renderCurrentStage();
+}
+
+function renderCurrentStage() {
+  if (currentStage === 'basics') renderStage1();
+  else if (currentStage === 'cotmapping') renderCotMappingTab();
+  else if (currentStage === 'iconsets') renderStage3();
+  else if (currentStage === 'rendercolumn') renderSymbologyTab();
 }
 
 function renderAllTabs() {
-  renderSymbologyTab();
-  renderLabelsTab();
-  renderPopupTab();
-  renderLayerTab();
-  renderCotMappingTab();
-  renderLinkQRTab();
+  renderStageStepper();
+  renderCurrentStage();
+  renderAdvancedSettings();
+  renderLinkQRPanel();
+}
+
+// ══════════════════════════════════════════
+//  Stage 1 — Layer Name + Label styling
+// ══════════════════════════════════════════
+function renderStage1() {
+  const l = state.cfg.layer;
+  const lbl = state.cfg.labels;
+  const allFields = state.fields.map(f => f.name);
+  const fieldOpts = allFields.map(f => `<option value="${f}" ${f===lbl.field?'selected':''}>${f}</option>`).join('');
+
+  document.getElementById('stage-content').innerHTML = `
+    <div class="cfg-section" style="margin-top:4px">
+      <div class="cfg-label">Layer Name</div>
+      <input type="text" value="${l.name}" oninput="state.cfg.layer.name=this.value" placeholder="Layer name" />
+    </div>
+    <hr class="div" />
+    <div class="cfg-section">
+      <div class="toggle-row">
+        <label>Show Labels</label>
+        <label class="toggle">
+          <input type="checkbox" ${lbl.enabled?'checked':''} onchange="state.cfg.labels.enabled=this.checked" />
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Label Field</div>
+      <select onchange="state.cfg.labels.field=this.value">
+        <option value="">— No label —</option>${fieldOpts}
+      </select>
+    </div>
+    <div class="cfg-section">
+      <div class="row-2">
+        <div>
+          <div class="cfg-label">Size (px)</div>
+          <input type="number" min="6" max="48" value="${lbl.fontSize}" oninput="state.cfg.labels.fontSize=+this.value" />
+        </div>
+        <div>
+          <div class="cfg-label">Color</div>
+          <input type="color" value="${lbl.color}" oninput="state.cfg.labels.color=this.value" />
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <div class="toggle-row" style="flex:1">
+          <label>Bold</label>
+          <label class="toggle">
+            <input type="checkbox" ${lbl.bold?'checked':''} onchange="state.cfg.labels.bold=this.checked" />
+            <div class="toggle-slider"></div>
+          </label>
+        </div>
+        <div class="toggle-row" style="flex:1">
+          <label>Italic</label>
+          <label class="toggle">
+            <input type="checkbox" ${lbl.italic?'checked':''} onchange="state.cfg.labels.italic=this.checked" />
+            <div class="toggle-slider"></div>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Halo</div>
+      <div class="color-row">
+        <label>Color</label>
+        <input type="color" value="${lbl.haloColor}" oninput="state.cfg.labels.haloColor=this.value" />
+        <label style="margin-left:12px">Size</label>
+        <input type="number" min="0" max="10" value="${lbl.haloSize}" oninput="state.cfg.labels.haloSize=+this.value" style="width:60px" />
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════
+//  Stage 3 — Icon Sets (upload/manage only; picking an icon happens in Stage 4)
+// ══════════════════════════════════════════
+function renderStage3() {
+  document.getElementById('stage-content').innerHTML = `
+    <p style="font-size:12px;color:var(--text-muted);margin:4px 0 12px">
+      Upload icon images here to make them available when you assign icons to values in
+      <strong>Render by Column</strong> (Stage 4). Optional — skip this if you just want colored
+      markers.
+    </p>
+    <div class="cfg-section" style="margin-top:0">
+      <div class="cfg-label">Custom Icon Sets</div>
+      ${customIconSetsListHtml()}
+      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <input type="text" id="custom-icon-set-name" placeholder="Set name (e.g. 'Team Logos')" style="flex:1;min-width:120px" />
+        <input type="file" id="custom-icon-set-files" accept="image/png,image/*" multiple style="flex:2;min-width:160px" />
+        <button class="btn-sm" onclick="uploadCustomIconSet()">Upload</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+        Note: ATAK doesn't yet render arbitrary uploaded images as map markers — an assigned
+        custom icon falls back to the plugin's default marker styling in the field until that's
+        supported.
+      </div>
+    </div>`;
+  if (!iconManifest) loadManifest().then(() => { if (currentStage === 'iconsets') renderStage3(); });
 }
 
 // ══════════════════════════════════════════
@@ -1699,7 +1800,6 @@ function renderSymbologyTab() {
     const fOpts = (sel, placeholder) =>
       `<option value="">${placeholder}</option>` +
       allFields.map(f => `<option value="${f}" ${f===sel?'selected':''}>${f}</option>`).join('');
-    const opOpts = sel => RULE_OPS.map(op => `<option value="${op}" ${op===sel?'selected':''}>${op}</option>`).join('');
 
     const valueRowsHtml = adv.valueSymbols.map((vs, i) => {
       const isEd = symEdCtx?.ctx==='value' && symEdCtx.idx===i;
@@ -1708,20 +1808,6 @@ function renderSymbologyTab() {
         <span class="adv-row-label" title="${(vs.value||'(blank)').replace(/"/g,'&quot;')}">${vs.value||'<em style="color:var(--text-muted)">(blank)</em>'}</span>
         <span class="adv-row-count">${vs.count}</span>
       </div>${isEd ? renderSymEdHtml(vs.symbol) : ''}`;
-    }).join('');
-
-    const ruleRowsHtml = adv.rules.map((r, i) => {
-      const isEd = symEdCtx?.ctx==='rule' && symEdCtx.idx===i;
-      const hideVal = r.op==='is empty' || r.op==='is not empty';
-      return `<div class="adv-rule-row">
-        ${advSwatchHtml(r.symbol,'rule',i)}
-        <span style="font-size:11px;color:var(--text-muted);flex-shrink:0">IF</span>
-        <select onchange="setAdvRuleProp(${i},'field',this.value)">${fOpts(r.field,'— field —')}</select>
-        <select onchange="setAdvRuleProp(${i},'op',this.value)">${opOpts(r.op)}</select>
-        ${hideVal?'': `<input type="text" value="${(r.value||'').replace(/"/g,'&quot;')}" placeholder="value" oninput="setAdvRuleProp(${i},'value',this.value)" style="flex:1;min-width:50px;padding:3px 5px;font-size:11px" />`}
-        <input type="text" value="${(r.label||'').replace(/"/g,'&quot;')}" placeholder="legend label" oninput="setAdvRuleProp(${i},'label',this.value)" style="width:80px;padding:3px 5px;font-size:11px" />
-        <button class="rule-remove" onclick="removeAdvRule(${i})" title="Remove">✕</button>
-      </div>${isEd ? renderSymEdHtml(r.symbol) : ''}`;
     }).join('');
 
     const isDefEd = symEdCtx?.ctx==='default';
@@ -1733,7 +1819,7 @@ function renderSymbologyTab() {
       ${adv.field ? `
         <div class="cfg-section">
           <div class="cfg-label" style="display:flex;align-items:center;justify-content:space-between">
-            <span>Unique Values <span style="font-weight:normal;text-transform:none;font-size:10px">${adv.valueSymbols.length} found · click ■ to edit</span></span>
+            <span>Unique Values <span style="font-weight:normal;text-transform:none;font-size:10px">${adv.valueSymbols.length} found · click ■ to edit (color or icon)</span></span>
             <button class="btn-sm" onclick="autoColorAdv()" style="font-size:10px;padding:3px 8px">Auto-color</button>
           </div>
           ${valueRowsHtml || '<div style="color:var(--text-muted);font-size:12px">No data loaded yet.</div>'}
@@ -1741,19 +1827,13 @@ function renderSymbologyTab() {
       ` : ''}
       <hr class="div" />
       <div class="cfg-section">
-        <div class="cfg-label">If / Then Rules <span style="font-weight:normal;text-transform:none;font-size:10px">override above · first match wins</span></div>
-        ${ruleRowsHtml || '<div style="color:var(--text-muted);font-size:12px;margin-bottom:8px">No rules yet.</div>'}
-        <button class="btn-sm" style="width:100%;margin-top:4px" onclick="addAdvRule()">+ Add Rule</button>
-      </div>
-      <hr class="div" />
-      <div class="cfg-section">
-        <div class="cfg-label">Default Symbol <span style="font-weight:normal;text-transform:none;font-size:10px">features matching no rule</span></div>
+        <div class="cfg-label">Default Symbol <span style="font-weight:normal;text-transform:none;font-size:10px">features not covered above</span></div>
         <div class="adv-row">${advSwatchHtml(adv.defaultSymbol,'default',-1)}<span class="adv-row-label">All other features</span></div>
         ${isDefEd ? renderSymEdHtml(adv.defaultSymbol) : ''}
       </div>`;
   }
 
-  document.getElementById('tab-symbology').innerHTML = `
+  document.getElementById('stage-content').innerHTML = `
     ${LEGACY_SYMBOLOGY_TYPES.has(s.type) ? `
       <div class="cfg-section" style="margin-top:4px">
         <div class="cfg-label">Renderer Type <span style="font-weight:400;color:var(--text-muted)">(loaded from a saved config — new configs use Value + Rules only)</span></div>
@@ -1823,7 +1903,7 @@ function drawStar(ctx, cx, cy, spikes, outerR, innerR) {
 function setRendererType(type) {
   state.cfg.symbology.type = type;
   if (type === 'icon' && !iconManifest) {
-    loadManifest().then(() => renderSymbologyTab());
+    loadManifest().then(() => { if (currentStage === 'rendercolumn') renderSymbologyTab(); });
   }
   renderSymbologyTab();
   scheduleQRRefresh();
@@ -1926,7 +2006,7 @@ async function uploadCustomIconSet() {
     if (nameInput) nameInput.value = '';
     if (fileInput) fileInput.value = '';
     await refreshCustomIconsets();
-    renderSymbologyTab();
+    renderCurrentStage();
   } catch (e) { alert('Upload failed: ' + e.message); }
 }
 
@@ -1941,7 +2021,7 @@ async function deleteCustomIconSetUI(name) {
       state.cfg.symbology.icon.icon = '';
     }
     await refreshCustomIconsets();
-    renderSymbologyTab();
+    renderCurrentStage();
   } catch (e) { alert('Delete failed: ' + e.message); }
 }
 
@@ -2077,7 +2157,7 @@ function closeSymEd() { symEdCtx=null; renderSymbologyTab(); }
 function setSymEdTab(tab) {
   if (!symEdCtx) return;
   symEdCtx.tab = tab;
-  if (tab==='icon' && !iconManifest) { loadManifest().then(()=>renderSymbologyTab()); return; }
+  if (tab==='icon' && !iconManifest) { loadManifest().then(() => { if (currentStage === 'rendercolumn') renderSymbologyTab(); }); return; }
   renderSymbologyTab();
 }
 
@@ -2123,24 +2203,6 @@ function renderSymEdHtml(sym) {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
         <input type="color" value="${sym.color||'#0078d4'}" onchange="setSymProp('color',this.value)" />
         <div style="display:flex;flex-wrap:wrap;gap:3px">${allColors.map(c=>`<div class="palette-swatch" style="background:${c}" onclick="setSymProp('color','${c}')"></div>`).join('')}</div>
-      </div>
-      <div class="cfg-label">Shape</div>
-      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
-        ${SHAPES.map(sh=>`<button class="btn-sm${(sym.shape||'circle')===sh?' active':''}" onclick="setSymProp('shape','${sh}')" style="${(sym.shape||'circle')===sh?'border-color:var(--accent);color:var(--accent)':''}">${shapeEmoji(sh)}</button>`).join('')}
-      </div>
-      <div class="cfg-label">Size</div>
-      <div class="range-row" style="margin-bottom:8px">
-        <input type="range" min="4" max="40" value="${sym.size||8}"
-          oninput="document.getElementById('sy-sz').textContent=this.value+'px'"
-          onchange="setSymProp('size',+this.value)" />
-        <span class="range-val" id="sy-sz">${sym.size||8}px</span>
-      </div>
-      <div class="cfg-label">Opacity</div>
-      <div class="range-row">
-        <input type="range" min="0" max="1" step="0.05" value="${sym.opacity??0.85}"
-          oninput="document.getElementById('sy-op').textContent=Math.round(this.value*100)+'%'"
-          onchange="setSymProp('opacity',+this.value)" />
-        <span class="range-val" id="sy-op">${Math.round((sym.opacity??0.85)*100)}%</span>
       </div>`;
   } else {
     const setOpts = iconManifest
@@ -2187,7 +2249,7 @@ function renderSymEdHtml(sym) {
   }
   return `<div class="sym-editor">
     <div class="sym-ed-tabs">
-      <button class="${tab==='shape'?'active':''}" onclick="setSymEdTab('shape')">Shape</button>
+      <button class="${tab==='shape'?'active':''}" onclick="setSymEdTab('shape')">Color</button>
       <button class="${tab==='icon'?'active':''}" onclick="setSymEdTab('icon')">Icon</button>
       <button class="sym-ed-done" onclick="closeSymEd()" title="Close">✓</button>
     </div>
@@ -2212,25 +2274,6 @@ function autoColorAdv() {
   const p=PALETTES[0];
   state.cfg.symbology.advanced.valueSymbols.forEach((vs,i)=>{ vs.symbol.color=p[i%p.length]; vs.symbol.mode='shape'; });
   renderSymbologyTab(); scheduleQRRefresh();
-}
-
-function addAdvRule() {
-  state.cfg.symbology.advanced.rules.push({
-    field: state.fields[0]?.name||'', op:'=', value:'', label:'',
-    symbol: { mode:'shape', color:'#ff7f0e', shape:'circle', size:10, opacity:0.85 },
-  });
-  renderSymbologyTab(); scheduleQRRefresh();
-}
-
-function removeAdvRule(i) {
-  state.cfg.symbology.advanced.rules.splice(i,1);
-  if (symEdCtx?.ctx==='rule' && symEdCtx.idx===i) symEdCtx=null;
-  renderSymbologyTab(); scheduleQRRefresh();
-}
-
-function setAdvRuleProp(i, prop, val) {
-  state.cfg.symbology.advanced.rules[i][prop] = val;
-  if (prop==='op') renderSymbologyTab(); else scheduleQRRefresh();
 }
 
 // ══════════════════════════════════════════
@@ -2265,72 +2308,17 @@ function setRuleProp(i, prop, val) {
 // ══════════════════════════════════════════
 //  Labels Tab
 // ══════════════════════════════════════════
-function renderLabelsTab() {
-  const l = state.cfg.labels;
-  const allFields = state.fields.map(f=>f.name);
-  const fieldOpts = allFields.map(f=>`<option value="${f}" ${f===l.field?'selected':''}>${f}</option>`).join('');
-
-  document.getElementById('tab-labels').innerHTML = `
-    <div class="cfg-section" style="margin-top:4px">
-      <div class="toggle-row">
-        <label>Enable Labels</label>
-        <label class="toggle">
-          <input type="checkbox" ${l.enabled?'checked':''} onchange="state.cfg.labels.enabled=this.checked" />
-          <div class="toggle-slider"></div>
-        </label>
-      </div>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Label Field</div>
-      <select onchange="state.cfg.labels.field=this.value">
-        <option value="">— No label —</option>${fieldOpts}
-      </select>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Font</div>
-      <div class="row-2">
-        <div>
-          <div class="cfg-label">Size (px)</div>
-          <input type="number" min="6" max="48" value="${l.fontSize}" oninput="state.cfg.labels.fontSize=+this.value" />
-        </div>
-        <div>
-          <div class="cfg-label">Color</div>
-          <input type="color" value="${l.color}" oninput="state.cfg.labels.color=this.value" />
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:10px">
-        <div class="toggle-row" style="flex:1">
-          <label>Bold</label>
-          <label class="toggle">
-            <input type="checkbox" ${l.bold?'checked':''} onchange="state.cfg.labels.bold=this.checked" />
-            <div class="toggle-slider"></div>
-          </label>
-        </div>
-        <div class="toggle-row" style="flex:1">
-          <label>Italic</label>
-          <label class="toggle">
-            <input type="checkbox" ${l.italic?'checked':''} onchange="state.cfg.labels.italic=this.checked" />
-            <div class="toggle-slider"></div>
-          </label>
-        </div>
-      </div>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Halo</div>
-      <div class="color-row">
-        <label>Color</label>
-        <input type="color" value="${l.haloColor}" oninput="state.cfg.labels.haloColor=this.value" />
-        <label style="margin-left:12px">Size</label>
-        <input type="number" min="0" max="10" value="${l.haloSize}" oninput="state.cfg.labels.haloSize=+this.value" style="width:60px" />
-      </div>
-    </div>`;
+// ══════════════════════════════════════════
+//  Advanced Settings (Popup + Layer Options) — collapsible, outside the stage flow
+// ══════════════════════════════════════════
+function toggleAdvancedSettings() {
+  advancedSettingsOpen = !advancedSettingsOpen;
+  renderAdvancedSettings();
 }
 
-// ══════════════════════════════════════════
-//  Popup Tab
-// ══════════════════════════════════════════
-function renderPopupTab() {
+function renderAdvancedSettings() {
   const p = state.cfg.popup;
+  const l = state.cfg.layer;
   const allFields = state.fields.map(f=>f.name);
   const titleOpts = allFields.map(f=>`<option value="${f}" ${f===p.title?'selected':''}>${f}</option>`).join('');
 
@@ -2344,101 +2332,84 @@ function renderPopupTab() {
       <input type="text" value="${pf.alias}" placeholder="Alias" oninput="setPopupAlias(${i},this.value)" style="width:100px" />
     </div>`).join('');
 
-  document.getElementById('tab-popup').innerHTML = `
-    <div class="cfg-section" style="margin-top:4px">
-      <div class="toggle-row">
-        <label>Enable Popups</label>
-        <label class="toggle">
-          <input type="checkbox" ${p.enabled?'checked':''} onchange="state.cfg.popup.enabled=this.checked" />
-          <div class="toggle-slider"></div>
-        </label>
-      </div>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Popup Title Field</div>
-      <select onchange="state.cfg.popup.title=this.value">
-        ${titleOpts}
-      </select>
-    </div>
+  document.getElementById('advanced-settings-wrap').innerHTML = `
     <hr class="div" />
     <div class="cfg-section">
-      <div class="cfg-label">Visible Fields & Aliases</div>
-      <div style="margin-bottom:8px;display:flex;gap:8px">
-        <button class="btn-sm" onclick="setAllPopupFields(true)">Show All</button>
-        <button class="btn-sm" onclick="setAllPopupFields(false)">Hide All</button>
+      <div class="cfg-label" style="cursor:pointer" onclick="toggleAdvancedSettings()">
+        ⚙ Advanced Settings <span style="font-weight:400;color:var(--text-muted)">(Popup, Layer Options)</span>
+        <span style="float:right">${advancedSettingsOpen?'▲':'▼'}</span>
       </div>
-      ${pfRows || '<div style="color:var(--text-muted);font-size:12px">No fields loaded.</div>'}
-    </div>
-    <hr class="div" />
-    <div class="cfg-section">
-      <div class="toggle-row">
-        <label>Custom HTML Template</label>
-        <label class="toggle">
-          <input type="checkbox" ${p.customHtml?'checked':''} onchange="state.cfg.popup.customHtml=this.checked;renderPopupTab()" />
-          <div class="toggle-slider"></div>
-        </label>
-      </div>
-      ${p.customHtml ? `<textarea placeholder="Use {FieldName} placeholders, e.g. &lt;b&gt;{Name}&lt;/b&gt;" oninput="state.cfg.popup.html=this.value">${p.html}</textarea>` : ''}
+      ${advancedSettingsOpen ? `
+        <div style="margin-top:10px">
+          <div class="cfg-label">Popup</div>
+          <div class="toggle-row">
+            <label>Enable Popups</label>
+            <label class="toggle">
+              <input type="checkbox" ${p.enabled?'checked':''} onchange="state.cfg.popup.enabled=this.checked" />
+              <div class="toggle-slider"></div>
+            </label>
+          </div>
+          <div class="cfg-label" style="margin-top:8px">Popup Title Field</div>
+          <select onchange="state.cfg.popup.title=this.value">${titleOpts}</select>
+          <div class="cfg-label" style="margin-top:10px">Visible Fields & Aliases</div>
+          <div style="margin-bottom:8px;display:flex;gap:8px">
+            <button class="btn-sm" onclick="setAllPopupFields(true)">Show All</button>
+            <button class="btn-sm" onclick="setAllPopupFields(false)">Hide All</button>
+          </div>
+          ${pfRows || '<div style="color:var(--text-muted);font-size:12px">No fields loaded.</div>'}
+          <div class="toggle-row" style="margin-top:10px">
+            <label>Custom HTML Template</label>
+            <label class="toggle">
+              <input type="checkbox" ${p.customHtml?'checked':''} onchange="state.cfg.popup.customHtml=this.checked;renderAdvancedSettings()" />
+              <div class="toggle-slider"></div>
+            </label>
+          </div>
+          ${p.customHtml ? `<textarea placeholder="Use {FieldName} placeholders, e.g. &lt;b&gt;{Name}&lt;/b&gt;" oninput="state.cfg.popup.html=this.value">${p.html}</textarea>` : ''}
+
+          <hr class="div" />
+          <div class="cfg-label">Layer Options</div>
+          <div class="toggle-row">
+            <label>Visible</label>
+            <label class="toggle">
+              <input type="checkbox" ${l.visible?'checked':''} onchange="state.cfg.layer.visible=this.checked" />
+              <div class="toggle-slider"></div>
+            </label>
+          </div>
+          <div class="cfg-label" style="margin-top:8px">Opacity</div>
+          <div class="range-row">
+            <input type="range" min="0" max="1" step="0.05" value="${l.opacity}"
+              oninput="state.cfg.layer.opacity=+this.value; this.nextElementSibling.textContent=Math.round(this.value*100)+'%'" />
+            <span class="range-val">${Math.round(l.opacity*100)}%</span>
+          </div>
+          <div class="cfg-label" style="margin-top:10px">Scale Visibility (0 = no limit)</div>
+          <div class="row-2">
+            <div>
+              <div class="cfg-label">Min Scale</div>
+              <input type="number" min="0" value="${l.minScale}" oninput="state.cfg.layer.minScale=+this.value" placeholder="e.g. 500000" />
+            </div>
+            <div>
+              <div class="cfg-label">Max Scale</div>
+              <input type="number" min="0" value="${l.maxScale}" oninput="state.cfg.layer.maxScale=+this.value" placeholder="e.g. 1000" />
+            </div>
+          </div>
+
+          <hr class="div" />
+          <div class="cfg-label">Data Summary</div>
+          <div style="font-size:12px;color:var(--text-muted);line-height:1.8">
+            <div>Rows: <strong style="color:var(--text)">${state.rows.length.toLocaleString()}</strong></div>
+            <div>Fields: <strong style="color:var(--text)">${state.fields.length}</strong></div>
+            <div>Numeric fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='num').length}</strong></div>
+            <div>String fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='str').length}</strong></div>
+            <div>Date fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='dat').length}</strong></div>
+          </div>
+        </div>
+      ` : ''}
     </div>`;
 }
 
 function togglePopupField(i, v) { state.cfg.popup.fields[i].visible = v; }
 function setPopupAlias(i, v) { state.cfg.popup.fields[i].alias = v; }
-function setAllPopupFields(v) { state.cfg.popup.fields.forEach(f=>f.visible=v); renderPopupTab(); }
-
-// ══════════════════════════════════════════
-//  Layer Tab
-// ══════════════════════════════════════════
-function renderLayerTab() {
-  const l = state.cfg.layer;
-  document.getElementById('tab-layer').innerHTML = `
-    <div class="cfg-section" style="margin-top:4px">
-      <div class="cfg-label">Layer Name</div>
-      <input type="text" value="${l.name}" oninput="state.cfg.layer.name=this.value" placeholder="Layer name" />
-    </div>
-    <div class="cfg-section">
-      <div class="toggle-row">
-        <label>Visible</label>
-        <label class="toggle">
-          <input type="checkbox" ${l.visible?'checked':''} onchange="state.cfg.layer.visible=this.checked" />
-          <div class="toggle-slider"></div>
-        </label>
-      </div>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Opacity</div>
-      <div class="range-row">
-        <input type="range" min="0" max="1" step="0.05" value="${l.opacity}"
-          oninput="state.cfg.layer.opacity=+this.value; this.nextElementSibling.textContent=Math.round(this.value*100)+'%'" />
-        <span class="range-val">${Math.round(l.opacity*100)}%</span>
-      </div>
-    </div>
-    <hr class="div" />
-    <div class="cfg-section">
-      <div class="cfg-label">Scale Visibility (0 = no limit)</div>
-      <div class="row-2">
-        <div>
-          <div class="cfg-label">Min Scale</div>
-          <input type="number" min="0" value="${l.minScale}" oninput="state.cfg.layer.minScale=+this.value" placeholder="e.g. 500000" />
-        </div>
-        <div>
-          <div class="cfg-label">Max Scale</div>
-          <input type="number" min="0" value="${l.maxScale}" oninput="state.cfg.layer.maxScale=+this.value" placeholder="e.g. 1000" />
-        </div>
-      </div>
-    </div>
-    <hr class="div" />
-    <div class="cfg-section">
-      <div class="cfg-label">Data Summary</div>
-      <div style="font-size:12px;color:var(--text-muted);line-height:1.8">
-        <div>Rows: <strong style="color:var(--text)">${state.rows.length.toLocaleString()}</strong></div>
-        <div>Fields: <strong style="color:var(--text)">${state.fields.length}</strong></div>
-        <div>Numeric fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='num').length}</strong></div>
-        <div>String fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='str').length}</strong></div>
-        <div>Date fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='dat').length}</strong></div>
-      </div>
-    </div>`;
-}
+function setAllPopupFields(v) { state.cfg.popup.fields.forEach(f=>f.visible=v); renderAdvancedSettings(); }
 
 // ══════════════════════════════════════════
 //  CoT Mapping Tab
@@ -2475,7 +2446,7 @@ function toggleCotMappingField(key, field, checked) {
 }
 
 function renderCotMappingTab() {
-  document.getElementById('tab-cotmapping').innerHTML = `
+  document.getElementById('stage-content').innerHTML = `
     <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">
       Map dataset columns to CoT parts. Check one or more columns per part — at runtime the
       plugin tries them in the order you checked them and uses the first one with a value,
@@ -2493,36 +2464,45 @@ function renderCotMappingTab() {
 // ══════════════════════════════════════════
 let linkQRDebounce;
 
-function renderLinkQRTab() {
-  const prefill = state.featureLayerUrl || '';
-  document.getElementById('tab-linkqr').innerHTML = `
-    <div class="cfg-section" style="margin-top:4px">
-      <div class="cfg-label">FeatureLayer URL</div>
-      <input type="text" id="linkqr-url" value="${prefill.replace(/"/g,'&quot;')}"
-        placeholder="https://…/FeatureServer/0"
-        oninput="scheduleLinkQR()" />
-      <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
-        Generates a plain URL QR — no config attached.
-      </div>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">QR Size</div>
-      <select id="linkqr-px" onchange="generateLinkQR()" style="width:auto">
-        <option value="180">Small (180px)</option>
-        <option value="240" selected>Medium (240px)</option>
-        <option value="320">Large (320px)</option>
-      </select>
-    </div>
-    <div id="linkqr-wrap" style="
-      background:#fff; border-radius:var(--radius); padding:12px;
-      display:flex; align-items:center; justify-content:center;
-      min-height:180px; margin-bottom:10px; box-shadow:var(--shadow);">
-      <div style="color:#aaa;font-size:12px;text-align:center">Enter a URL above</div>
-    </div>
-    <div id="linkqr-meta" style="font-size:11px;color:var(--text-muted);margin-bottom:10px"></div>
-    <button onclick="downloadLinkQR()" class="btn-sm" style="width:100%">⬇ Save QR Image</button>`;
+function toggleLinkQRPanel() {
+  linkQRPanelOpen = !linkQRPanelOpen;
+  renderLinkQRPanel();
+}
 
-  if (prefill) generateLinkQR();
+function renderLinkQRPanel() {
+  const prefill = state.featureLayerUrl || '';
+  document.getElementById('linkqr-wrap-outer').innerHTML = `
+    <hr class="div" />
+    <div class="cfg-section">
+      <div class="cfg-label" style="cursor:pointer" onclick="toggleLinkQRPanel()">
+        🔗 Plain Link QR <span style="font-weight:400;color:var(--text-muted)">(URL only, no config)</span>
+        <span style="float:right">${linkQRPanelOpen?'▲':'▼'}</span>
+      </div>
+      ${linkQRPanelOpen ? `
+        <div style="margin-top:10px">
+          <div class="cfg-label">FeatureLayer URL</div>
+          <input type="text" id="linkqr-url" value="${prefill.replace(/"/g,'&quot;')}"
+            placeholder="https://…/FeatureServer/0"
+            oninput="scheduleLinkQR()" />
+          <div class="cfg-label" style="margin-top:8px">QR Size</div>
+          <select id="linkqr-px" onchange="generateLinkQR()" style="width:auto">
+            <option value="180">Small (180px)</option>
+            <option value="240" selected>Medium (240px)</option>
+            <option value="320">Large (320px)</option>
+          </select>
+          <div id="linkqr-wrap" style="
+            background:#fff; border-radius:var(--radius); padding:12px;
+            display:flex; align-items:center; justify-content:center;
+            min-height:180px; margin:10px 0; box-shadow:var(--shadow);">
+            <div style="color:#aaa;font-size:12px;text-align:center">Enter a URL above</div>
+          </div>
+          <div id="linkqr-meta" style="font-size:11px;color:var(--text-muted);margin-bottom:10px"></div>
+          <button onclick="downloadLinkQR()" class="btn-sm" style="width:100%">⬇ Save QR Image</button>
+        </div>
+      ` : ''}
+    </div>`;
+
+  if (linkQRPanelOpen && prefill) generateLinkQR();
 }
 
 function scheduleLinkQR() {
