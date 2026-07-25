@@ -2494,7 +2494,7 @@ async function saveDataset() {
       payload.file_content_b64 = arrayBufferToBase64(buf);
     }
 
-    const resp = await fetch('/api/featurelink/datasets', {
+    const resp = await fetch('/api/featurelink/admin/datasets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2515,7 +2515,7 @@ async function saveDataset() {
 
 async function loadSavedDataset(id) {
   try {
-    const resp = await fetch(`/api/featurelink/datasets/${encodeURIComponent(id)}`);
+    const resp = await fetch(`/api/featurelink/admin/datasets/${encodeURIComponent(id)}`);
     if (!resp.ok) throw new Error('saved dataset not found');
     const rec = await resp.json();
 
@@ -2528,7 +2528,7 @@ async function loadSavedDataset(id) {
       document.getElementById('layer-url-input').value = rec.source_url;
       await loadFromUrl();
     } else {
-      const fileResp = await fetch(`/api/featurelink/datasets/${encodeURIComponent(id)}/file`);
+      const fileResp = await fetch(`/api/featurelink/admin/datasets/${encodeURIComponent(id)}/file`);
       if (!fileResp.ok) throw new Error('saved dataset file is missing');
       const blob = await fileResp.blob();
       const file = new File([blob], rec.file_name || (rec.name + '.csv'));
