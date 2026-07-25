@@ -1074,6 +1074,12 @@ const PALETTES = [
   ['#66c2a5','#fc8d62','#8da0cb','#e78ac3','#a6d854','#ffd92f','#e5c494','#b3b3b3'],
 ];
 const SHAPES = ['circle','square','diamond','triangle','cross','x','star'];
+// Simple/Class Breaks/Icon/Unique Values/Rule-Based were the original renderer
+// types before Advanced (Value + Rules) added per-value AND per-rule symbols,
+// including icons, in one place — a strict superset of what any of them do.
+// New datasets always start on 'advanced'; these only surface in the Renderer
+// Type dropdown when editing a dataset saved before this consolidation.
+const LEGACY_SYMBOLOGY_TYPES = new Set(['simple', 'classBreaks', 'icon', 'uniqueValue', 'rulesBased']);
 
 let iconManifest = null;
 let iconSearchTerm = '';
@@ -1748,17 +1754,20 @@ function renderSymbologyTab() {
   }
 
   document.getElementById('tab-symbology').innerHTML = `
-    <div class="cfg-section" style="margin-top:4px">
-      <div class="cfg-label">Renderer Type</div>
-      <select onchange="setRendererType(this.value)">
-        <option value="advanced" ${s.type==='advanced'?'selected':''}>Value + Rules</option>
-        <option value="simple" ${s.type==='simple'?'selected':''}>Simple Symbol</option>
-        <option value="classBreaks" ${s.type==='classBreaks'?'selected':''}>Class Breaks (Graduated)</option>
-        <option value="icon" ${s.type==='icon'?'selected':''}>Icon Symbol (Iconset)</option>
-        <option value="uniqueValue" ${s.type==='uniqueValue'?'selected':''}>Unique Values (legacy)</option>
-        <option value="rulesBased" ${s.type==='rulesBased'?'selected':''}>Rule-Based (legacy)</option>
-      </select>
-    </div>
+    ${LEGACY_SYMBOLOGY_TYPES.has(s.type) ? `
+      <div class="cfg-section" style="margin-top:4px">
+        <div class="cfg-label">Renderer Type <span style="font-weight:400;color:var(--text-muted)">(loaded from a saved config — new configs use Value + Rules only)</span></div>
+        <select onchange="setRendererType(this.value)">
+          <option value="advanced" ${s.type==='advanced'?'selected':''}>Value + Rules</option>
+          <option value="simple" ${s.type==='simple'?'selected':''}>Simple Symbol (legacy)</option>
+          <option value="classBreaks" ${s.type==='classBreaks'?'selected':''}>Class Breaks (legacy)</option>
+          <option value="icon" ${s.type==='icon'?'selected':''}>Icon Symbol (legacy)</option>
+          <option value="uniqueValue" ${s.type==='uniqueValue'?'selected':''}>Unique Values (legacy)</option>
+          <option value="rulesBased" ${s.type==='rulesBased'?'selected':''}>Rule-Based (legacy)</option>
+        </select>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Switching away from a legacy type here can't be undone from this dropdown — it converts to Value + Rules.</div>
+      </div>
+    ` : ''}
     ${rendererSection}`;
 
   if (s.type === 'simple') requestAnimationFrame(drawSymbolPreview);
