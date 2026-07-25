@@ -55,22 +55,19 @@
 
   // Confirmed via `adb shell am start -a android.intent.action.VIEW -d
   // "featurelink://import?..."` that Android resolves and launches
-  // ImportConfigActivity cleanly — the plugin side is not the problem.
-  // What doesn't work is a JS-synthesized element.click(): Chrome's external-
-  // app handoff heuristics specifically distrust synthetic clicks (isTrusted:
-  // false) more than a real finger-tap on visible link markup, and silently
-  // decline to hand off — no error, it just does nothing (or falls back).
-  // So this renders a REAL <a href="intent://..."> in the page once the
-  // config's ready, and the user taps it directly — a genuinely trusted
-  // click event, which is what Chrome's handoff logic actually wants to see.
-  const FEATURELINK_PLUGIN_PACKAGE = 'com.atakmap.android.featurelink.plugin';
+  // ImportConfigActivity cleanly — the plugin side was never the problem.
+  // A real (not JS-synthesized) tap on a bare featurelink:// link, and on an
+  // intent:// wrapped version of it, both still failed to hand off from
+  // Chrome. TAK Portal's own enrollment QR flow's "Open URL" button hands
+  // off successfully using a bare tak://com.atakmap.app/enroll?... link with
+  // no intent:// wrapper — so this mirrors that exact scheme choice instead,
+  // nested under our own package name as the host (ImportConfigActivity now
+  // has a second intent-filter for this — see AndroidManifest.xml) so it
+  // can't collide with ATAK core's own tak://com.atakmap.app/... links.
+  const TAK_IMPORT_HOST = 'com.atakmap.android.featurelink.plugin';
 
-  function buildImportIntentUri(config) {
-    const query = 'config=' + encodeURIComponent(JSON.stringify(config));
-    const fallback = encodeURIComponent(window.location.href);
-    return 'intent://import?' + query +
-      '#Intent;scheme=featurelink;package=' + FEATURELINK_PLUGIN_PACKAGE +
-      ';S.browser_fallback_url=' + fallback + ';end';
+  function buildImportUri(config) {
+    return 'tak://' + TAK_IMPORT_HOST + '/import?config=' + encodeURIComponent(JSON.stringify(config));
   }
 
   function renderCard(c) {
@@ -95,7 +92,7 @@
       fetch('/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download', { credentials: 'same-origin' })
         .then((r) => r.json())
         .then((config) => {
-          openLink.href = buildImportIntentUri(config);
+          openLink.href = buildImportUri(config);
           openLink.textContent = 'Open in ATAK';
           openLink.removeAttribute('aria-disabled');
         })
