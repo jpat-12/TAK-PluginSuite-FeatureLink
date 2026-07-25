@@ -27,7 +27,7 @@ const MANIFEST_PATH = path.join(CUSTOM_ICONS_DIR, "manifest.json");
 
 const NAME_RE = /[^a-zA-Z0-9 _-]/g;
 const FILE_RE = /[^a-zA-Z0-9._-]/g;
-const IMAGE_EXT_RE = /\.(png|jpe?g|gif|bmp|webp)$/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|bmp|webp|svg)$/i;
 const ZIP_ENTRY_LIMIT = 500; // guards against zip-bomb-style entry counts
 const ZIP_ENTRY_MAX_BYTES = 5 * 1024 * 1024; // per-icon uncompressed size cap
 
@@ -82,15 +82,21 @@ function uniqueFileName(dir, fileName) {
  * individual icon files. Non-image entries (manifests, __MACOSX junk, directories) are
  * skipped; nested folder structure is flattened since custom sets are stored flat.
  */
-async function extractZipIcons(zipPath, setDir, entry) {
+async function extractZipIcons(zipPath, setDir, entry, skipped) {
   const directory = await unzipper.Open.file(zipPath);
   let extracted = 0;
   for (const zipEntry of directory.files) {
     if (zipEntry.type !== "File") continue;
     if (extracted >= ZIP_ENTRY_LIMIT) break;
     const baseName = path.basename(zipEntry.path);
-    if (!IMAGE_EXT_RE.test(baseName)) continue;
-    if ((zipEntry.vars?.uncompressedSize || 0) > ZIP_ENTRY_MAX_BYTES) continue;
+    if (!IMAGE_EXT_RE.test(baseName)) {
+      if (skipped.length < 10) skipped.push(baseName);
+      continue;
+    }
+    if ((zipEntry.vars?.uncompressedSize || 0) > ZIP_ENTRY_MAX_BYTES) {
+      if (skipped.length < 10) skipped.push(`${baseName} (too large)`);
+      continue;
+    }
     const safeName = uniqueFileName(setDir, baseName.replace(FILE_RE, "_"));
     const buffer = await zipEntry.buffer();
     fs.writeFileSync(path.join(setDir, safeName), buffer);
@@ -122,9 +128,14 @@ async function addCustomIcons(setName, files, actorUsername) {
   }
 
   let totalExtracted = 0;
+  const skipped = [];
   for (const file of files) {
     if (isZipUpload(file)) {
-      totalExtracted += await extractZipIcons(file.path, setDir, entry);
+      try {
+        totalExtracted += await extractZipIcons(file.path, setDir, entry, skipped);
+      } catch (err) {
+        return { success: false, error: `Couldn't read "${file.originalname}" as a zip: ${err.message}` };
+      }
     } else {
       const safeName = uniqueFileName(setDir, (file.originalname || "icon.png").replace(FILE_RE, "_"));
       fs.copyFileSync(file.path, path.join(setDir, safeName));
@@ -133,7 +144,10 @@ async function addCustomIcons(setName, files, actorUsername) {
     }
   }
 
-  if (!totalExtracted) return { success: false, error: "No image files found — check the zip contains PNG/JPG/GIF/BMP/WEBP images." };
+  if (!totalExtracted) {
+    const seen = skipped.length ? ` Files found inside: ${skipped.join(", ")}${skipped.length===10?', …':''}.` : ' The zip appears to have no files in it.';
+    return { success: false, error: `No image files found — supported types are PNG/JPG/GIF/BMP/WEBP/SVG.${seen}` };
+  }
 
   writeManifest(sets);
   return { success: true, set: entry };
