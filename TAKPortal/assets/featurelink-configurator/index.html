@@ -2140,6 +2140,36 @@ function selectSymIcon(iconset, icon) {
   scheduleQRRefresh();
 }
 
+/** Icon grid markup for the per-value/per-rule symbol editor's Icon tab — factored out
+ * so the search box can refresh just this container (updateSymEdIconGrid) instead of
+ * triggering a full renderSymbologyTab() re-render on every keystroke, which would
+ * replace the search input's own DOM node and steal focus after each character. */
+function symEdIconGridInnerHtml(sym) {
+  const iconset = iconManifest?.iconsets.find(is=>is.name===sym.iconset);
+  const term = symEdIconSearch.trim();
+  let matches;
+  if (term && iconManifest) matches = searchAllIconsets(term);
+  else if (iconset) matches = iconset.icons.map(ic => ({ iconset: iconset.name, icon: ic }));
+  else matches = [];
+  const shown = matches.slice(0,150);
+  const gridHtml = shown.length
+    ? shown.map(({iconset: is, icon: ic})=>{
+        const sEsc=is.replace(/"/g,'&quot;'), iEsc=ic.replace(/"/g,'&quot;');
+        const label = term ? `${ic.replace(/\.png$/i,'')} — ${is}` : ic.replace(/\.png$/i,'');
+        return `<div class="sym-ed-icon-thumb${(sym.icon===ic && sym.iconset===is)?' selected':''}" title="${label}" data-is="${sEsc}" data-ic="${iEsc}" onclick="selectSymIcon(this.dataset.is,this.dataset.ic)"><img src="${iconUrl(is, ic)}" loading="lazy" onerror="this.style.opacity=0"/></div>`;
+      }).join('')
+    : `<div style="color:var(--text-muted);font-size:11px;padding:8px">${term||iconset?'No icons match.':'Choose an iconset, or search above.'}</div>`;
+  const moreNote = matches.length>150 ? `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">Showing 150 of ${matches.length} — refine search</div>` : '';
+  return gridHtml + moreNote;
+}
+
+function updateSymEdIconGrid() {
+  const container = document.getElementById('sym-ed-icon-grid');
+  const sym = getActiveSymObj();
+  if (!container || !sym) return;
+  container.innerHTML = symEdIconGridInnerHtml(sym);
+}
+
 function renderSymEdHtml(sym) {
   const tab = symEdCtx?.tab || 'shape';
   let body = '';
@@ -2155,29 +2185,15 @@ function renderSymEdHtml(sym) {
     const setOpts = iconManifest
       ? iconManifest.iconsets.map(is=>`<option value="${is.name}" ${is.name===(sym.iconset||'')?'selected':''}>${is.name} (${is.icons.length})</option>`).join('')
       : '';
-    const iconset = iconManifest?.iconsets.find(is=>is.name===sym.iconset);
     const term = symEdIconSearch.trim();
-    let matches;
-    if (term && iconManifest) matches = searchAllIconsets(term);
-    else if (iconset) matches = iconset.icons.map(ic => ({ iconset: iconset.name, icon: ic }));
-    else matches = [];
-    const shown = matches.slice(0,150);
-    const gridHtml = shown.length
-      ? shown.map(({iconset: is, icon: ic})=>{
-          const sEsc=is.replace(/"/g,'&quot;'), iEsc=ic.replace(/"/g,'&quot;');
-          const label = term ? `${ic.replace(/\.png$/i,'')} — ${is}` : ic.replace(/\.png$/i,'');
-          return `<div class="sym-ed-icon-thumb${(sym.icon===ic && sym.iconset===is)?' selected':''}" title="${label}" data-is="${sEsc}" data-ic="${iEsc}" onclick="selectSymIcon(this.dataset.is,this.dataset.ic)"><img src="${iconUrl(is, ic)}" loading="lazy" onerror="this.style.opacity=0"/></div>`;
-        }).join('')
-      : `<div style="color:var(--text-muted);font-size:11px;padding:8px">${term||iconset?'No icons match.':'Choose an iconset, or search above.'}</div>`;
-    const moreNote = matches.length>150 ? `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">Showing 150 of ${matches.length} — refine search</div>` : '';
     body = `
-      <input type="text" value="${symEdIconSearch.replace(/"/g,'&quot;')}" placeholder="Search all iconsets…" oninput="symEdIconSearch=this.value;renderSymbologyTab()" style="margin-bottom:6px" />
+      <input type="text" value="${symEdIconSearch.replace(/"/g,'&quot;')}" placeholder="Search all iconsets…" oninput="symEdIconSearch=this.value;updateSymEdIconGrid()" style="margin-bottom:6px" />
       <div class="cfg-label">Iconset ${term ? '<span style="font-weight:400;color:var(--text-muted)">(ignored while searching)</span>' : ''}</div>
       <select onchange="setSymIconset(this.value)" style="margin-bottom:6px">
         <option value="">— choose iconset —</option>${setOpts}
       </select>
       ${customIconUploadHtml()}
-      <div class="sym-ed-icon-grid">${gridHtml}</div>${moreNote}
+      <div class="sym-ed-icon-grid" id="sym-ed-icon-grid">${symEdIconGridInnerHtml(sym)}</div>
       ${sym.icon ? `
         <div class="cfg-label" style="margin-top:8px">Size</div>
         <div class="range-row" style="margin-bottom:8px">
