@@ -13,7 +13,7 @@ FeatureLink component in one place.
 | [`ATAK5.6/`](ATAK5.6/) | FeatureLink ATAK plugin, built against ATAK-CIV 5.6.0 | Available — see [`ATAK5.6/README.md`](ATAK5.6/README.md) |
 | `ATAK5.7/` | FeatureLink ATAK plugin, ATAK-CIV 5.7.x port | Planned |
 | [`Infra-TAK/`](Infra-TAK/) | Display Configurator — infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | Available — see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
-| [`TAKPortal/`](TAKPortal/) | FeatureLink Configs — TAK Portal module: admin preps display configs, any logged-in field user browses/downloads them | Available — see [`TAKPortal/README.md`](TAKPortal/README.md) |
+| [`TAKPortal/`](TAKPortal/) | FeatureLink Configs — TAK Portal module: full Display Configurator (ported from Infra-TAK) for admins, any logged-in field user browses/downloads the results | Available — see [`TAKPortal/README.md`](TAKPortal/README.md) |
 | `WinTAK5.6/` | FeatureLink WinTAK plugin, WinTAK 5.6.x port | Planned |
 | `WinTAK5.7/` | FeatureLink WinTAK plugin, WinTAK 5.7.x port | Planned |
 
@@ -61,11 +61,12 @@ tool from the console.
 
 ### TAK Portal module (`TAKPortal/`)
 
-Adds a **FeatureLink Configs** admin page (Administration) and a **FeatureLink**
-browse/download page (Onboarding) to an existing
+Adds the full **FeatureLink Configs** Display Configurator (Administration) —
+ported 1:1 from `Infra-TAK/featurelink_displayconfig_assets/` — and a
+**FeatureLink** browse/download page (Onboarding) to an existing
 [TAK Portal](https://github.com/AdventureSeeker423/TAK-Portal) install (as
-deployed by infra-TAK, default `~/TAK-Portal`). Lets an admin prep display
-configs for field users to download, without needing the infra-TAK console's
+deployed by infra-TAK, default `~/TAK-Portal`). Lets an admin build display
+configs (symbology, labels, popups) without needing the infra-TAK console's
 admin password — any logged-in TAK Portal user can download a config through
 their own browser session, then open it in the FeatureLink plugin:
 

@@ -6,16 +6,20 @@ entry under **Administration** to an existing
 deployed by [infra-TAK](https://github.com/jpat-12/infra-TAK), default
 `~/TAK-Portal`, Docker Compose).
 
-Lets an admin prep FeatureLink display configs (upload a file, or point at a
-live source URL — e.g. an ArcGIS FeatureLayer) for field users to browse and
-download, without needing the infra-TAK console or its admin password.
-**Anyone already logged into TAK Portal** can open **Onboarding → FeatureLink**
-and download a config — that page is just another download link inside the
-user's normal, already-Authentik-gated portal session. There's no separate
-login or token for the plugin: the user downloads the file in their browser,
-then opens/imports it into the FeatureLink ATAK/WinTAK plugin the same way as
-any other exported FeatureLink display config (see Infra-TAK's "Payload
-formats" section).
+**Administration → FeatureLink Configs** is the full FeatureLink Display
+Configurator — the same tool infra-TAK runs at `Infra-TAK/`
+(`featurelink_displayconfig_assets/index.html`), ported into TAK Portal as its
+own copy rather than a smaller hand-built form. Upload a dataset or point at a
+live ArcGIS FeatureLayer URL, then set up symbology, labels, popups, and layer
+properties with a live preview, and Save.
+
+**Onboarding → FeatureLink** is where field users go: anyone already logged
+into TAK Portal can browse the saved configs and download or **Open in ATAK**
+— no separate login or token for the plugin. The user downloads the config
+through their own already-Authentik-gated browser session (same as clicking
+any other download link in the portal), then the plugin either opens it via
+the `featurelink://import` deep link or the user imports the downloaded file
+manually, same as any other exported FeatureLink display config.
 
 ## Why a module instead of a fork
 
@@ -45,32 +49,46 @@ network call it has to authenticate on its own.
 
 ## What it adds
 
-- **`routes/featurelinkConfigsAdmin.routes.js`** — admin CRUD API for the
-  config catalog, mounted at `/api/featurelink/admin/configs` behind
-  `requirePermission("page.featurelink_configs")` (same convention as Plugin
-  Manager's `page.plugin_manager`). Multipart upload for file-backed configs,
-  same pattern as the existing Plugin Manager's APK upload.
-- **`routes/featurelinkBrowse.routes.js`** — the list/download API behind the
-  Onboarding page, mounted at `/api/featurelink/configs*`. Requires nothing
-  beyond an ordinary logged-in session — by the time these handlers run,
-  `portalAuth.middleware.js` has already verified the request and set
-  `req.authentikUser`.
-- **`services/featurelinkConfigs.service.js`** — catalog storage
-  (`data/featurelink-configs/catalog.json` + `data/featurelink-configs/files/`,
-  inside the `tak_portal_data` volume so it survives rebuilds).
-- **`views/featurelink-configs.ejs`** — the Administration page (list, add,
-  delete configs).
-- **`views/featurelink.ejs`** — the Onboarding page (list configs, download
-  buttons).
+- **`assets/featurelink-configurator/`** — the ported Display Configurator:
+  `index.html` (framework-free, same as infra-TAK's copy) + the bundled
+  iconsets. Only three hardcoded URL references were changed (`ICONS_BASE`,
+  the QR/copy-link builder, and the "Saved Configs" back-link) to match where
+  this module mounts it — no other logic touched.
+- **`services/featurelinkDatasets.service.js`** — dataset persistence, ported
+  1:1 from `Infra-TAK/featurelink_displayconfig.py` (same record shape,
+  same `datasets/<id>/record.json` + `data.bin` storage layout — under
+  `data/featurelink-configs/`, inside the `tak_portal_data` volume so it
+  survives rebuilds). Adds one field beyond the original: `exported_config`,
+  the Mode 3 plugin-ready JSON the configurator's "Export Config JSON" button
+  already builds client-side — saving now sends that alongside the internal
+  state, so TAK Portal never has to re-derive Esri-renderer-to-plugin-schema
+  logic on the server side.
+- **`routes/featurelinkDatasetsAdmin.routes.js`** — admin CRUD backing the
+  configurator (list/save/load/delete/raw-file), mirroring
+  `featurelink_displayconfig.py`'s Flask routes 1:1. Mounted at
+  `/api/featurelink/admin/datasets` behind
+  `requirePermission("page.featurelink_configs")`.
+- **`routes/featurelinkConfigurator.routes.js`** — serves the ported
+  `index.html` + iconsets at `/featurelink-configs/configurator`, same
+  permission gate.
+- **`routes/featurelinkBrowse.routes.js`** — the field-user list/download API
+  behind the Onboarding page, mounted at `/api/featurelink/configs*`. Requires
+  nothing beyond an ordinary logged-in session — by the time these handlers
+  run, `portalAuth.middleware.js` has already verified the request and set
+  `req.authentikUser`. Serves each dataset's `exported_config` verbatim.
+- **`views/featurelink-configs.ejs`** — the Administration hub (list saved
+  dataset configs, Open/QR/Copy-link/Delete, "+ New Dataset Config").
+- **`views/featurelink.ejs`** — the Onboarding page (list configs; Download +
+  Open in ATAK for any dataset with a live FeatureLayer configured).
 - Patches (idempotent) to:
-  - **`services/permissions.registry.js`** — new `page.featurelink_configs`
+  - **`services/permissions.registry.js`** — `page.featurelink_configs`
     permission for the admin page/API, plus carve-outs so `/featurelink` and
     its API require no specific permission.
   - **`services/portalAuth.middleware.js`** — adds `/featurelink` and its API
     to `isAllowedNonAdminPath`, the same list `/setup-my-device` and
     `/plugins` are already on, so any logged-in user reaches it even if
     they're not in an admin/agency-admin/bridge-member group.
-  - **`server.js`** — mounts the two route files, adds the two page routes.
+  - **`server.js`** — mounts the route files, adds the two page routes.
   - **`views/partials/sidebar.ejs`** — the two nav links.
 
 ## Install
@@ -82,9 +100,11 @@ bash install.sh                    # auto-detects ~/TAK-Portal, /opt/TAK-Portal,
 # or: bash install.sh /path/to/TAK-Portal
 ```
 
-This copies the module's files in, patches `server.js` /
-`permissions.registry.js` / `portalAuth.middleware.js` / `sidebar.ejs`, and
-runs `docker compose up -d --build` to bake the changes into a rebuilt image.
+This copies the module's files in (including the configurator's ~7,500
+iconset files, so first install/update takes a little longer than a typical
+`git pull`), patches `server.js` / `permissions.registry.js` /
+`portalAuth.middleware.js` / `sidebar.ejs`, and runs
+`docker compose up -d --build` to bake the changes into a rebuilt image.
 
 Give **`page.featurelink_configs`** to whichever admin role should manage the
 catalog, from TAK Portal's **Access Control** page (global admins have every
@@ -95,7 +115,10 @@ permission by default).
 Re-run `bash install.sh` — it's idempotent (each patch checks for its own
 marker before applying) and safe to run repeatedly, including after `git
 pull`ing a newer TAK Portal `main` from upstream. If the module's own repo
-has a git remote, `install.sh` pulls it first automatically.
+has a git remote, `install.sh` pulls it first automatically. If you're
+updating from the pre-configurator-port version of this module, `install.sh`
+migrates the old mount away automatically — verified with a round-trip test
+(old state → migrated → uninstalled) that reproduces upstream byte-for-byte.
 
 ## Uninstall
 
@@ -103,9 +126,9 @@ has a git remote, `install.sh` pulls it first automatically.
 bash uninstall.sh                  # or: bash uninstall.sh /path/to/TAK-Portal
 ```
 
-Reverses the patches, deletes the copied files, and rebuilds. Leaves
-`data/featurelink-configs/` in place — delete it by hand if you also want the
-saved configs gone.
+Reverses the patches, deletes the copied files (including the configurator
+assets), and rebuilds. Leaves `data/featurelink-configs/` in place — delete
+it by hand if you also want the saved dataset configs gone.
 
 ## Known assumption / drift risk
 
@@ -117,3 +140,10 @@ install/uninstall check that reproduces the original files byte-for-byte). If
 upstream restructures those files significantly, a patch step will print an
 `ERROR: could not find ... anchor` and exit rather than silently corrupt the
 file — re-check the anchor against the new upstream source if that happens.
+
+The ported `index.html` itself is a snapshot of infra-TAK's configurator as
+of when this module was built — it does not auto-update if infra-TAK's own
+tool gains new features later. Re-copy
+`Infra-TAK/featurelink_displayconfig_assets/` and reapply the same three URL
+edits (see the comments in `assets/featurelink-configurator/index.html`) to
+pull in upstream improvements.

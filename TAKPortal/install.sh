@@ -7,28 +7,31 @@
 #   1. If this checkout tracks a git remote, pulls the latest first (no-op
 #      when run from inside the TAK-PluginSuite-FeatureLink monorepo).
 #   2. Copies routes/*.js and services/*.js into TAK Portal's routes/ and
-#      services/, and the two new views/*.ejs into TAK Portal's views/.
+#      services/, the two views/*.ejs into TAK Portal's views/, and the ported
+#      Display Configurator (index.html + iconsets) into TAK Portal's assets/.
 #   3. Patches (idempotent — safe to re-run):
 #      - services/permissions.registry.js: adds the page.featurelink_configs
-#        permission (admin CRUD) + carve-outs for the field-user browse/
-#        download API and page (open to any logged-in user)
+#        permission (admin) + carve-outs for the field-user browse/download
+#        API and page (open to any logged-in user)
 #      - services/portalAuth.middleware.js: adds /featurelink and its API to
 #        isAllowedNonAdminPath, so any logged-in user can reach it even if
 #        they're not in an admin/agency-admin/bridge-member group
-#      - server.js: mounts the two new route files + the two page routes
+#      - server.js: mounts the route files (admin dataset CRUD, the
+#        configurator's static assets, the field-user browse API) + the two
+#        page routes
 #      - views/partials/sidebar.ejs: adds "FeatureLink" under Onboarding and
 #        "FeatureLink Configs" under Administration
 #   4. Runs `docker compose up -d --build` in the TAK Portal directory so the
 #      patched files are baked into a rebuilt image (matches what `./takportal
 #      update` does).
 #
-# Everyone who logs into TAK Portal can download configs from /featurelink —
-# that page is downloading a file through the user's own already-Authentik-
-# gated browser session, same as clicking any other download link in the
-# portal. The FeatureLink ATAK/WinTAK plugin itself is not a network client
-# here: the user downloads the file, then imports it into the plugin
-# manually (Import Config), same as any other exported FeatureLink display
-# config. No separate token or API auth for the plugin to worry about.
+# Administration → FeatureLink Configs is the full Display Configurator
+# (upload/URL data, symbology, labels, popups, QR sharing) — the same tool
+# infra-TAK runs, ported in as its own copy rather than a hand-built form.
+# Field users browse the saved configs at Onboarding → FeatureLink and
+# download or Open in ATAK through their own already-Authentik-gated browser
+# session — the FeatureLink ATAK/WinTAK plugin itself never makes its own
+# network call here, so there's no separate token/API auth for it to need.
 #
 # Usage:
 #   bash install.sh [/path/to/TAK-Portal]
@@ -62,12 +65,26 @@ echo "==> TAK Portal: $PORTAL_DIR"
 
 # --- 3. Sync module files --------------------------------------------------
 mkdir -p "$PORTAL_DIR/routes" "$PORTAL_DIR/services" "$PORTAL_DIR/views"
-cp -f "$SRC_DIR/routes/featurelinkConfigsAdmin.routes.js" "$PORTAL_DIR/routes/"
+
+# Migrate off the old hand-built catalog (superseded by the ported configurator below)
+rm -f "$PORTAL_DIR/routes/featurelinkConfigsAdmin.routes.js"
+rm -f "$PORTAL_DIR/services/featurelinkConfigs.service.js"
+
+cp -f "$SRC_DIR/routes/featurelinkDatasetsAdmin.routes.js" "$PORTAL_DIR/routes/"
+cp -f "$SRC_DIR/routes/featurelinkConfigurator.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/routes/featurelinkBrowse.routes.js" "$PORTAL_DIR/routes/"
-cp -f "$SRC_DIR/services/featurelinkConfigs.service.js" "$PORTAL_DIR/services/"
+cp -f "$SRC_DIR/services/featurelinkDatasets.service.js" "$PORTAL_DIR/services/"
 cp -f "$SRC_DIR/views/featurelink-configs.ejs" "$PORTAL_DIR/views/"
 cp -f "$SRC_DIR/views/featurelink.ejs" "$PORTAL_DIR/views/"
-echo "==> Synced routes/services/views"
+
+# The ported Display Configurator (index.html + bundled iconsets) — same asset
+# infra-TAK's Infra-TAK/featurelink_displayconfig_assets/ serves, copied in as-is
+# except for its three hardcoded URL references (see index.html's edit comments).
+mkdir -p "$PORTAL_DIR/assets"
+rm -rf "$PORTAL_DIR/assets/featurelink-configurator"
+cp -r "$SRC_DIR/assets/featurelink-configurator" "$PORTAL_DIR/assets/featurelink-configurator"
+
+echo "==> Synced routes/services/views/assets"
 
 # --- 4. Patch permissions.registry.js (idempotent) -------------------------
 node - "$PORTAL_DIR/services/permissions.registry.js" <<'NODEEOF'
@@ -190,7 +207,20 @@ const path = process.argv[2];
 let src = fs.readFileSync(path, 'utf-8');
 let changed = false;
 
-const ROUTES_MARKER = 'featurelinkConfigsAdmin.routes';
+// Migrate off the old hand-built-catalog mount (superseded by the ported configurator).
+// Removed entirely (not left in place) — the fresh-install block below re-adds
+// featurelinkBrowse.routes alongside the two new mounts, so this must not leave
+// a lone copy behind or that route would end up mounted twice.
+const OLD_MOUNT = `
+app.use("/api/featurelink/admin", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigsAdmin.routes"));
+app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));`;
+if (src.includes(OLD_MOUNT)) {
+  src = src.replace(OLD_MOUNT, '');
+  changed = true;
+  console.log('    - migrated off the old featurelinkConfigsAdmin.routes mount');
+}
+
+const ROUTES_MARKER = 'featurelinkDatasetsAdmin.routes';
 if (!src.includes(ROUTES_MARKER)) {
   const anchor = 'app.use("/api/plugins", requirePermission("page.plugin_manager"), require("./routes/plugins.routes"));';
   if (!src.includes(anchor)) {
@@ -198,7 +228,8 @@ if (!src.includes(ROUTES_MARKER)) {
     process.exit(1);
   }
   const block = `
-app.use("/api/featurelink/admin", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigsAdmin.routes"));
+app.use("/api/featurelink/admin/datasets", requirePermission("page.featurelink_configs"), require("./routes/featurelinkDatasetsAdmin.routes"));
+app.use("/featurelink-configs/configurator", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigurator.routes"));
 app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));`;
   src = src.replace(anchor, anchor + block);
   changed = true;

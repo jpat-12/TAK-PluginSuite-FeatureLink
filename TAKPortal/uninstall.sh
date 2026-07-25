@@ -30,8 +30,14 @@ const fs = require('fs');
 const path = process.argv[2];
 let src = fs.readFileSync(path, 'utf-8');
 
+// Old (pre-configurator-port) mount, in case uninstall runs against an older install.
 src = src.replace(`
 app.use("/api/featurelink/admin", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigsAdmin.routes"));
+app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));`, '');
+
+src = src.replace(`
+app.use("/api/featurelink/admin/datasets", requirePermission("page.featurelink_configs"), require("./routes/featurelinkDatasetsAdmin.routes"));
+app.use("/featurelink-configs/configurator", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigurator.routes"));
 app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));`, '');
 
 src = src.replace(`app.get("/featurelink-configs", requirePermission("page.featurelink_configs"), (req, res) =>
@@ -121,10 +127,14 @@ console.log('    - removed FeatureLink nav links from sidebar.ejs');
 NODEEOF
 
 rm -f "$PORTAL_DIR/routes/featurelinkConfigsAdmin.routes.js"
+rm -f "$PORTAL_DIR/routes/featurelinkDatasetsAdmin.routes.js"
+rm -f "$PORTAL_DIR/routes/featurelinkConfigurator.routes.js"
 rm -f "$PORTAL_DIR/routes/featurelinkBrowse.routes.js"
 rm -f "$PORTAL_DIR/services/featurelinkConfigs.service.js"
+rm -f "$PORTAL_DIR/services/featurelinkDatasets.service.js"
 rm -f "$PORTAL_DIR/views/featurelink-configs.ejs"
 rm -f "$PORTAL_DIR/views/featurelink.ejs"
+rm -rf "$PORTAL_DIR/assets/featurelink-configurator"
 echo "==> Removed module files"
 
 echo "==> Rebuilding TAK Portal (docker compose up -d --build)..."

@@ -1,0 +1,2892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FeatureLayer Display Configurator — FeatureLink</title>
+  <style>
+    :root {
+      --bg: #1a1d23;
+      --surface: #22262f;
+      --surface2: #2b3040;
+      --border: #3a3f50;
+      --accent: #0078d4;
+      --accent2: #005a9e;
+      --accent-green: #107c10;
+      --text: #e8eaf0;
+      --text-muted: #8b92a8;
+      --danger: #d13438;
+      --warn: #ca5010;
+      --radius: 6px;
+      --shadow: 0 2px 8px rgba(0,0,0,0.4);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top bar ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    header img.logo { height: 28px; }
+    header h1 { font-size: 16px; font-weight: 600; color: var(--text); }
+    header span.badge {
+      background: var(--accent);
+      color: #fff;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+    header .spacer { flex: 1; }
+    header a.admin-link-btn {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      padding: 7px 10px;
+      border-radius: var(--radius);
+      transition: color .15s, background .15s;
+    }
+    header a.admin-link-btn:hover { color: var(--text); background: var(--surface2); }
+    header span.saved-badge {
+      display: none;
+      align-items: center;
+      gap: 5px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 20px;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    header button.export-btn, header button.save-btn {
+      background: var(--accent-green);
+      border: none;
+      color: #fff;
+      padding: 7px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: opacity .15s;
+    }
+    header button.save-btn { background: var(--accent); }
+    header button.export-btn:hover, header button.save-btn:hover { opacity: .85; }
+    header button.export-btn:disabled, header button.save-btn:disabled { opacity: .4; cursor: default; }
+
+    /* ── Main layout ── */
+    .workspace {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      height: calc(100vh - 52px);
+    }
+
+    /* ── Left panel: upload + fields ── */
+    .panel-left {
+      width: 300px;
+      min-width: 260px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Center: preview table ── */
+    .panel-center {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Right panel: style config ── */
+    .panel-right {
+      width: 340px;
+      min-width: 280px;
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Panel headers ── */
+    .panel-header {
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .panel-header .count {
+      background: var(--border);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 1px 7px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .panel-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+    }
+
+    /* ── Drop zone ── */
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 28px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      background: var(--surface);
+      margin-bottom: 14px;
+    }
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(0,120,212,.08);
+    }
+    .drop-zone input[type=file] { display: none; }
+    .drop-zone .icon { font-size: 32px; margin-bottom: 8px; }
+    .drop-zone p { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+    .drop-zone p strong { color: var(--text); }
+    .drop-zone .formats {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* ── File info chip ── */
+    .file-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 12px;
+      margin-bottom: 14px;
+      font-size: 12px;
+    }
+    .file-chip .fc-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-chip .fc-rows { color: var(--text-muted); }
+    .file-chip button { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; }
+    .file-chip button:hover { color: var(--danger); }
+
+    /* ── Field list ── */
+    .field-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background .1s;
+      border: 1px solid transparent;
+      margin-bottom: 3px;
+    }
+    .field-item:hover { background: var(--surface2); }
+    .field-item.selected { background: rgba(0,120,212,.15); border-color: rgba(0,120,212,.4); }
+    .field-item .fi-type {
+      width: 26px;
+      height: 20px;
+      border-radius: 3px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .fi-type.num { color: #4fc3f7; border-color: rgba(79,195,247,.3); background: rgba(79,195,247,.08); }
+    .fi-type.str { color: #81c784; border-color: rgba(129,199,132,.3); background: rgba(129,199,132,.08); }
+    .fi-type.dat { color: #ffb74d; border-color: rgba(255,183,77,.3); background: rgba(255,183,77,.08); }
+    .fi-type.geo { color: #ce93d8; border-color: rgba(206,147,216,.3); background: rgba(206,147,216,.08); }
+    .field-item .fi-name { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .field-item .fi-sample { font-size: 10px; color: var(--text-muted); max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ── Data table ── */
+    .table-toolbar {
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .table-toolbar input[type=search] {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: 6px 10px;
+      font-size: 12px;
+      width: 220px;
+      outline: none;
+    }
+    .table-toolbar input[type=search]:focus { border-color: var(--accent); }
+    .table-toolbar .row-count { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+
+    .table-wrap {
+      flex: 1;
+      overflow: auto;
+    }
+    table.data-table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 12px;
+    }
+    table.data-table thead th {
+      position: sticky;
+      top: 0;
+      background: var(--surface2);
+      border-bottom: 2px solid var(--border);
+      padding: 9px 12px;
+      text-align: left;
+      font-weight: 600;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    table.data-table thead th:hover { background: var(--border); }
+    table.data-table thead th .sort-icon { margin-left: 4px; opacity: .4; }
+    table.data-table thead th.sorted .sort-icon { opacity: 1; color: var(--accent); }
+    table.data-table tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
+    table.data-table tbody tr:hover { background: rgba(0,120,212,.08); }
+    table.data-table td {
+      padding: 7px 12px;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    table.data-table td.null-val { color: var(--text-muted); font-style: italic; }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      gap: 12px;
+    }
+    .empty-state .es-icon { font-size: 48px; }
+    .empty-state p { font-size: 14px; }
+
+    /* ── Right panel: style tabs ── */
+    .style-tabs {
+      display: flex;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .style-tabs button {
+      flex: 1;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      padding: 10px 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    .style-tabs button:hover { color: var(--text); }
+    .style-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Config sections ── */
+    .cfg-section {
+      margin-bottom: 18px;
+    }
+    .cfg-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    /* Form controls */
+    select, input[type=text], input[type=number], input[type=color], textarea {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    select:focus, input[type=text]:focus, input[type=number]:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+    select { padding: 7px 10px; width: 100%; cursor: pointer; }
+    input[type=text], input[type=number] { padding: 7px 10px; width: 100%; }
+    input[type=color] {
+      width: 40px; height: 32px; padding: 2px; cursor: pointer;
+    }
+    textarea { padding: 7px 10px; width: 100%; resize: vertical; min-height: 70px; }
+
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .color-row { display: flex; align-items: center; gap: 8px; }
+    .color-row label { font-size: 12px; flex: 1; }
+
+    /* Toggle */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .toggle-row label { font-size: 13px; flex: 1; }
+    .toggle {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: var(--border);
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .toggle-slider:before {
+      content: '';
+      position: absolute;
+      width: 14px; height: 14px;
+      background: #fff;
+      border-radius: 50%;
+      top: 3px; left: 3px;
+      transition: transform .2s;
+    }
+    .toggle input:checked + .toggle-slider { background: var(--accent); }
+    .toggle input:checked + .toggle-slider:before { transform: translateX(16px); }
+
+    /* Unique values list */
+    .uv-list { display: flex; flex-direction: column; gap: 4px; }
+    .uv-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    .uv-item input[type=color] { width: 28px; height: 24px; flex-shrink: 0; }
+    .uv-item .uv-val { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .uv-item .uv-count { color: var(--text-muted); font-size: 11px; }
+
+    /* Class breaks */
+    .cb-list { display: flex; flex-direction: column; gap: 4px; }
+    .cb-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    .cb-item input[type=color] { width: 28px; height: 24px; flex-shrink: 0; }
+    .cb-item .cb-range { flex: 1; }
+    .cb-item input[type=number] { width: 70px; font-size: 11px; padding: 3px 6px; }
+
+    /* Popup field list */
+    .popup-field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 0;
+      font-size: 12px;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+    }
+    .popup-field:last-child { border-bottom: none; }
+    .popup-field .pf-name { flex: 1; }
+    .popup-field input[type=text] { font-size: 11px; padding: 4px 7px; }
+
+    /* Opacity slider */
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+      outline: none;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    .range-row { display: flex; align-items: center; gap: 10px; }
+    .range-row input[type=range] { flex: 1; }
+    .range-row .range-val { font-size: 12px; color: var(--text-muted); min-width: 32px; text-align: right; }
+
+    /* Symbol preview */
+    .symbol-preview {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 60px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 10px;
+    }
+    canvas#sym-preview { }
+
+    /* Color palette */
+    .palette {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+    .palette-swatch {
+      width: 22px; height: 22px;
+      border-radius: 3px;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: border-color .1s;
+    }
+    .palette-swatch:hover, .palette-swatch.active { border-color: #fff; }
+
+    /* Add/remove btn */
+    .btn-sm {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 10px;
+      border-radius: var(--radius);
+      font-size: 12px;
+      cursor: pointer;
+      transition: background .1s;
+    }
+    .btn-sm:hover { background: var(--border); }
+    .btn-danger { color: var(--danger); }
+
+    /* Divider */
+    hr.div { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
+    /* Notification toast */
+    #toast {
+      position: fixed;
+      bottom: 24px; right: 24px;
+      background: var(--accent-green);
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity .25s, transform .25s;
+      pointer-events: none;
+      z-index: 999;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Icon Picker ── */
+    .icon-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
+      gap: 3px;
+      max-height: 210px;
+      overflow-y: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 4px;
+    }
+    .icon-thumb {
+      width: 42px; height: 42px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: border-color .1s, background .1s;
+    }
+    .icon-thumb:hover { background: var(--surface2); border-color: var(--border); }
+    .icon-thumb.selected { border-color: var(--accent); background: rgba(0,120,212,.15); }
+    .icon-thumb img { width: 28px; height: 28px; object-fit: contain; }
+    .icon-selected-chip {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--surface); border: 1px solid var(--accent);
+      border-radius: var(--radius); padding: 8px 12px; margin-bottom: 10px;
+    }
+    .icon-selected-chip img { width: 36px; height: 36px; object-fit: contain; }
+    .icon-selected-chip span { font-size: 12px; }
+
+    /* ── Rule-Based Renderer ── */
+    .rule-item {
+      display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 6px 8px; margin-bottom: 4px;
+    }
+    .rule-item select { padding: 4px 6px; font-size: 11px; width: auto; }
+    .rule-item input[type=text] { padding: 4px 6px; font-size: 11px; flex: 1; min-width: 50px; }
+    .rule-item input[type=color] { width: 28px; height: 24px; flex-shrink: 0; }
+    .rule-item .rule-label-input { width: 80px; font-size: 11px; padding: 4px 6px; }
+    .rule-item .rule-remove { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 0 2px; flex-shrink: 0; }
+    .rule-item .rule-remove:hover { color: var(--danger); }
+    .rule-drag-hint { font-size: 10px; color: var(--text-muted); margin-bottom: 6px; }
+
+    /* ── Value + Rules (Advanced) Renderer ── */
+    .adv-row { display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid rgba(255,255,255,.04); }
+    .adv-row:last-child { border-bottom:none; }
+    .adv-sym-btn { width:30px;height:30px;border-radius:var(--radius);border:2px solid transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;background:var(--surface);flex-shrink:0;transition:border-color .15s; }
+    .adv-sym-btn:hover { border-color:var(--border); }
+    .adv-sym-btn.is-open { border-color:var(--accent);background:rgba(0,120,212,.1); }
+    .adv-row-label { flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+    .adv-row-count { font-size:11px;color:var(--text-muted);flex-shrink:0;min-width:18px;text-align:right; }
+    .adv-rule-row { display:flex;align-items:center;gap:4px;padding:5px 0;flex-wrap:wrap; }
+    .adv-rule-row select { padding:3px 5px;font-size:11px;width:auto; }
+    .adv-rule-row input[type=text] { padding:3px 5px;font-size:11px;flex:1;min-width:40px; }
+    /* Symbol editor */
+    .sym-editor { background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px;margin:4px 0 8px;animation:symFadeIn .12s; }
+    @keyframes symFadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
+    .sym-ed-tabs { display:flex;gap:4px;margin-bottom:10px;align-items:center; }
+    .sym-ed-tabs button { background:var(--surface);border:1px solid var(--border);color:var(--text-muted);padding:4px 12px;border-radius:var(--radius);font-size:11px;font-weight:600;cursor:pointer;transition:all .1s; }
+    .sym-ed-tabs button.active { background:var(--accent);border-color:var(--accent);color:#fff; }
+    .sym-ed-done { margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;line-height:1; }
+    .sym-ed-done:hover { color:var(--text); }
+    .sym-ed-icon-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(36px,1fr));gap:2px;max-height:160px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:3px;margin-top:6px; }
+    .sym-ed-icon-thumb { width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:3px;border:2px solid transparent;cursor:pointer;transition:border-color .1s; }
+    .sym-ed-icon-thumb:hover { border-color:var(--border); }
+    .sym-ed-icon-thumb.selected { border-color:var(--accent);background:rgba(0,120,212,.15); }
+    .sym-ed-icon-thumb img { width:24px;height:24px;object-fit:contain; }
+
+    /* ── QR Section ── */
+    #qr-section {
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      padding: 28px 32px;
+      display: flex;
+      align-items: flex-start;
+      gap: 32px;
+      flex-wrap: wrap;
+    }
+    #qr-section.hidden { display: none; }
+    .qr-canvas-wrap {
+      background: #fff;
+      border-radius: var(--radius);
+      padding: 12px;
+      flex-shrink: 0;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 180px;
+      min-height: 180px;
+      position: relative;
+    }
+    .qr-canvas-wrap canvas { display: block; }
+    .qr-placeholder {
+      color: #aaa;
+      font-size: 13px;
+      text-align: center;
+      padding: 20px;
+    }
+    .qr-info {
+      flex: 1;
+      min-width: 220px;
+    }
+    .qr-info h2 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .qr-info p {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 12px;
+    }
+    .qr-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .qr-pill {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .qr-pill.ok  { color: #81c784; border-color: rgba(129,199,132,.4); background: rgba(129,199,132,.08); }
+    .qr-pill.warn{ color: #ffb74d; border-color: rgba(255,183,77,.4);  background: rgba(255,183,77,.08);  }
+    .qr-pill.err { color: #e57373; border-color: rgba(229,115,115,.4); background: rgba(229,115,115,.08); }
+    .qr-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .qr-actions button {
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      padding: 7px 16px;
+      border-radius: var(--radius);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .qr-actions button:hover { opacity: .85; }
+    .qr-actions button.secondary {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .qr-size-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+    .qr-size-toggle label { color: var(--text-muted); }
+    .qr-size-toggle select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: var(--radius);
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+
+    /* ── URL input zone ── */
+    .url-zone {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      background: var(--surface);
+      margin-bottom: 14px;
+    }
+    .url-zone .or-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .url-zone .url-row {
+      display: flex;
+      gap: 6px;
+    }
+    .url-zone .url-row input {
+      flex: 1;
+      font-size: 12px;
+    }
+    .url-zone .url-row button {
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      padding: 7px 14px;
+      border-radius: var(--radius);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity .15s;
+    }
+    .url-zone .url-row button:hover { opacity: .85; }
+    .url-zone .url-row button:disabled { opacity: .4; cursor: default; }
+    #url-status {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      min-height: 16px;
+      line-height: 1.4;
+    }
+
+    /* Responsive collapse */
+    @media (max-width: 900px) {
+      .panel-left { width: 240px; }
+      .panel-right { width: 280px; }
+    }
+    @media (max-width: 680px) {
+      .workspace { flex-direction: column; height: auto; overflow: visible; }
+      .panel-left, .panel-right { width: 100%; border: none; border-bottom: 1px solid var(--border); }
+      .panel-center { min-height: 300px; }
+      #qr-section { flex-direction: column; align-items: center; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+    <rect width="26" height="26" rx="5" fill="#0078d4"/>
+    <path d="M7 13l4 4 8-8" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <h1>FeatureLayer Display Configurator</h1>
+  <span class="badge">FeatureLink</span>
+  <span class="saved-badge" id="saved-name-badge" title="Currently editing this saved config"></span>
+  <span class="spacer"></span>
+  <a class="admin-link-btn" href="/featurelink-configs">&#128194; Saved Configs</a>
+  <button class="save-btn" id="save-btn" disabled onclick="saveDataset()">
+    &#128190; Save
+  </button>
+  <button class="export-btn" id="export-btn" disabled onclick="exportConfig()">
+    ⬇ Export Config JSON
+  </button>
+</header>
+
+<div class="workspace">
+
+  <!-- LEFT: Upload + Fields -->
+  <div class="panel-left">
+    <div class="panel-header">
+      📁 Data Source
+      <span class="count" id="field-count">0 fields</span>
+    </div>
+    <div class="panel-scroll">
+
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="icon">📂</div>
+        <p><strong>Drop file here</strong><br>or click to browse</p>
+        <div class="formats">CSV · JSON · GeoJSON · TSV · Excel (.xlsx)</div>
+        <input type="file" id="file-input" accept=".csv,.tsv,.json,.geojson,.xlsx,.xls" />
+      </div>
+
+      <div class="url-zone" id="url-zone">
+        <div class="or-label">Or paste a FeatureLayer URL</div>
+        <div class="url-row">
+          <input type="text" id="layer-url-input" placeholder="https://…/FeatureServer/0" />
+          <button id="url-load-btn" onclick="loadFromUrl()">Load</button>
+        </div>
+        <div id="url-status"></div>
+      </div>
+
+      <div id="file-chip" style="display:none"></div>
+
+      <div class="cfg-label" id="fields-label" style="display:none">Fields</div>
+      <div id="field-list"></div>
+
+    </div>
+  </div>
+
+  <!-- CENTER: Data Preview -->
+  <div class="panel-center">
+    <div class="table-toolbar" id="table-toolbar" style="display:none">
+      <input type="search" id="table-search" placeholder="🔍 Filter rows…" oninput="filterTable()" />
+      <span class="row-count" id="row-count"></span>
+    </div>
+    <div class="table-wrap" id="table-wrap">
+      <div class="empty-state" id="empty-state">
+        <div class="es-icon">🗺️</div>
+        <p>Upload a file or paste a FeatureLayer URL to begin</p>
+        <p style="font-size:12px; color: var(--text-muted);">Supports CSV, JSON, GeoJSON, TSV, Excel · or an ArcGIS FeatureLayer REST URL</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Style Config -->
+  <div class="panel-right">
+    <div class="panel-header">🎨 Display Configuration</div>
+    <div class="style-tabs">
+      <button class="active" onclick="switchTab('symbology')">Symbols</button>
+      <button onclick="switchTab('labels')">Labels</button>
+      <button onclick="switchTab('popup')">Popup</button>
+      <button onclick="switchTab('layer')">Layer</button>
+      <button onclick="switchTab('linkqr')">Link QR</button>
+    </div>
+    <div class="panel-scroll" id="cfg-panel">
+      <div id="tab-symbology"></div>
+      <div id="tab-labels" style="display:none"></div>
+      <div id="tab-popup" style="display:none"></div>
+      <div id="tab-layer" style="display:none"></div>
+      <div id="tab-linkqr" style="display:none"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── QR Code Section ── -->
+<section id="qr-section" class="hidden">
+  <div class="qr-canvas-wrap" id="qr-canvas-wrap">
+    <div class="qr-placeholder">Configure settings above,<br>then generate QR</div>
+  </div>
+  <div class="qr-info">
+    <h2>📱 Share Config via QR Code</h2>
+    <p>
+      Scan this QR code with another device running this configurator to instantly load your
+      display settings. Use <strong>URL + Config</strong> mode (when loaded from a URL) to also
+      encode the data source so the receiver auto-loads everything in one scan. Once you've
+      <strong>Save</strong>d this dataset, use <strong>Saved Dataset Link</strong> mode to get a
+      plain link — scanning it with any camera app opens this exact dataset + config straight in
+      the browser, no app required.
+    </p>
+    <div class="qr-size-toggle">
+      <label>Payload:</label>
+      <select id="qr-mode" onchange="generateQR()">
+        <option value="compact">Compact (symbology + labels + layer)</option>
+        <option value="full">Full config (all settings)</option>
+        <option value="urlcfg" id="qr-mode-urlcfg" disabled>URL + Config (load &amp; apply)</option>
+        <option value="link" id="qr-mode-link" disabled>Saved Dataset Link (scan to open)</option>
+      </select>
+      <label style="margin-left:12px">Size:</label>
+      <select id="qr-px" onchange="generateQR()">
+        <option value="180">Small (180px)</option>
+        <option value="240" selected>Medium (240px)</option>
+        <option value="320">Large (320px)</option>
+      </select>
+    </div>
+    <div class="qr-meta" id="qr-meta"></div>
+    <div class="qr-actions">
+      <button onclick="generateQR()">⟳ Regenerate QR</button>
+      <button class="secondary" onclick="downloadQR()">⬇ Save QR Image</button>
+      <button class="secondary" onclick="toggleImportPanel()">⬆ Import Config</button>
+    </div>
+    <!-- Import panel -->
+    <div id="import-panel" style="display:none;margin-top:14px">
+      <div class="cfg-label" style="margin-bottom:6px">Paste QR payload or exported JSON</div>
+      <textarea id="import-text" placeholder='{"v":1,...}  or  {"_version":"1.0",...}' style="height:90px;font-size:11px;font-family:monospace"></textarea>
+      <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+        <button onclick="importConfig()" style="background:var(--accent);border:none;color:#fff;padding:7px 16px;border-radius:var(--radius);font-size:12px;font-weight:600;cursor:pointer">Apply Config</button>
+        <span id="import-status" style="font-size:11px;color:var(--text-muted)"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div id="toast"></div>
+
+<!-- SheetJS for Excel support -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<!-- QR code generation. Pinned to 1.4.4: qrcode@1.5.x removed the standalone
+     browser bundle from build/qrcode.min.js (it's now an unbundled CommonJS
+     shim requiring a bundler — throws "QRCode is not defined" when loaded
+     directly via <script>). 1.4.4's build/ is a real self-contained UMD
+     bundle; same toCanvas() API this page uses. -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
+
+<script>
+// ══════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════
+// Absolute, not relative — this page can be reached with or without a
+// trailing slash (/featurelink/featurelink-display-config), and a relative
+// "icons/..." path resolves differently in each case. Anchoring to an
+// absolute path sidesteps that entirely.
+const ICONS_BASE = '/featurelink-configs/configurator/icons/';
+
+let state = {
+  fileName: null,
+  featureLayerUrl: null,
+  pendingConfig: null,
+  rawFile: null,          // File object for the currently loaded local file, if any (re-sent on Save)
+  savedDatasetId: null,   // set once this session is linked to a saved dataset (admin page)
+  savedDatasetName: null,
+  rows: [],
+  fields: [],        // [{name, type, samples}]
+  filtered: [],
+  sortCol: null,
+  sortAsc: true,
+  searchTerm: '',
+  selectedField: null,
+  cfg: {
+    symbology: {
+      type: 'advanced',         // simple | uniqueValue | classBreaks | icon | rulesBased | advanced
+      field: '',
+      simple: { color: '#0078d4', outlineColor: '#ffffff', size: 8, shape: 'circle', opacity: 0.85 },
+      uniqueValues: [],        // [{value, color, label, count}]
+      classBreaks: [],         // [{min, max, color, label}]
+      classCount: 5,
+      icon: { iconset: '', icon: '', size: 24, opacity: 1.0 },
+      advanced: {
+        field: '',
+        valueSymbols: [],  // [{value, count, symbol}]
+        rules: [],         // [{field, op, value, label, symbol}]
+        defaultSymbol: { mode: 'shape', color: '#888888', shape: 'circle', size: 8, opacity: 0.85 },
+      },
+      rulesBased: {
+        rules: [],             // [{field, op, value, color, shape, size, opacity, label}]
+        defaultColor: '#888888', defaultShape: 'circle', defaultSize: 8, defaultOpacity: 0.85,
+      },
+    },
+    labels: {
+      enabled: false,
+      field: '',
+      fontSize: 12,
+      color: '#ffffff',
+      haloColor: '#000000',
+      haloSize: 1,
+      bold: false,
+      italic: false,
+    },
+    popup: {
+      enabled: true,
+      title: '',
+      fields: [],              // [{name, alias, visible}]
+      customHtml: false,
+      html: '',
+    },
+    layer: {
+      name: '',
+      opacity: 1.0,
+      minScale: 0,
+      maxScale: 0,
+      visible: true,
+    }
+  }
+};
+
+const PALETTES = [
+  ['#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00','#a65628','#f781bf','#999999'],
+  ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f'],
+  ['#66c2a5','#fc8d62','#8da0cb','#e78ac3','#a6d854','#ffd92f','#e5c494','#b3b3b3'],
+];
+const SHAPES = ['circle','square','diamond','triangle','cross','x','star'];
+
+let iconManifest = null;
+let iconSearchTerm = '';
+let symEdCtx = null;       // { ctx:'value'|'rule'|'default', idx:number, tab:'shape'|'icon' }
+let symEdIconSearch = '';
+const RULE_OPS = ['=','≠','contains','starts with','>','<','>=','<=','is empty','is not empty'];
+
+// Resolves an (iconset, filename) pair to the exact string ATAK's
+// <usericon iconsetpath="..."> needs: "<iconset-uid>/<group>/<filename>".
+// Requires the manifest's per-iconset uid + per-file group (added so the
+// plugin never needs its own copy of this mapping — see the "groups" key
+// in icons/manifest.json). Returns null if the iconset has no uid (e.g.
+// TAK-UserIcons, which isn't a custom ATAK iconset package) or the
+// manifest hasn't loaded yet.
+function resolveUsericonPath(iconsetName, iconFile) {
+  if (!iconManifest || !iconsetName || !iconFile) return null;
+  const is = iconManifest.iconsets.find(x => x.name === iconsetName);
+  if (!is || !is.uid) return null;
+  const group = (is.groups && is.groups[iconFile]) || is.defaultGroup;
+  if (!group) return null;
+  return `${is.uid}/${group}/${iconFile}`;
+}
+
+// ══════════════════════════════════════════
+//  FeatureLayer URL loading
+// ══════════════════════════════════════════
+async function loadFromUrl() {
+  const input  = document.getElementById('layer-url-input');
+  const btn    = document.getElementById('url-load-btn');
+  const status = document.getElementById('url-status');
+
+  let rawUrl = input.value.trim();
+  if (!rawUrl) { showToast('Paste a FeatureLayer URL first'); return; }
+
+  // Normalise: strip trailing slash and any accidental /query suffix
+  let baseUrl = rawUrl.replace(/\/+$/, '').replace(/\/query(\?.*)?$/i, '');
+
+  btn.disabled = true;
+  status.style.color = '';
+  status.textContent = 'Fetching service info…';
+
+  try {
+    // Pull layer metadata for name + maxRecordCount
+    const infoResp = await fetch(`${baseUrl}?f=json`);
+    if (!infoResp.ok) throw new Error(`HTTP ${infoResp.status} from service`);
+    const info = await infoResp.json();
+    if (info.error) throw new Error(info.error.message || 'Service returned an error');
+
+    const pageSize   = Math.min(info.maxRecordCount || 1000, 2000);
+    const layerName  = info.name || 'FeatureLayer';
+    const HARD_LIMIT = 50000;
+
+    // Paginate through all features
+    let allFeatures = [];
+    let offset      = 0;
+    let hasMore     = true;
+
+    while (hasMore) {
+      status.textContent = `Loading… ${allFeatures.length.toLocaleString()} features fetched`;
+      const qUrl = `${baseUrl}/query?where=1%3D1&outFields=*&f=json` +
+                   `&resultRecordCount=${pageSize}&resultOffset=${offset}`;
+      const resp = await fetch(qUrl);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} on page query`);
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error.message || 'Query error');
+
+      const page = data.features || [];
+      allFeatures = allFeatures.concat(page);
+
+      if (!data.exceededTransferLimit || page.length === 0) {
+        hasMore = false;
+      } else {
+        offset += page.length;
+        if (allFeatures.length >= HARD_LIMIT) {
+          status.textContent = `⚠ Capped at ${HARD_LIMIT.toLocaleString()} features`;
+          hasMore = false;
+        }
+      }
+    }
+
+    if (!allFeatures.length) throw new Error('Service returned 0 features');
+
+    state.featureLayerUrl = baseUrl;
+    state.rawFile = null;
+    const rows = parseJsonFeatures({ features: allFeatures });
+    processRows(rows, layerName);
+    // status is hidden by renderFileChip, but set a success note just in case
+    status.textContent = `✓ ${allFeatures.length.toLocaleString()} features loaded`;
+
+  } catch (err) {
+    state.pendingConfig = null;
+    let msg = err.message;
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      msg = 'Could not reach service — check the URL or CORS policy';
+    }
+    status.textContent = `✗ ${msg}`;
+    status.style.color = 'var(--danger)';
+    btn.disabled = false;
+  }
+}
+
+// ══════════════════════════════════════════
+//  File handling
+// ══════════════════════════════════════════
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+});
+
+function handleFile(file) {
+  state.fileName = file.name;
+  state.rawFile = file;
+  const ext = file.name.split('.').pop().toLowerCase();
+  const reader = new FileReader();
+
+  if (ext === 'xlsx' || ext === 'xls') {
+    reader.onload = e => {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      processRows(rows, file.name);
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.onload = e => {
+      const text = e.target.result;
+      if (ext === 'csv' || ext === 'tsv') {
+        const delim = ext === 'tsv' ? '\t' : detectDelimiter(text);
+        processRows(parseDelimited(text, delim), file.name);
+      } else {
+        try {
+          const parsed = JSON.parse(text);
+          processRows(parseJsonFeatures(parsed), file.name);
+        } catch {
+          alert('Could not parse JSON file. Make sure it is valid JSON, GeoJSON, or a FeatureLayer query response.');
+        }
+      }
+    };
+    reader.readAsText(file);
+  }
+}
+
+function detectDelimiter(text) {
+  const line = text.split('\n')[0];
+  const counts = { ',': (line.match(/,/g)||[]).length, '\t': (line.match(/\t/g)||[]).length, ';': (line.match(/;/g)||[]).length };
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+}
+
+function parseDelimited(text, delim) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  const headers = splitCSVLine(lines[0], delim);
+  return lines.slice(1).map(line => {
+    const vals = splitCSVLine(line, delim);
+    const row = {};
+    headers.forEach((h, i) => row[h.trim()] = (vals[i] ?? '').trim());
+    return row;
+  });
+}
+
+function splitCSVLine(line, delim) {
+  // Handles quoted fields
+  if (delim !== ',') return line.split(delim);
+  const result = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { inQ = !inQ; continue; }
+    if (c === ',' && !inQ) { result.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  result.push(cur);
+  return result;
+}
+
+function parseJsonFeatures(parsed) {
+  // GeoJSON
+  if (parsed.type === 'FeatureCollection' && parsed.features) {
+    return parsed.features.map(f => {
+      const props = f.properties || {};
+      if (f.geometry) {
+        props._geometry_type = f.geometry.type;
+        if (f.geometry.coordinates) {
+          if (f.geometry.type === 'Point') {
+            props._longitude = f.geometry.coordinates[0];
+            props._latitude  = f.geometry.coordinates[1];
+          }
+        }
+      }
+      return props;
+    });
+  }
+  // ArcGIS FeatureLayer query response
+  if (parsed.features) {
+    return parsed.features.map(f => {
+      const row = Object.assign({}, f.attributes || {});
+      if (f.geometry) {
+        if (f.geometry.x !== undefined) { row._x = f.geometry.x; row._y = f.geometry.y; }
+        if (f.geometry.rings) row._geometry_type = 'Polygon';
+        if (f.geometry.paths) row._geometry_type = 'Polyline';
+      }
+      return row;
+    });
+  }
+  // Array of objects
+  if (Array.isArray(parsed)) return parsed;
+  // Single object — wrap
+  return [parsed];
+}
+
+function processRows(rows, fileName) {
+  if (!rows || !rows.length) { alert('No data rows found in file.'); return; }
+  loadManifest();   // preload (fire-and-forget) so resolveUsericonPath() has data ready for the first QR/export, not just once the Icon tab is opened
+  state.rows = rows;
+  state.filtered = [...rows];
+  state.fields = inferFields(rows);
+  state.cfg.layer.name = fileName.replace(/\.[^.]+$/, '');
+  state.cfg.popup.fields = state.fields.map(f => ({ name: f.name, alias: f.name, visible: true }));
+  state.cfg.popup.title = state.fields[0]?.name || 'Feature';
+  state.cfg.labels.field = state.fields.find(f=>f.type==='str')?.name || state.fields[0]?.name || '';
+  state.cfg.symbology.type = 'advanced';
+  state.cfg.symbology.field = '';
+  state.cfg.symbology.uniqueValues = [];
+  state.cfg.symbology.classBreaks = [];
+  state.cfg.symbology.advanced = { field:'', valueSymbols:[], rules:[], defaultSymbol:{ mode:'shape', color:'#888888', shape:'circle', size:8, opacity:0.85 } };
+  symEdCtx = null;
+
+  renderFileChip(fileName, rows.length);
+  renderFieldList();
+  renderTable();
+  renderAllTabs();
+  document.getElementById('export-btn').disabled = false;
+  document.getElementById('save-btn').disabled = false;
+  showToast(`Loaded ${rows.length.toLocaleString()} rows · ${state.fields.length} fields`);
+
+  // Apply a pending config — either a QR/import payload (v:1/2 or _version), or
+  // a saved-dataset internal config (lossless, applied straight into state.cfg).
+  if (state.pendingConfig) {
+    try {
+      if (state.pendingConfig._internal) {
+        state.cfg = JSON.parse(JSON.stringify(state.pendingConfig.cfg));
+        showToast('Saved config applied');
+      } else {
+        applyConfigPayload(state.pendingConfig);
+        showToast('Config applied from QR');
+      }
+      renderAllTabs();
+    } catch(e) {}
+    state.pendingConfig = null;
+  }
+
+  generateQR();
+}
+
+function inferFields(rows) {
+  const sample = rows.slice(0, 200);
+  return Object.keys(rows[0]).map(name => {
+    const vals = sample.map(r => r[name]).filter(v => v !== null && v !== undefined && v !== '');
+    let type = 'str';
+    if (vals.length && vals.every(v => !isNaN(Number(v)))) type = 'num';
+    else if (vals.length && vals.every(v => !isNaN(Date.parse(v)) && String(v).length > 5)) type = 'dat';
+    if (name.startsWith('_geometry')) type = 'geo';
+    return { name, type, samples: vals.slice(0, 3) };
+  });
+}
+
+// ══════════════════════════════════════════
+//  Left panel rendering
+// ══════════════════════════════════════════
+function renderFileChip(name, count) {
+  const chip = document.getElementById('file-chip');
+  chip.style.display = 'flex';
+  chip.innerHTML = `<span class="fc-name" title="${name}">📄 ${name}</span>
+    <span class="fc-rows">${count.toLocaleString()} rows</span>
+    <button title="Remove file" onclick="clearFile()">✕</button>`;
+  document.getElementById('drop-zone').style.display = 'none';
+  document.getElementById('url-zone').style.display = 'none';
+  document.getElementById('fields-label').style.display = 'block';
+  document.getElementById('field-count').textContent = state.fields.length + ' fields';
+}
+
+function clearFile() {
+  state.rows = []; state.filtered = []; state.fields = []; state.fileName = null; state.featureLayerUrl = null; state.pendingConfig = null;
+  state.rawFile = null; state.savedDatasetId = null; state.savedDatasetName = null;
+  updateSavedBadge();
+  document.getElementById('file-chip').style.display = 'none';
+  document.getElementById('drop-zone').style.display = '';
+  document.getElementById('url-zone').style.display = '';
+  document.getElementById('url-status').textContent = '';
+  document.getElementById('url-status').style.color = '';
+  document.getElementById('url-load-btn').disabled = false;
+  document.getElementById('fields-label').style.display = 'none';
+  document.getElementById('field-list').innerHTML = '';
+  document.getElementById('field-count').textContent = '0 fields';
+  document.getElementById('table-toolbar').style.display = 'none';
+  document.getElementById('table-wrap').innerHTML = `<div class="empty-state" id="empty-state">
+    <div class="es-icon">🗺️</div>
+    <p>Upload a file or paste a FeatureLayer URL to begin</p>
+    <p style="font-size:12px; color: var(--text-muted);">Supports CSV, JSON, GeoJSON, TSV, Excel · or an ArcGIS FeatureLayer REST URL</p>
+  </div>`;
+  document.getElementById('export-btn').disabled = true;
+  document.getElementById('save-btn').disabled = true;
+  fileInput.value = '';
+}
+
+function renderFieldList() {
+  const el = document.getElementById('field-list');
+  el.innerHTML = state.fields.map(f => `
+    <div class="field-item" id="fi-${f.name}" onclick="selectField('${f.name}')">
+      <div class="fi-type ${f.type}">${f.type.toUpperCase()}</div>
+      <div class="fi-name" title="${f.name}">${f.name}</div>
+      <div class="fi-sample" title="${f.samples.join(', ')}">${f.samples[0] ?? ''}</div>
+    </div>`).join('');
+}
+
+function selectField(name) {
+  state.selectedField = name;
+  document.querySelectorAll('.field-item').forEach(el => el.classList.remove('selected'));
+  document.getElementById('fi-' + name)?.classList.add('selected');
+}
+
+// ══════════════════════════════════════════
+//  Table rendering
+// ══════════════════════════════════════════
+function renderTable() {
+  const toolbar = document.getElementById('table-toolbar');
+  toolbar.style.display = 'flex';
+  sortAndFilter();
+}
+
+function sortAndFilter() {
+  let data = [...state.rows];
+  if (state.searchTerm) {
+    const t = state.searchTerm.toLowerCase();
+    data = data.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(t)));
+  }
+  if (state.sortCol) {
+    data.sort((a, b) => {
+      const av = a[state.sortCol], bv = b[state.sortCol];
+      const n = (v) => !isNaN(Number(v));
+      const cmp = n(av) && n(bv) ? Number(av) - Number(bv) : String(av).localeCompare(String(bv));
+      return state.sortAsc ? cmp : -cmp;
+    });
+  }
+  state.filtered = data;
+  document.getElementById('row-count').textContent = `${data.length.toLocaleString()} / ${state.rows.length.toLocaleString()} rows`;
+  paintTable(data);
+}
+
+function paintTable(data) {
+  const MAX = 500;
+  const displayed = data.slice(0, MAX);
+  const cols = state.fields.map(f => f.name);
+
+  const thead = cols.map(c => {
+    const sorted = state.sortCol === c;
+    const icon = sorted ? (state.sortAsc ? '▲' : '▼') : '⇅';
+    return `<th class="${sorted?'sorted':''}" onclick="sortBy('${c}')">
+      ${c} <span class="sort-icon">${icon}</span>
+    </th>`;
+  }).join('');
+
+  const tbody = displayed.map(row => `<tr>${cols.map(c => {
+    const v = row[c];
+    const isNull = v === null || v === undefined || v === '';
+    return `<td class="${isNull?'null-val':''}" title="${isNull?'':v}">${isNull ? 'null' : v}</td>`;
+  }).join('')}</tr>`).join('');
+
+  const note = data.length > MAX ? `<div style="padding:8px 12px;font-size:11px;color:var(--text-muted)">Showing first ${MAX} of ${data.length.toLocaleString()} rows</div>` : '';
+
+  document.getElementById('table-wrap').innerHTML =
+    `<table class="data-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>${note}`;
+}
+
+function sortBy(col) {
+  if (state.sortCol === col) state.sortAsc = !state.sortAsc;
+  else { state.sortCol = col; state.sortAsc = true; }
+  sortAndFilter();
+}
+
+function filterTable() {
+  state.searchTerm = document.getElementById('table-search').value;
+  sortAndFilter();
+}
+
+// ══════════════════════════════════════════
+//  Tabs
+// ══════════════════════════════════════════
+function switchTab(name) {
+  ['symbology','labels','popup','layer','linkqr'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t === name ? '' : 'none';
+  });
+  document.querySelectorAll('.style-tabs button').forEach((btn, i) => {
+    btn.classList.toggle('active', ['symbology','labels','popup','layer','linkqr'][i] === name);
+  });
+  if (name === 'linkqr') renderLinkQRTab();
+}
+
+function renderAllTabs() {
+  renderSymbologyTab();
+  renderLabelsTab();
+  renderPopupTab();
+  renderLayerTab();
+  renderLinkQRTab();
+}
+
+// ══════════════════════════════════════════
+//  Symbology Tab
+// ══════════════════════════════════════════
+function renderSymbologyTab() {
+  const s = state.cfg.symbology;
+  const numFields = state.fields.filter(f=>f.type==='num').map(f=>f.name);
+  const allFields = state.fields.map(f=>f.name);
+
+  const fieldOpts = (arr, sel) => arr.map(f=>`<option value="${f}" ${f===sel?'selected':''}>${f}</option>`).join('');
+
+  let rendererSection = '';
+
+  if (s.type === 'simple') {
+    rendererSection = `
+      <div class="cfg-section">
+        <div class="cfg-label">Symbol</div>
+        <canvas id="sym-preview" width="200" height="50" style="display:block;margin:0 auto 10px;"></canvas>
+        <div class="cfg-label" style="margin-top:8px">Shape</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+          ${SHAPES.map(sh=>`<button class="btn-sm ${s.simple.shape===sh?'active':''}" onclick="setShape('${sh}')" style="${s.simple.shape===sh?'border-color:var(--accent);color:var(--accent)':''}"> ${shapeEmoji(sh)} ${sh}</button>`).join('')}
+        </div>
+        <div class="cfg-label">Colors</div>
+        <div class="color-row" style="margin-bottom:8px">
+          <label>Fill</label>
+          <input type="color" value="${s.simple.color}" oninput="setSimpleColor('color', this.value)" />
+          <label style="margin-left:12px">Outline</label>
+          <input type="color" value="${s.simple.outlineColor}" oninput="setSimpleColor('outlineColor', this.value)" />
+        </div>
+        <div class="palette">${PALETTES[0].map(c=>`<div class="palette-swatch" style="background:${c}" onclick="setSimpleColor('color','${c}')" title="${c}"></div>`).join('')}</div>
+        <div class="cfg-label">Size</div>
+        <div class="range-row">
+          <input type="range" min="4" max="40" value="${s.simple.size}" oninput="setSimpleProp('size', +this.value); this.nextElementSibling.textContent=this.value+'px'" />
+          <span class="range-val">${s.simple.size}px</span>
+        </div>
+        <div class="cfg-label" style="margin-top:10px">Opacity</div>
+        <div class="range-row">
+          <input type="range" min="0" max="1" step="0.05" value="${s.simple.opacity}" oninput="setSimpleProp('opacity', +this.value); this.nextElementSibling.textContent=Math.round(this.value*100)+'%'" />
+          <span class="range-val">${Math.round(s.simple.opacity*100)}%</span>
+        </div>
+      </div>`;
+  } else if (s.type === 'uniqueValue') {
+    const uvHtml = s.uniqueValues.slice(0, 50).map((uv, i) => `
+      <div class="uv-item">
+        <input type="color" value="${uv.color}" oninput="setUVColor(${i}, this.value)" />
+        <span class="uv-val" title="${uv.value}">${uv.value || '(blank)'}</span>
+        <span class="uv-count">${uv.count}</span>
+      </div>`).join('');
+    const truncNote = s.uniqueValues.length > 50 ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px">Showing 50 of ${s.uniqueValues.length} unique values</div>` : '';
+    rendererSection = `
+      <div class="cfg-section">
+        <div class="cfg-label">Color by Field</div>
+        <select onchange="setUVField(this.value)"><option value="">— Choose field —</option>${fieldOpts(allFields, s.field)}</select>
+        <div style="margin-top:10px"></div>
+        ${s.uniqueValues.length ? `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <button class="btn-sm" onclick="applyPalette(0)">Palette 1</button>
+            <button class="btn-sm" onclick="applyPalette(1)">Palette 2</button>
+            <button class="btn-sm" onclick="applyPalette(2)">Palette 3</button>
+          </div>
+          <div class="uv-list">${uvHtml}</div>${truncNote}` : '<div style="color:var(--text-muted);font-size:12px">Choose a field to generate unique value colors.</div>'}
+      </div>`;
+  } else if (s.type === 'classBreaks') {
+    const cbHtml = s.classBreaks.map((cb, i) => `
+      <div class="cb-item">
+        <input type="color" value="${cb.color}" oninput="setCBColor(${i}, this.value)" />
+        <div class="cb-range" style="display:flex;align-items:center;gap:4px;font-size:11px">
+          <input type="number" value="${cb.min}" step="any" oninput="setCBRange(${i},'min',+this.value)" />
+          <span>–</span>
+          <input type="number" value="${cb.max}" step="any" oninput="setCBRange(${i},'max',+this.value)" />
+        </div>
+        <input type="text" placeholder="Label" value="${cb.label}" oninput="setCBLabel(${i}, this.value)" style="width:80px;font-size:11px;padding:3px 6px" />
+      </div>`).join('');
+    rendererSection = `
+      <div class="cfg-section">
+        <div class="cfg-label">Classify Field</div>
+        <select onchange="setCBField(this.value)"><option value="">— Choose numeric field —</option>${fieldOpts(numFields, s.field)}</select>
+        <div class="row-2" style="margin-top:8px">
+          <div>
+            <div class="cfg-label">Classes</div>
+            <input type="number" min="2" max="20" value="${s.classCount}" oninput="state.cfg.symbology.classCount=+this.value" style="width:100%" />
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button class="btn-sm" style="width:100%" onclick="generateClassBreaks()">Generate</button>
+          </div>
+        </div>
+        <div style="margin-top:10px"></div>
+        ${s.classBreaks.length ? `<div class="cb-list">${cbHtml}</div>` : '<div style="color:var(--text-muted);font-size:12px">Choose a field and click Generate.</div>'}
+      </div>`;
+  } else if (s.type === 'icon') {
+    const setOpts = iconManifest
+      ? iconManifest.iconsets.map(is => `<option value="${is.name}" ${is.name===s.icon.iconset?'selected':''}>${is.name} (${is.icons.length})</option>`).join('')
+      : '';
+    rendererSection = `
+      <div class="cfg-section">
+        <div class="cfg-label">Iconset</div>
+        <select onchange="setIconset(this.value)">
+          <option value="">— Choose iconset —</option>${setOpts}
+        </select>
+      </div>
+      ${s.icon.iconset ? `
+        <div class="cfg-section">
+          <div class="cfg-label">Search Icons</div>
+          <input type="text" id="icon-search-input" value="${iconSearchTerm.replace(/"/g,'&quot;')}" placeholder="Filter by name…" oninput="iconSearchTerm=this.value;renderIconGrid()" style="margin-bottom:8px" />
+          <div id="icon-grid-container"></div>
+        </div>
+      ` : ''}
+      ${s.icon.icon ? `
+        <div class="cfg-section">
+          <div class="cfg-label">Selected Icon</div>
+          <div class="icon-selected-chip">
+            <img src="${ICONS_BASE}${encodeURIComponent(s.icon.iconset)}/${encodeURIComponent(s.icon.icon)}" />
+            <span>${s.icon.icon.replace(/\.png$/i,'')}</span>
+          </div>
+          <div class="cfg-label">Size</div>
+          <div class="range-row">
+            <input type="range" min="8" max="64" value="${s.icon.size}" oninput="state.cfg.symbology.icon.size=+this.value;this.nextElementSibling.textContent=this.value+'px';scheduleQRRefresh()" />
+            <span class="range-val">${s.icon.size}px</span>
+          </div>
+          <div class="cfg-label" style="margin-top:10px">Opacity</div>
+          <div class="range-row">
+            <input type="range" min="0" max="1" step="0.05" value="${s.icon.opacity}" oninput="state.cfg.symbology.icon.opacity=+this.value;this.nextElementSibling.textContent=Math.round(this.value*100)+'%';scheduleQRRefresh()" />
+            <span class="range-val">${Math.round(s.icon.opacity*100)}%</span>
+          </div>
+        </div>
+      ` : ''}`;
+  } else if (s.type === 'rulesBased') {
+    const rb = s.rulesBased;
+    const allFields = state.fields.map(f=>f.name);
+    const fOpts = (sel) => ['', ...allFields].map(f=>`<option value="${f}" ${f===sel?'selected':''}>${f||'— field —'}</option>`).join('');
+    const opOpts = (sel) => RULE_OPS.map(op=>`<option value="${op}" ${op===sel?'selected':''}>${op}</option>`).join('');
+    const shOpts = (sel) => SHAPES.map(sh=>`<option value="${sh}" ${sh===sel?'selected':''}>${sh}</option>`).join('');
+
+    const rulesHtml = rb.rules.map((r, i) => {
+      const hideVal = r.op === 'is empty' || r.op === 'is not empty';
+      return `
+        <div class="rule-item">
+          <select onchange="setRuleProp(${i},'field',this.value)">${fOpts(r.field)}</select>
+          <select onchange="setRuleProp(${i},'op',this.value);renderSymbologyTab()">${opOpts(r.op)}</select>
+          ${hideVal ? '' : `<input type="text" value="${(r.value||'').replace(/"/g,'&quot;')}" placeholder="value" oninput="setRuleProp(${i},'value',this.value)" />`}
+          <input type="color" value="${r.color}" oninput="setRuleProp(${i},'color',this.value)" title="Symbol color" />
+          <select onchange="setRuleProp(${i},'shape',this.value)" title="Shape" style="width:80px">${shOpts(r.shape)}</select>
+          <input type="text" class="rule-label-input" value="${(r.label||'').replace(/"/g,'&quot;')}" placeholder="legend label" oninput="setRuleProp(${i},'label',this.value)" />
+          <button class="rule-remove" onclick="removeRule(${i})" title="Remove rule">✕</button>
+        </div>`;
+    }).join('');
+
+    rendererSection = `
+      <div class="cfg-section">
+        <div class="cfg-label">Rules <span style="font-weight:normal;text-transform:none;font-size:10px">(first match wins)</span></div>
+        ${rb.rules.length ? `<div class="rule-drag-hint">Field · Operator · Value → Color · Shape · Label</div>` : ''}
+        <div id="rules-list">${rulesHtml || '<div style="color:var(--text-muted);font-size:12px;margin-bottom:8px">No rules yet — add one below.</div>'}</div>
+        <button class="btn-sm" style="width:100%;margin-top:4px" onclick="addRule()">+ Add Rule</button>
+      </div>
+      <hr class="div" />
+      <div class="cfg-section">
+        <div class="cfg-label">Default Symbol (no rule matches)</div>
+        <div class="color-row" style="margin-bottom:8px">
+          <label>Color</label>
+          <input type="color" value="${rb.defaultColor}" oninput="state.cfg.symbology.rulesBased.defaultColor=this.value;scheduleQRRefresh()" />
+          <label style="margin-left:10px">Shape</label>
+          <select onchange="state.cfg.symbology.rulesBased.defaultShape=this.value;scheduleQRRefresh()" style="width:auto">${shOpts(rb.defaultShape)}</select>
+        </div>
+        <div class="cfg-label">Size</div>
+        <div class="range-row">
+          <input type="range" min="4" max="40" value="${rb.defaultSize}" oninput="state.cfg.symbology.rulesBased.defaultSize=+this.value;this.nextElementSibling.textContent=this.value+'px';scheduleQRRefresh()" />
+          <span class="range-val">${rb.defaultSize}px</span>
+        </div>
+      </div>`;
+  } else if (s.type === 'advanced') {
+    const adv = s.advanced;
+    const allFields = state.fields.map(f => f.name);
+    const fOpts = (sel, placeholder) =>
+      `<option value="">${placeholder}</option>` +
+      allFields.map(f => `<option value="${f}" ${f===sel?'selected':''}>${f}</option>`).join('');
+    const opOpts = sel => RULE_OPS.map(op => `<option value="${op}" ${op===sel?'selected':''}>${op}</option>`).join('');
+
+    const valueRowsHtml = adv.valueSymbols.map((vs, i) => {
+      const isEd = symEdCtx?.ctx==='value' && symEdCtx.idx===i;
+      return `<div class="adv-row">
+        ${advSwatchHtml(vs.symbol,'value',i)}
+        <span class="adv-row-label" title="${(vs.value||'(blank)').replace(/"/g,'&quot;')}">${vs.value||'<em style="color:var(--text-muted)">(blank)</em>'}</span>
+        <span class="adv-row-count">${vs.count}</span>
+      </div>${isEd ? renderSymEdHtml(vs.symbol) : ''}`;
+    }).join('');
+
+    const ruleRowsHtml = adv.rules.map((r, i) => {
+      const isEd = symEdCtx?.ctx==='rule' && symEdCtx.idx===i;
+      const hideVal = r.op==='is empty' || r.op==='is not empty';
+      return `<div class="adv-rule-row">
+        ${advSwatchHtml(r.symbol,'rule',i)}
+        <span style="font-size:11px;color:var(--text-muted);flex-shrink:0">IF</span>
+        <select onchange="setAdvRuleProp(${i},'field',this.value)">${fOpts(r.field,'— field —')}</select>
+        <select onchange="setAdvRuleProp(${i},'op',this.value)">${opOpts(r.op)}</select>
+        ${hideVal?'': `<input type="text" value="${(r.value||'').replace(/"/g,'&quot;')}" placeholder="value" oninput="setAdvRuleProp(${i},'value',this.value)" style="flex:1;min-width:50px;padding:3px 5px;font-size:11px" />`}
+        <input type="text" value="${(r.label||'').replace(/"/g,'&quot;')}" placeholder="legend label" oninput="setAdvRuleProp(${i},'label',this.value)" style="width:80px;padding:3px 5px;font-size:11px" />
+        <button class="rule-remove" onclick="removeAdvRule(${i})" title="Remove">✕</button>
+      </div>${isEd ? renderSymEdHtml(r.symbol) : ''}`;
+    }).join('');
+
+    const isDefEd = symEdCtx?.ctx==='default';
+    rendererSection = `
+      <div class="cfg-section">
+        <div class="cfg-label">Render by Column</div>
+        <select onchange="setAdvField(this.value)">${fOpts(adv.field,'— same symbol for all features —')}</select>
+      </div>
+      ${adv.field ? `
+        <div class="cfg-section">
+          <div class="cfg-label" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Unique Values <span style="font-weight:normal;text-transform:none;font-size:10px">${adv.valueSymbols.length} found · click ■ to edit</span></span>
+            <button class="btn-sm" onclick="autoColorAdv()" style="font-size:10px;padding:3px 8px">Auto-color</button>
+          </div>
+          ${valueRowsHtml || '<div style="color:var(--text-muted);font-size:12px">No data loaded yet.</div>'}
+        </div>
+      ` : ''}
+      <hr class="div" />
+      <div class="cfg-section">
+        <div class="cfg-label">If / Then Rules <span style="font-weight:normal;text-transform:none;font-size:10px">override above · first match wins</span></div>
+        ${ruleRowsHtml || '<div style="color:var(--text-muted);font-size:12px;margin-bottom:8px">No rules yet.</div>'}
+        <button class="btn-sm" style="width:100%;margin-top:4px" onclick="addAdvRule()">+ Add Rule</button>
+      </div>
+      <hr class="div" />
+      <div class="cfg-section">
+        <div class="cfg-label">Default Symbol <span style="font-weight:normal;text-transform:none;font-size:10px">features matching no rule</span></div>
+        <div class="adv-row">${advSwatchHtml(adv.defaultSymbol,'default',-1)}<span class="adv-row-label">All other features</span></div>
+        ${isDefEd ? renderSymEdHtml(adv.defaultSymbol) : ''}
+      </div>`;
+  }
+
+  document.getElementById('tab-symbology').innerHTML = `
+    <div class="cfg-section" style="margin-top:4px">
+      <div class="cfg-label">Renderer Type</div>
+      <select onchange="setRendererType(this.value)">
+        <option value="advanced" ${s.type==='advanced'?'selected':''}>Value + Rules</option>
+        <option value="simple" ${s.type==='simple'?'selected':''}>Simple Symbol</option>
+        <option value="classBreaks" ${s.type==='classBreaks'?'selected':''}>Class Breaks (Graduated)</option>
+        <option value="icon" ${s.type==='icon'?'selected':''}>Icon Symbol (Iconset)</option>
+        <option value="uniqueValue" ${s.type==='uniqueValue'?'selected':''}>Unique Values (legacy)</option>
+        <option value="rulesBased" ${s.type==='rulesBased'?'selected':''}>Rule-Based (legacy)</option>
+      </select>
+    </div>
+    ${rendererSection}`;
+
+  if (s.type === 'simple') requestAnimationFrame(drawSymbolPreview);
+  if (s.type === 'icon') requestAnimationFrame(renderIconGrid);
+}
+
+function shapeEmoji(sh) {
+  return { circle:'●', square:'■', diamond:'◆', triangle:'▲', cross:'+', x:'✕', star:'★' }[sh] || '●';
+}
+
+function drawSymbolPreview() {
+  const canvas = document.getElementById('sym-preview');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const s = state.cfg.symbology.simple;
+  const x = 100, y = 25, r = s.size;
+  ctx.clearRect(0, 0, 200, 50);
+  ctx.globalAlpha = s.opacity;
+  ctx.fillStyle = s.color;
+  ctx.strokeStyle = s.outlineColor;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  switch (s.shape) {
+    case 'circle': ctx.arc(x, y, r, 0, Math.PI*2); break;
+    case 'square': ctx.rect(x-r, y-r, r*2, r*2); break;
+    case 'diamond':
+      ctx.moveTo(x, y-r); ctx.lineTo(x+r, y); ctx.lineTo(x, y+r); ctx.lineTo(x-r, y); ctx.closePath(); break;
+    case 'triangle':
+      ctx.moveTo(x, y-r); ctx.lineTo(x+r, y+r); ctx.lineTo(x-r, y+r); ctx.closePath(); break;
+    case 'cross':
+      ctx.moveTo(x-r, y); ctx.lineTo(x+r, y); ctx.moveTo(x, y-r); ctx.lineTo(x, y+r); break;
+    case 'x':
+      ctx.moveTo(x-r, y-r); ctx.lineTo(x+r, y+r); ctx.moveTo(x+r, y-r); ctx.lineTo(x-r, y+r); break;
+    case 'star': drawStar(ctx, x, y, 5, r, r*0.4); break;
+  }
+  ctx.fill(); ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawStar(ctx, cx, cy, spikes, outerR, innerR) {
+  let rot = (Math.PI / 2) * 3, step = Math.PI / spikes;
+  ctx.moveTo(cx, cy - outerR);
+  for (let i = 0; i < spikes; i++) {
+    ctx.lineTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
+    rot += step;
+    ctx.lineTo(cx + Math.cos(rot) * innerR, cy + Math.sin(rot) * innerR);
+    rot += step;
+  }
+  ctx.lineTo(cx, cy - outerR);
+  ctx.closePath();
+}
+
+function setRendererType(type) {
+  state.cfg.symbology.type = type;
+  if (type === 'icon' && !iconManifest) {
+    loadManifest().then(() => renderSymbologyTab());
+  }
+  renderSymbologyTab();
+  scheduleQRRefresh();
+}
+function setShape(sh) { state.cfg.symbology.simple.shape = sh; renderSymbologyTab(); scheduleQRRefresh(); }
+function setSimpleColor(prop, val) { state.cfg.symbology.simple[prop] = val; drawSymbolPreview(); scheduleQRRefresh(); }
+function setSimpleProp(prop, val) { state.cfg.symbology.simple[prop] = val; drawSymbolPreview(); scheduleQRRefresh(); }
+
+function setUVField(field) {
+  state.cfg.symbology.field = field;
+  if (!field) { state.cfg.symbology.uniqueValues = []; renderSymbologyTab(); return; }
+  const counts = {};
+  state.rows.forEach(r => { const v = String(r[field] ?? ''); counts[v] = (counts[v]||0)+1; });
+  const palette = PALETTES[0];
+  state.cfg.symbology.uniqueValues = Object.entries(counts)
+    .sort((a,b)=>b[1]-a[1])
+    .map(([value, count], i) => ({ value, count, color: palette[i % palette.length], label: value }));
+  renderSymbologyTab();
+  scheduleQRRefresh();
+}
+
+function setUVColor(i, color) { state.cfg.symbology.uniqueValues[i].color = color; scheduleQRRefresh(); }
+function applyPalette(pi) {
+  const p = PALETTES[pi];
+  state.cfg.symbology.uniqueValues.forEach((uv, i) => uv.color = p[i % p.length]);
+  renderSymbologyTab();
+  scheduleQRRefresh();
+}
+
+function setCBField(field) { state.cfg.symbology.field = field; state.cfg.symbology.classBreaks = []; renderSymbologyTab(); scheduleQRRefresh(); }
+function setCBColor(i, c) { state.cfg.symbology.classBreaks[i].color = c; }
+function setCBRange(i, prop, v) { state.cfg.symbology.classBreaks[i][prop] = v; }
+function setCBLabel(i, v) { state.cfg.symbology.classBreaks[i].label = v; }
+
+function generateClassBreaks() {
+  const f = state.cfg.symbology.field;
+  if (!f) return;
+  const vals = state.rows.map(r => Number(r[f])).filter(v => !isNaN(v)).sort((a,b)=>a-b);
+  if (!vals.length) return;
+  const n = state.cfg.symbology.classCount;
+  const min = vals[0], max = vals[vals.length-1];
+  const step = (max - min) / n;
+  const palette = ['#2c7bb6','#abd9e9','#ffffbf','#fdae61','#d7191c'];
+  state.cfg.symbology.classBreaks = Array.from({length: n}, (_, i) => ({
+    min: +(min + step * i).toFixed(4),
+    max: +(min + step * (i+1)).toFixed(4),
+    color: palette[Math.round(i / (n-1) * (palette.length-1))],
+    label: ''
+  }));
+  renderSymbologyTab();
+  scheduleQRRefresh();
+}
+
+// ══════════════════════════════════════════
+//  Icon Symbology
+// ══════════════════════════════════════════
+async function loadManifest() {
+  if (iconManifest) return;
+  try {
+    const r = await fetch(ICONS_BASE + 'manifest.json');
+    iconManifest = await r.json();
+  } catch(e) { console.warn('Icon manifest unavailable:', e); }
+}
+
+function renderIconGrid() {
+  const container = document.getElementById('icon-grid-container');
+  if (!container || !iconManifest) return;
+  const s = state.cfg.symbology;
+  const iconset = iconManifest.iconsets.find(is => is.name === s.icon.iconset);
+  if (!iconset) return;
+  const term = iconSearchTerm.toLowerCase();
+  const filtered = term ? iconset.icons.filter(ic => ic.toLowerCase().includes(term)) : iconset.icons;
+  const MAX = 200;
+  const shown = filtered.slice(0, MAX);
+  if (!shown.length) { container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px">No icons match.</div>'; return; }
+  const moreNote = filtered.length > MAX ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Showing ${MAX} of ${filtered.length} — refine search</div>` : '';
+  container.innerHTML = `
+    <div class="icon-grid">
+      ${shown.map(ic => {
+        const setEnc = encodeURIComponent(s.icon.iconset);
+        const icEnc  = encodeURIComponent(ic);
+        const setEsc = s.icon.iconset.replace(/"/g,'&quot;');
+        const icEsc  = ic.replace(/"/g,'&quot;');
+        return `<div class="icon-thumb${s.icon.icon===ic?' selected':''}" title="${ic.replace(/\.png$/i,'')}" data-is="${setEsc}" data-ic="${icEsc}" onclick="selectIcon(this.dataset.is,this.dataset.ic)">
+          <img src="${ICONS_BASE}${setEnc}/${icEnc}" loading="lazy" onerror="this.style.opacity=0" /></div>`;
+      }).join('')}
+    </div>${moreNote}`;
+}
+
+function selectIcon(iconset, icon) {
+  state.cfg.symbology.icon.iconset = iconset;
+  state.cfg.symbology.icon.icon = icon;
+  document.querySelectorAll('.icon-thumb').forEach(el => el.classList.toggle('selected', el.dataset.ic === icon));
+  if (!document.querySelector('.icon-selected-chip')) renderSymbologyTab();
+  scheduleQRRefresh();
+}
+
+function setIconset(name) {
+  state.cfg.symbology.icon.iconset = name;
+  state.cfg.symbology.icon.icon = '';
+  iconSearchTerm = '';
+  renderSymbologyTab();
+  scheduleQRRefresh();
+}
+
+// ══════════════════════════════════════════
+//  Advanced (Value + Rules) Renderer
+// ══════════════════════════════════════════
+function advSwatchHtml(sym, ctx, idx) {
+  const isOpen = symEdCtx && symEdCtx.ctx===ctx && symEdCtx.idx===idx;
+  const inner = sym.mode==='icon' && sym.icon
+    ? `<img src="${ICONS_BASE}${encodeURIComponent(sym.iconset||'')}/${encodeURIComponent(sym.icon)}" style="width:20px;height:20px;object-fit:contain">`
+    : `<div style="width:18px;height:18px;background:${sym.color||'#888'};border-radius:${(sym.shape||'circle')==='circle'?'50%':'3px'};opacity:${sym.opacity??0.85}"></div>`;
+  return `<div class="adv-sym-btn${isOpen?' is-open':''}" title="Edit symbol" onclick="openSymEd('${ctx}',${idx})">${inner}</div>`;
+}
+
+function openSymEd(ctx, idx) {
+  if (symEdCtx && symEdCtx.ctx===ctx && symEdCtx.idx===idx) { symEdCtx=null; }
+  else {
+    const sym = getActiveSymObjFor(ctx, idx);
+    symEdCtx = { ctx, idx, tab: sym?.mode==='icon' ? 'icon' : 'shape' };
+  }
+  renderSymbologyTab();
+}
+
+function closeSymEd() { symEdCtx=null; renderSymbologyTab(); }
+
+function setSymEdTab(tab) {
+  if (!symEdCtx) return;
+  symEdCtx.tab = tab;
+  if (tab==='icon' && !iconManifest) { loadManifest().then(()=>renderSymbologyTab()); return; }
+  renderSymbologyTab();
+}
+
+function getActiveSymObjFor(ctx, idx) {
+  const adv = state.cfg.symbology.advanced;
+  if (ctx==='value') return adv.valueSymbols[idx]?.symbol;
+  if (ctx==='rule')  return adv.rules[idx]?.symbol;
+  return adv.defaultSymbol;
+}
+
+function getActiveSymObj() {
+  if (!symEdCtx) return null;
+  return getActiveSymObjFor(symEdCtx.ctx, symEdCtx.idx);
+}
+
+function setSymProp(prop, val) {
+  const sym = getActiveSymObj(); if (!sym) return;
+  sym[prop] = val;
+  renderSymbologyTab(); scheduleQRRefresh();
+}
+
+function setSymIconset(iconset) {
+  const sym = getActiveSymObj(); if (!sym) return;
+  sym.iconset = iconset; sym.icon = ''; symEdIconSearch = '';
+  renderSymbologyTab(); scheduleQRRefresh();
+}
+
+function selectSymIcon(iconset, icon) {
+  const sym = getActiveSymObj(); if (!sym) return;
+  sym.mode='icon'; sym.iconset=iconset; sym.icon=icon;
+  document.querySelectorAll('.sym-ed-icon-thumb').forEach(el=>el.classList.toggle('selected', el.dataset.ic===icon));
+  if (!document.querySelector('.adv-sym-btn.is-open img')) renderSymbologyTab();
+  scheduleQRRefresh();
+}
+
+function renderSymEdHtml(sym) {
+  const tab = symEdCtx?.tab || 'shape';
+  let body = '';
+  if (tab === 'shape') {
+    const allColors = PALETTES[0].concat(PALETTES[1]).slice(0,12);
+    body = `
+      <div class="cfg-label">Color</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <input type="color" value="${sym.color||'#0078d4'}" onchange="setSymProp('color',this.value)" />
+        <div style="display:flex;flex-wrap:wrap;gap:3px">${allColors.map(c=>`<div class="palette-swatch" style="background:${c}" onclick="setSymProp('color','${c}')"></div>`).join('')}</div>
+      </div>
+      <div class="cfg-label">Shape</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+        ${SHAPES.map(sh=>`<button class="btn-sm${(sym.shape||'circle')===sh?' active':''}" onclick="setSymProp('shape','${sh}')" style="${(sym.shape||'circle')===sh?'border-color:var(--accent);color:var(--accent)':''}">${shapeEmoji(sh)}</button>`).join('')}
+      </div>
+      <div class="cfg-label">Size</div>
+      <div class="range-row" style="margin-bottom:8px">
+        <input type="range" min="4" max="40" value="${sym.size||8}"
+          oninput="document.getElementById('sy-sz').textContent=this.value+'px'"
+          onchange="setSymProp('size',+this.value)" />
+        <span class="range-val" id="sy-sz">${sym.size||8}px</span>
+      </div>
+      <div class="cfg-label">Opacity</div>
+      <div class="range-row">
+        <input type="range" min="0" max="1" step="0.05" value="${sym.opacity??0.85}"
+          oninput="document.getElementById('sy-op').textContent=Math.round(this.value*100)+'%'"
+          onchange="setSymProp('opacity',+this.value)" />
+        <span class="range-val" id="sy-op">${Math.round((sym.opacity??0.85)*100)}%</span>
+      </div>`;
+  } else {
+    const setOpts = iconManifest
+      ? iconManifest.iconsets.map(is=>`<option value="${is.name}" ${is.name===(sym.iconset||'')?'selected':''}>${is.name} (${is.icons.length})</option>`).join('')
+      : '';
+    const iconset = iconManifest?.iconsets.find(is=>is.name===sym.iconset);
+    const term = symEdIconSearch.toLowerCase();
+    const icons = iconset ? (term ? iconset.icons.filter(ic=>ic.toLowerCase().includes(term)) : iconset.icons) : [];
+    const shown = icons.slice(0,150);
+    const gridHtml = shown.length
+      ? shown.map(ic=>{
+          const sEnc=encodeURIComponent(sym.iconset||''), iEnc=encodeURIComponent(ic);
+          const sEsc=(sym.iconset||'').replace(/"/g,'&quot;'), iEsc=ic.replace(/"/g,'&quot;');
+          return `<div class="sym-ed-icon-thumb${sym.icon===ic?' selected':''}" title="${ic.replace(/\.png$/i,'')}" data-is="${sEsc}" data-ic="${iEsc}" onclick="selectSymIcon(this.dataset.is,this.dataset.ic)"><img src="${ICONS_BASE}${sEnc}/${iEnc}" loading="lazy" onerror="this.style.opacity=0"/></div>`;
+        }).join('')
+      : `<div style="color:var(--text-muted);font-size:11px;padding:8px">${iconset?'No icons match.':'Choose an iconset above.'}</div>`;
+    const moreNote = icons.length>150 ? `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">Showing 150 of ${icons.length} — refine search</div>` : '';
+    body = `
+      <div class="cfg-label">Iconset</div>
+      <select onchange="setSymIconset(this.value)" style="margin-bottom:6px">
+        <option value="">— choose iconset —</option>${setOpts}
+      </select>
+      ${sym.iconset ? `<input type="text" value="${symEdIconSearch.replace(/"/g,'&quot;')}" placeholder="Search icons…" oninput="symEdIconSearch=this.value;renderSymbologyTab()" style="margin-bottom:4px" />
+        <div class="sym-ed-icon-grid">${gridHtml}</div>${moreNote}` : ''}
+      ${sym.icon ? `
+        <div class="cfg-label" style="margin-top:8px">Size</div>
+        <div class="range-row" style="margin-bottom:8px">
+          <input type="range" min="8" max="64" value="${sym.size||24}"
+            oninput="document.getElementById('sy-sz').textContent=this.value+'px'"
+            onchange="setSymProp('size',+this.value)" />
+          <span class="range-val" id="sy-sz">${sym.size||24}px</span>
+        </div>
+        <div class="cfg-label">Opacity</div>
+        <div class="range-row">
+          <input type="range" min="0" max="1" step="0.05" value="${sym.opacity??1}"
+            oninput="document.getElementById('sy-op').textContent=Math.round(this.value*100)+'%'"
+            onchange="setSymProp('opacity',+this.value)" />
+          <span class="range-val" id="sy-op">${Math.round((sym.opacity??1)*100)}%</span>
+        </div>` : ''}`;
+  }
+  return `<div class="sym-editor">
+    <div class="sym-ed-tabs">
+      <button class="${tab==='shape'?'active':''}" onclick="setSymEdTab('shape')">Shape</button>
+      <button class="${tab==='icon'?'active':''}" onclick="setSymEdTab('icon')">Icon</button>
+      <button class="sym-ed-done" onclick="closeSymEd()" title="Close">✓</button>
+    </div>
+    ${body}
+  </div>`;
+}
+
+function setAdvField(field) {
+  const adv = state.cfg.symbology.advanced;
+  adv.field = field; adv.valueSymbols = []; symEdCtx = null;
+  if (field && state.rows.length) {
+    const counts = {};
+    state.rows.forEach(r => { const v = String(r[field]??''); counts[v]=(counts[v]||0)+1; });
+    const palette = PALETTES[0];
+    adv.valueSymbols = Object.entries(counts).sort((a,b)=>b[1]-a[1])
+      .map(([value,count],i) => ({ value, count, symbol: { mode:'shape', color:palette[i%palette.length], shape:'circle', size:8, opacity:0.85 } }));
+  }
+  renderSymbologyTab(); scheduleQRRefresh();
+}
+
+function autoColorAdv() {
+  const p=PALETTES[0];
+  state.cfg.symbology.advanced.valueSymbols.forEach((vs,i)=>{ vs.symbol.color=p[i%p.length]; vs.symbol.mode='shape'; });
+  renderSymbologyTab(); scheduleQRRefresh();
+}
+
+function addAdvRule() {
+  state.cfg.symbology.advanced.rules.push({
+    field: state.fields[0]?.name||'', op:'=', value:'', label:'',
+    symbol: { mode:'shape', color:'#ff7f0e', shape:'circle', size:10, opacity:0.85 },
+  });
+  renderSymbologyTab(); scheduleQRRefresh();
+}
+
+function removeAdvRule(i) {
+  state.cfg.symbology.advanced.rules.splice(i,1);
+  if (symEdCtx?.ctx==='rule' && symEdCtx.idx===i) symEdCtx=null;
+  renderSymbologyTab(); scheduleQRRefresh();
+}
+
+function setAdvRuleProp(i, prop, val) {
+  state.cfg.symbology.advanced.rules[i][prop] = val;
+  if (prop==='op') renderSymbologyTab(); else scheduleQRRefresh();
+}
+
+// ══════════════════════════════════════════
+//  Rule-Based Symbology
+// ══════════════════════════════════════════
+function addRule() {
+  state.cfg.symbology.rulesBased.rules.push({
+    field: state.fields[0]?.name || '',
+    op: '=',
+    value: '',
+    color: '#0078d4',
+    shape: 'circle',
+    size: 8,
+    opacity: 0.85,
+    label: '',
+  });
+  renderSymbologyTab();
+  scheduleQRRefresh();
+}
+
+function removeRule(i) {
+  state.cfg.symbology.rulesBased.rules.splice(i, 1);
+  renderSymbologyTab();
+  scheduleQRRefresh();
+}
+
+function setRuleProp(i, prop, val) {
+  state.cfg.symbology.rulesBased.rules[i][prop] = val;
+  scheduleQRRefresh();
+}
+
+// ══════════════════════════════════════════
+//  Labels Tab
+// ══════════════════════════════════════════
+function renderLabelsTab() {
+  const l = state.cfg.labels;
+  const allFields = state.fields.map(f=>f.name);
+  const fieldOpts = allFields.map(f=>`<option value="${f}" ${f===l.field?'selected':''}>${f}</option>`).join('');
+
+  document.getElementById('tab-labels').innerHTML = `
+    <div class="cfg-section" style="margin-top:4px">
+      <div class="toggle-row">
+        <label>Enable Labels</label>
+        <label class="toggle">
+          <input type="checkbox" ${l.enabled?'checked':''} onchange="state.cfg.labels.enabled=this.checked" />
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Label Field</div>
+      <select onchange="state.cfg.labels.field=this.value">
+        <option value="">— No label —</option>${fieldOpts}
+      </select>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Font</div>
+      <div class="row-2">
+        <div>
+          <div class="cfg-label">Size (px)</div>
+          <input type="number" min="6" max="48" value="${l.fontSize}" oninput="state.cfg.labels.fontSize=+this.value" />
+        </div>
+        <div>
+          <div class="cfg-label">Color</div>
+          <input type="color" value="${l.color}" oninput="state.cfg.labels.color=this.value" />
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <div class="toggle-row" style="flex:1">
+          <label>Bold</label>
+          <label class="toggle">
+            <input type="checkbox" ${l.bold?'checked':''} onchange="state.cfg.labels.bold=this.checked" />
+            <div class="toggle-slider"></div>
+          </label>
+        </div>
+        <div class="toggle-row" style="flex:1">
+          <label>Italic</label>
+          <label class="toggle">
+            <input type="checkbox" ${l.italic?'checked':''} onchange="state.cfg.labels.italic=this.checked" />
+            <div class="toggle-slider"></div>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Halo</div>
+      <div class="color-row">
+        <label>Color</label>
+        <input type="color" value="${l.haloColor}" oninput="state.cfg.labels.haloColor=this.value" />
+        <label style="margin-left:12px">Size</label>
+        <input type="number" min="0" max="10" value="${l.haloSize}" oninput="state.cfg.labels.haloSize=+this.value" style="width:60px" />
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════
+//  Popup Tab
+// ══════════════════════════════════════════
+function renderPopupTab() {
+  const p = state.cfg.popup;
+  const allFields = state.fields.map(f=>f.name);
+  const titleOpts = allFields.map(f=>`<option value="${f}" ${f===p.title?'selected':''}>${f}</option>`).join('');
+
+  const pfRows = p.fields.map((pf, i) => `
+    <div class="popup-field">
+      <label class="toggle" style="flex-shrink:0">
+        <input type="checkbox" ${pf.visible?'checked':''} onchange="togglePopupField(${i},this.checked)" />
+        <div class="toggle-slider"></div>
+      </label>
+      <span class="pf-name">${pf.name}</span>
+      <input type="text" value="${pf.alias}" placeholder="Alias" oninput="setPopupAlias(${i},this.value)" style="width:100px" />
+    </div>`).join('');
+
+  document.getElementById('tab-popup').innerHTML = `
+    <div class="cfg-section" style="margin-top:4px">
+      <div class="toggle-row">
+        <label>Enable Popups</label>
+        <label class="toggle">
+          <input type="checkbox" ${p.enabled?'checked':''} onchange="state.cfg.popup.enabled=this.checked" />
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Popup Title Field</div>
+      <select onchange="state.cfg.popup.title=this.value">
+        ${titleOpts}
+      </select>
+    </div>
+    <hr class="div" />
+    <div class="cfg-section">
+      <div class="cfg-label">Visible Fields & Aliases</div>
+      <div style="margin-bottom:8px;display:flex;gap:8px">
+        <button class="btn-sm" onclick="setAllPopupFields(true)">Show All</button>
+        <button class="btn-sm" onclick="setAllPopupFields(false)">Hide All</button>
+      </div>
+      ${pfRows || '<div style="color:var(--text-muted);font-size:12px">No fields loaded.</div>'}
+    </div>
+    <hr class="div" />
+    <div class="cfg-section">
+      <div class="toggle-row">
+        <label>Custom HTML Template</label>
+        <label class="toggle">
+          <input type="checkbox" ${p.customHtml?'checked':''} onchange="state.cfg.popup.customHtml=this.checked;renderPopupTab()" />
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+      ${p.customHtml ? `<textarea placeholder="Use {FieldName} placeholders, e.g. &lt;b&gt;{Name}&lt;/b&gt;" oninput="state.cfg.popup.html=this.value">${p.html}</textarea>` : ''}
+    </div>`;
+}
+
+function togglePopupField(i, v) { state.cfg.popup.fields[i].visible = v; }
+function setPopupAlias(i, v) { state.cfg.popup.fields[i].alias = v; }
+function setAllPopupFields(v) { state.cfg.popup.fields.forEach(f=>f.visible=v); renderPopupTab(); }
+
+// ══════════════════════════════════════════
+//  Layer Tab
+// ══════════════════════════════════════════
+function renderLayerTab() {
+  const l = state.cfg.layer;
+  document.getElementById('tab-layer').innerHTML = `
+    <div class="cfg-section" style="margin-top:4px">
+      <div class="cfg-label">Layer Name</div>
+      <input type="text" value="${l.name}" oninput="state.cfg.layer.name=this.value" placeholder="Layer name" />
+    </div>
+    <div class="cfg-section">
+      <div class="toggle-row">
+        <label>Visible</label>
+        <label class="toggle">
+          <input type="checkbox" ${l.visible?'checked':''} onchange="state.cfg.layer.visible=this.checked" />
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Opacity</div>
+      <div class="range-row">
+        <input type="range" min="0" max="1" step="0.05" value="${l.opacity}"
+          oninput="state.cfg.layer.opacity=+this.value; this.nextElementSibling.textContent=Math.round(this.value*100)+'%'" />
+        <span class="range-val">${Math.round(l.opacity*100)}%</span>
+      </div>
+    </div>
+    <hr class="div" />
+    <div class="cfg-section">
+      <div class="cfg-label">Scale Visibility (0 = no limit)</div>
+      <div class="row-2">
+        <div>
+          <div class="cfg-label">Min Scale</div>
+          <input type="number" min="0" value="${l.minScale}" oninput="state.cfg.layer.minScale=+this.value" placeholder="e.g. 500000" />
+        </div>
+        <div>
+          <div class="cfg-label">Max Scale</div>
+          <input type="number" min="0" value="${l.maxScale}" oninput="state.cfg.layer.maxScale=+this.value" placeholder="e.g. 1000" />
+        </div>
+      </div>
+    </div>
+    <hr class="div" />
+    <div class="cfg-section">
+      <div class="cfg-label">Data Summary</div>
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.8">
+        <div>Rows: <strong style="color:var(--text)">${state.rows.length.toLocaleString()}</strong></div>
+        <div>Fields: <strong style="color:var(--text)">${state.fields.length}</strong></div>
+        <div>Numeric fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='num').length}</strong></div>
+        <div>String fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='str').length}</strong></div>
+        <div>Date fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='dat').length}</strong></div>
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════
+//  Link QR Tab
+// ══════════════════════════════════════════
+let linkQRDebounce;
+
+function renderLinkQRTab() {
+  const prefill = state.featureLayerUrl || '';
+  document.getElementById('tab-linkqr').innerHTML = `
+    <div class="cfg-section" style="margin-top:4px">
+      <div class="cfg-label">FeatureLayer URL</div>
+      <input type="text" id="linkqr-url" value="${prefill.replace(/"/g,'&quot;')}"
+        placeholder="https://…/FeatureServer/0"
+        oninput="scheduleLinkQR()" />
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+        Generates a plain URL QR — no config attached.
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">QR Size</div>
+      <select id="linkqr-px" onchange="generateLinkQR()" style="width:auto">
+        <option value="180">Small (180px)</option>
+        <option value="240" selected>Medium (240px)</option>
+        <option value="320">Large (320px)</option>
+      </select>
+    </div>
+    <div id="linkqr-wrap" style="
+      background:#fff; border-radius:var(--radius); padding:12px;
+      display:flex; align-items:center; justify-content:center;
+      min-height:180px; margin-bottom:10px; box-shadow:var(--shadow);">
+      <div style="color:#aaa;font-size:12px;text-align:center">Enter a URL above</div>
+    </div>
+    <div id="linkqr-meta" style="font-size:11px;color:var(--text-muted);margin-bottom:10px"></div>
+    <button onclick="downloadLinkQR()" class="btn-sm" style="width:100%">⬇ Save QR Image</button>`;
+
+  if (prefill) generateLinkQR();
+}
+
+function scheduleLinkQR() {
+  clearTimeout(linkQRDebounce);
+  linkQRDebounce = setTimeout(generateLinkQR, 400);
+}
+
+function generateLinkQR() {
+  const urlEl = document.getElementById('linkqr-url');
+  const wrap   = document.getElementById('linkqr-wrap');
+  const meta   = document.getElementById('linkqr-meta');
+  if (!urlEl || !wrap) return;
+
+  const url = urlEl.value.trim();
+  if (!url) {
+    wrap.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center">Enter a URL above</div>';
+    meta.textContent = '';
+    return;
+  }
+
+  const px    = parseInt(document.getElementById('linkqr-px').value, 10);
+  const bytes = new TextEncoder().encode(url).length;
+  meta.textContent = `${bytes} bytes`;
+
+  wrap.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  wrap.appendChild(canvas);
+
+  QRCode.toCanvas(canvas, url, {
+    width: px,
+    margin: 1,
+    errorCorrectionLevel: 'M',
+    color: { dark: '#000000', light: '#ffffff' },
+  }, err => {
+    if (err) wrap.innerHTML = `<div style="color:#e57373;font-size:12px">${err.message}</div>`;
+  });
+}
+
+function downloadLinkQR() {
+  const canvas = document.querySelector('#linkqr-wrap canvas');
+  if (!canvas) { showToast('Generate a QR first'); return; }
+  const urlEl = document.getElementById('linkqr-url');
+  const name  = (urlEl?.value.split('/').slice(-3,-1).join('_') || 'featurelayer') + '_link_qr';
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = name + '.png';
+  a.click();
+  showToast('QR image saved');
+}
+
+// ══════════════════════════════════════════
+//  Export
+// ══════════════════════════════════════════
+// Shared by the "Export Config JSON" download button and saveDataset() — the
+// TAK Portal backend stores this alongside the internal state so field users'
+// downloads/Open in ATAK don't need any server-side re-derivation of it.
+function buildExportPayload() {
+  return {
+    _version: '1.1',
+    _tool: 'FeatureLink Display Configurator',
+    _generated: new Date().toISOString(),
+    _source: state.fileName || null,
+    featureLayerUrl: state.featureLayerUrl || null,
+    _rowCount: state.rows.length,
+    fields: state.fields.map(f => ({ name: f.name, type: f.type })),
+    layer: { ...state.cfg.layer },
+    symbology: buildSymbologyExport(),
+    labels: { ...state.cfg.labels },
+    popup: {
+      enabled: state.cfg.popup.enabled,
+      titleField: state.cfg.popup.title,
+      fields: state.cfg.popup.fields.filter(f=>f.visible).map(f=>({ field: f.name, alias: f.alias })),
+      customHtml: state.cfg.popup.customHtml,
+      htmlTemplate: state.cfg.popup.html || null,
+    }
+  };
+}
+
+function exportConfig() {
+  const out = buildExportPayload();
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (state.cfg.layer.name || 'layer') + '_display_config.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Config exported!');
+}
+
+function buildSymbologyExport() {
+  const s = state.cfg.symbology;
+  if (s.type === 'advanced') {
+    const adv = s.advanced;
+    const symToEsri = sym => {
+      if (sym.mode==='icon' && sym.icon)
+        return { type:'picture-marker', url:`icons/${sym.iconset}/${sym.icon}`, usericonPath: resolveUsericonPath(sym.iconset, sym.icon), width:sym.size||24, height:sym.size||24, opacity:sym.opacity??1 };
+      return { type:'simple-marker', color:hexToRgba(sym.color||'#888',sym.opacity??0.85), size:sym.size||8, style:sym.shape||'circle' };
+    };
+    const makeWhere = r => {
+      if (r.op==='is empty')     return `${r.field} IS NULL OR ${r.field} = ''`;
+      if (r.op==='is not empty') return `${r.field} IS NOT NULL AND ${r.field} <> ''`;
+      if (r.op==='contains')     return `${r.field} LIKE '%${r.value}%'`;
+      if (r.op==='starts with')  return `${r.field} LIKE '${r.value}%'`;
+      const op = r.op==='≠'?'<>':r.op;
+      const isNum = r.value!=='' && !isNaN(Number(r.value));
+      return `${r.field} ${op} ${isNum?r.value:`'${r.value}'`}`;
+    };
+    const rules = [
+      ...adv.rules.map(r => ({ where:makeWhere(r), label:r.label||makeWhere(r), symbol:symToEsri(r.symbol) })),
+      ...(adv.field ? adv.valueSymbols.map(vs => ({
+        where: `${adv.field} = '${vs.value}'`,
+        label: vs.value||'(blank)',
+        symbol: symToEsri(vs.symbol),
+      })) : []),
+    ];
+    return {
+      type: rules.length ? 'rule-based' : 'simple',
+      ...(rules.length ? { field:adv.field, rules } : { symbol:symToEsri(adv.defaultSymbol) }),
+      defaultSymbol: symToEsri(adv.defaultSymbol),
+    };
+  }
+  if (s.type === 'simple') {
+    return {
+      type: 'simple',
+      symbol: {
+        type: 'simple-marker',
+        color: hexToRgba(s.simple.color, s.simple.opacity),
+        outline: { color: s.simple.outlineColor, width: 1 },
+        size: s.simple.size,
+        style: s.simple.shape,
+      }
+    };
+  } else if (s.type === 'uniqueValue') {
+    return {
+      type: 'unique-value',
+      field: s.field,
+      uniqueValueInfos: s.uniqueValues.map(uv => ({
+        value: uv.value,
+        label: uv.label || uv.value,
+        symbol: { type: 'simple-marker', color: hexToRgba(uv.color, 0.85), size: 8 }
+      }))
+    };
+  } else if (s.type === 'icon') {
+    return {
+      type: 'simple',
+      symbol: {
+        type: 'picture-marker',
+        url: `icons/${s.icon.iconset}/${s.icon.icon}`,
+        usericonPath: resolveUsericonPath(s.icon.iconset, s.icon.icon),
+        width: s.icon.size,
+        height: s.icon.size,
+        opacity: s.icon.opacity,
+      }
+    };
+  } else if (s.type === 'rulesBased') {
+    const rb = s.rulesBased;
+    const makeWhere = r => {
+      if (r.op === 'is empty')     return `${r.field} IS NULL OR ${r.field} = ''`;
+      if (r.op === 'is not empty') return `${r.field} IS NOT NULL AND ${r.field} <> ''`;
+      if (r.op === 'contains')     return `${r.field} LIKE '%${r.value}%'`;
+      if (r.op === 'starts with')  return `${r.field} LIKE '${r.value}%'`;
+      const esriOp = r.op === '≠' ? '<>' : r.op;
+      const isNum = !isNaN(Number(r.value)) && r.value !== '';
+      const val = isNum ? r.value : `'${r.value}'`;
+      return `${r.field} ${esriOp} ${val}`;
+    };
+    return {
+      type: 'rule-based',
+      rules: rb.rules.map(r => ({
+        where: makeWhere(r),
+        label: r.label || makeWhere(r),
+        symbol: { type: 'simple-marker', color: hexToRgba(r.color, r.opacity), size: r.size, style: r.shape },
+      })),
+      defaultSymbol: {
+        type: 'simple-marker',
+        color: hexToRgba(rb.defaultColor, rb.defaultOpacity),
+        size: rb.defaultSize,
+        style: rb.defaultShape,
+      },
+    };
+  } else {
+    return {
+      type: 'class-breaks',
+      field: s.field,
+      classBreakInfos: s.classBreaks.map(cb => ({
+        minValue: cb.min,
+        maxValue: cb.max,
+        label: cb.label || `${cb.min} – ${cb.max}`,
+        symbol: { type: 'simple-marker', color: hexToRgba(cb.color, 0.85), size: 8 }
+      }))
+    };
+  }
+}
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return [r, g, b, Math.round(alpha * 255)];
+}
+
+// ══════════════════════════════════════════
+//  Save / load saved datasets (admin page)
+// ══════════════════════════════════════════
+function updateSavedBadge() {
+  const el = document.getElementById('saved-name-badge');
+  if (!el) return;
+  if (state.savedDatasetName) {
+    el.textContent = '💾 ' + state.savedDatasetName;
+    el.style.display = 'inline-flex';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+function arrayBufferToBase64(buf) {
+  let binary = '';
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function saveDataset() {
+  if (!state.rows.length) { showToast('Load a dataset first'); return; }
+
+  const defaultName = state.savedDatasetName || state.cfg.layer.name || state.fileName || 'Untitled';
+  const input = prompt('Save as name:', defaultName);
+  if (input === null) return;
+  const name = input.trim() || defaultName;
+
+  const sourceType = state.featureLayerUrl ? 'url' : 'file';
+  const payload = {
+    id: state.savedDatasetId || undefined,
+    name,
+    source_type: sourceType,
+    source_url: state.featureLayerUrl || '',
+    file_name: state.rawFile ? state.rawFile.name : (state.fileName || ''),
+    state: { cfg: state.cfg, fields: state.fields },
+    // Plugin-ready Mode 3 JSON — TAK Portal serves this as-is for field-user
+    // downloads and the Open in ATAK deep link, no server-side rebuild needed.
+    exported_config: buildExportPayload(),
+  };
+
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true;
+  try {
+    if (sourceType === 'file') {
+      if (!state.rawFile) throw new Error('original file no longer available — reload it first');
+      const buf = await state.rawFile.arrayBuffer();
+      payload.file_content_b64 = arrayBufferToBase64(buf);
+    }
+
+    const resp = await fetch('/api/featurelink/datasets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || 'save failed');
+    const saved = await resp.json();
+    state.savedDatasetId = saved.id;
+    state.savedDatasetName = saved.name;
+    updateSavedBadge();
+    generateQR();
+    showToast('Saved! Find it under Saved Configs.');
+  } catch (e) {
+    showToast(`✗ Save failed: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadSavedDataset(id) {
+  try {
+    const resp = await fetch(`/api/featurelink/datasets/${encodeURIComponent(id)}`);
+    if (!resp.ok) throw new Error('saved dataset not found');
+    const rec = await resp.json();
+
+    state.savedDatasetId = rec.id;
+    state.savedDatasetName = rec.name;
+    updateSavedBadge();
+    state.pendingConfig = { _internal: true, cfg: (rec.state || {}).cfg || {} };
+
+    if (rec.source_type === 'url' && rec.source_url) {
+      document.getElementById('layer-url-input').value = rec.source_url;
+      await loadFromUrl();
+    } else {
+      const fileResp = await fetch(`/api/featurelink/datasets/${encodeURIComponent(id)}/file`);
+      if (!fileResp.ok) throw new Error('saved dataset file is missing');
+      const blob = await fileResp.blob();
+      const file = new File([blob], rec.file_name || (rec.name + '.csv'));
+      handleFile(file);
+    }
+  } catch (e) {
+    showToast(`Could not load saved dataset: ${e.message}`);
+  }
+}
+
+// ══════════════════════════════════════════
+//  Toast
+// ══════════════════════════════════════════
+let toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+// ══════════════════════════════════════════
+//  QR Code
+// ══════════════════════════════════════════
+const QR_BYTE_LIMIT = 2900;  // conservative QR binary capacity at error-correction L
+
+function buildQRPayload(mode) {
+  if (mode === 'link') {
+    if (!state.savedDatasetId) return buildQRPayload('compact');
+    return `${window.location.origin}/featurelink-configs/configurator?load=${encodeURIComponent(state.savedDatasetId)}`;
+  }
+
+  if (mode === 'urlcfg') {
+    if (!state.featureLayerUrl) return buildQRPayload('compact');
+    const s = state.cfg.symbology;
+    const compact = {
+      v: 2,
+      url: state.featureLayerUrl,
+      layer: { name: state.cfg.layer.name, opacity: state.cfg.layer.opacity, visible: state.cfg.layer.visible },
+      sym: (() => {
+        if (s.type === 'simple') return { t:'s', c:s.simple.color, oc:s.simple.outlineColor, sz:s.simple.size, sh:s.simple.shape, op:s.simple.opacity };
+        if (s.type === 'advanced') return {
+          t:'adv', f:s.advanced.field,
+          vs: s.advanced.valueSymbols.slice(0,20).map(v=>({ v:v.value, c:v.symbol.color, sh:v.symbol.shape, m:v.symbol.mode, is:v.symbol.iconset, ic:v.symbol.icon, up:resolveUsericonPath(v.symbol.iconset, v.symbol.icon) })),
+          r:  s.advanced.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.symbol.color, sh:r.symbol.shape, m:r.symbol.mode, is:r.symbol.iconset, ic:r.symbol.icon, up:resolveUsericonPath(r.symbol.iconset, r.symbol.icon) })),
+        };
+        if (s.type === 'icon') return { t:'ic', is:s.icon.iconset, ic:s.icon.icon, up:resolveUsericonPath(s.icon.iconset, s.icon.icon), sz:s.icon.size, op:s.icon.opacity };
+        if (s.type === 'rulesBased') return { t:'rb', rules:s.rulesBased.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.color, sh:r.shape })), dc:s.rulesBased.defaultColor };
+        if (s.type === 'uniqueValue') return { t:'uv', f:s.field, uv:s.uniqueValues.slice(0,30).map(u=>({ v:u.value, c:u.color })) };
+        return { t:'cb', f:s.field, cb:s.classBreaks.map(b=>({ mn:b.min, mx:b.max, c:b.color })) };
+      })(),
+      lbl: state.cfg.labels.enabled ? { f:state.cfg.labels.field, sz:state.cfg.labels.fontSize, c:state.cfg.labels.color, b:state.cfg.labels.bold, i:state.cfg.labels.italic } : null,
+      popup: { t: state.cfg.popup.title, flds: state.cfg.popup.fields.filter(f=>f.visible).map(f=>f.alias!==f.name?[f.name,f.alias]:f.name) },
+    };
+    return JSON.stringify(compact);
+  }
+
+  if (mode === 'compact') {
+    // Minimal payload: just the settings needed to re-apply display config
+    const s = state.cfg.symbology;
+    const compact = {
+      v: 1,
+      src: state.fileName,
+      layer: {
+        name: state.cfg.layer.name,
+        opacity: state.cfg.layer.opacity,
+        visible: state.cfg.layer.visible,
+      },
+      sym: (() => {
+        if (s.type === 'simple') return {
+          t: 's',
+          c: s.simple.color,
+          oc: s.simple.outlineColor,
+          sz: s.simple.size,
+          sh: s.simple.shape,
+          op: s.simple.opacity,
+        };
+        if (s.type === 'advanced') return {
+          t: 'adv', f: s.advanced.field,
+          vs: s.advanced.valueSymbols.slice(0,20).map(v=>({ v:v.value, c:v.symbol.color, sh:v.symbol.shape, m:v.symbol.mode, is:v.symbol.iconset, ic:v.symbol.icon, up:resolveUsericonPath(v.symbol.iconset, v.symbol.icon) })),
+          r: s.advanced.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.symbol.color, sh:r.symbol.shape, m:r.symbol.mode, is:r.symbol.iconset, ic:r.symbol.icon, up:resolveUsericonPath(r.symbol.iconset, r.symbol.icon) })),
+        };
+        if (s.type === 'icon') return {
+          t: 'ic', is: s.icon.iconset, ic: s.icon.icon, up: resolveUsericonPath(s.icon.iconset, s.icon.icon), sz: s.icon.size, op: s.icon.opacity,
+        };
+        if (s.type === 'rulesBased') return {
+          t: 'rb',
+          rules: s.rulesBased.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.color, sh:r.shape })),
+          dc: s.rulesBased.defaultColor,
+        };
+        if (s.type === 'uniqueValue') return {
+          t: 'uv',
+          f: s.field,
+          uv: s.uniqueValues.slice(0,30).map(u=>({ v: u.value, c: u.color })),
+        };
+        return {
+          t: 'cb',
+          f: s.field,
+          cb: s.classBreaks.map(b=>({ mn: b.min, mx: b.max, c: b.color })),
+        };
+      })(),
+      lbl: state.cfg.labels.enabled ? {
+        f: state.cfg.labels.field,
+        sz: state.cfg.labels.fontSize,
+        c: state.cfg.labels.color,
+        b: state.cfg.labels.bold,
+        i: state.cfg.labels.italic,
+      } : null,
+      popup: {
+        t: state.cfg.popup.title,
+        flds: state.cfg.popup.fields.filter(f=>f.visible).map(f=>f.alias !== f.name ? [f.name, f.alias] : f.name),
+      },
+    };
+    return JSON.stringify(compact);
+  } else {
+    // Full export config (same as exported JSON, minus raw row data)
+    const out = {
+      _v: '1.1',
+      _tool: 'FeatureLink Display Configurator',
+      _src: state.fileName || null,
+      featureLayerUrl: state.featureLayerUrl || null,
+      fields: state.fields.map(f=>({ n: f.name, t: f.type })),
+      layer: state.cfg.layer,
+      symbology: buildSymbologyExport(),
+      labels: state.cfg.labels,
+      popup: {
+        enabled: state.cfg.popup.enabled,
+        title: state.cfg.popup.title,
+        fields: state.cfg.popup.fields.filter(f=>f.visible).map(f=>({ f: f.name, a: f.alias })),
+        html: state.cfg.popup.html || null,
+      },
+    };
+    return JSON.stringify(out);
+  }
+}
+
+function toggleImportPanel() {
+  const panel = document.getElementById('import-panel');
+  panel.style.display = panel.style.display === 'none' ? '' : 'none';
+  document.getElementById('import-status').textContent = '';
+}
+
+async function importConfig() {
+  const raw = document.getElementById('import-text').value.trim();
+  const status = document.getElementById('import-status');
+  if (!raw) { status.textContent = 'Paste a payload first'; return; }
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { status.style.color = 'var(--danger)'; status.textContent = '✗ Invalid JSON'; return; }
+
+  // v:2 URL+Config — load the URL then auto-apply config
+  if (parsed.v === 2 && parsed.url) {
+    status.style.color = '';
+    status.textContent = 'Loading layer from URL…';
+    state.pendingConfig = parsed;
+    const urlInput = document.getElementById('layer-url-input');
+    urlInput.value = parsed.url;
+    // Show the URL zone in case data was already loaded from a file
+    const urlZone = document.getElementById('url-zone');
+    if (urlZone.style.display === 'none') {
+      // Already have data loaded — clear first so URL zone reappears
+      clearFile();
+      urlInput.value = parsed.url;
+    }
+    await loadFromUrl();
+    // loadFromUrl handles pendingConfig via processRows
+    status.style.color = 'var(--accent-green)';
+    status.textContent = '✓ Layer loaded and config applied';
+    return;
+  }
+
+  try {
+    if (!state.rows.length) throw new Error('Load a layer first, then apply config-only payloads');
+    applyConfigPayload(parsed);
+    status.style.color = 'var(--accent-green)';
+    status.textContent = '✓ Config applied';
+    renderAllTabs();
+    scheduleQRRefresh();
+  } catch(e) {
+    status.style.color = 'var(--danger)';
+    status.textContent = `✗ ${e.message}`;
+  }
+}
+
+function applyConfigPayload(p) {
+  // Compact QR payload (v:1 or v:2)
+  if (p.v === 1 || p.v === 2) {
+    if (p.layer) Object.assign(state.cfg.layer, p.layer);
+
+    const sym = p.sym || p.cfg?.sym;
+    if (sym) {
+      if (sym.t === 's') {
+        state.cfg.symbology.type = 'simple';
+        Object.assign(state.cfg.symbology.simple, { color: sym.c, outlineColor: sym.oc ?? '#ffffff', size: sym.sz ?? 8, shape: sym.sh ?? 'circle', opacity: sym.op ?? 0.85 });
+      } else if (sym.t === 'adv') {
+        state.cfg.symbology.type = 'advanced';
+        state.cfg.symbology.advanced.field = sym.f || '';
+        if (sym.vs) state.cfg.symbology.advanced.valueSymbols = sym.vs.map(v => ({
+          value: v.v, count: 0,
+          symbol: { mode: v.m || 'shape', color: v.c || '#888', shape: v.sh || 'circle', size: 8, opacity: 0.85, iconset: v.is || '', icon: v.ic || '' },
+        }));
+        if (sym.r) state.cfg.symbology.advanced.rules = sym.r.map(r => ({
+          field: r.f, op: r.o, value: r.v, label: r.l || '',
+          symbol: { mode: r.m || 'shape', color: r.c || '#0078d4', shape: r.sh || 'circle', size: 10, opacity: 0.85 },
+        }));
+      } else if (sym.t === 'ic') {
+        state.cfg.symbology.type = 'icon';
+        Object.assign(state.cfg.symbology.icon, { iconset: sym.is, icon: sym.ic, size: sym.sz ?? 24, opacity: sym.op ?? 1 });
+      } else if (sym.t === 'uv') {
+        state.cfg.symbology.type = 'uniqueValue';
+        state.cfg.symbology.field = sym.f;
+        if (sym.uv) state.cfg.symbology.uniqueValues = sym.uv.map(u => ({ value: u.v, color: u.c, label: u.v, count: 0 }));
+      } else if (sym.t === 'rb') {
+        state.cfg.symbology.type = 'rulesBased';
+        if (sym.rules) state.cfg.symbology.rulesBased.rules = sym.rules.map(r => ({ field: r.f, op: r.o, value: r.v, color: r.c, shape: r.sh || 'circle', size: 8, opacity: 0.85, label: '' }));
+        if (sym.dc) state.cfg.symbology.rulesBased.defaultColor = sym.dc;
+      }
+    }
+
+    const lbl = p.lbl || p.cfg?.lbl;
+    if (lbl) {
+      state.cfg.labels.enabled = true;
+      Object.assign(state.cfg.labels, { field: lbl.f, fontSize: lbl.sz ?? 12, color: lbl.c ?? '#ffffff', bold: lbl.b ?? false, italic: lbl.i ?? false });
+    }
+
+    const popup = p.popup || p.cfg?.popup;
+    if (popup?.t) state.cfg.popup.title = popup.t;
+    return;
+  }
+
+  // Full export JSON (_version or _v)
+  if (p._version || p._v) {
+    if (p.featureLayerUrl) state.featureLayerUrl = p.featureLayerUrl;
+    if (p.layer) Object.assign(state.cfg.layer, p.layer);
+    if (p.labels) Object.assign(state.cfg.labels, p.labels);
+    if (p.popup) {
+      state.cfg.popup.enabled = p.popup.enabled ?? true;
+      state.cfg.popup.title = p.popup.titleField || p.popup.title || '';
+      if (p.popup.customHtml !== undefined) state.cfg.popup.customHtml = p.popup.customHtml;
+      if (p.popup.htmlTemplate) state.cfg.popup.html = p.popup.htmlTemplate;
+    }
+    if (p.symbology) {
+      const s = p.symbology;
+      if (s.type === 'simple' && s.symbol?.type === 'simple-marker') {
+        state.cfg.symbology.type = 'simple';
+        const c = s.symbol.color;
+        if (Array.isArray(c)) {
+          const hex = '#' + c.slice(0,3).map(v=>v.toString(16).padStart(2,'0')).join('');
+          state.cfg.symbology.simple.color = hex;
+          state.cfg.symbology.simple.opacity = (c[3] ?? 255) / 255;
+        }
+        if (s.symbol.size) state.cfg.symbology.simple.size = s.symbol.size;
+        if (s.symbol.style) state.cfg.symbology.simple.shape = s.symbol.style;
+      } else if (s.type === 'rule-based') {
+        state.cfg.symbology.type = 'advanced';
+      } else if (s.type === 'unique-value') {
+        state.cfg.symbology.type = 'uniqueValue';
+        state.cfg.symbology.field = s.field;
+      } else if (s.type === 'class-breaks') {
+        state.cfg.symbology.type = 'classBreaks';
+        state.cfg.symbology.field = s.field;
+        if (s.classBreakInfos) state.cfg.symbology.classBreaks = s.classBreakInfos.map(cb => ({ min: cb.minValue, max: cb.maxValue, label: cb.label || '', color: '#0078d4' }));
+      }
+    }
+    return;
+  }
+
+  throw new Error('Unrecognised payload format (expected v:1/2 or _version field)');
+}
+
+function generateQR() {
+  if (!state.rows.length) return;
+
+  // Enable/disable URL+Config option based on whether data came from a URL
+  const urlOpt = document.getElementById('qr-mode-urlcfg');
+  if (urlOpt) {
+    urlOpt.disabled = !state.featureLayerUrl;
+    urlOpt.textContent = state.featureLayerUrl
+      ? 'URL + Config (load & apply) ✓'
+      : 'URL + Config (requires URL source)';
+  }
+  const linkOpt = document.getElementById('qr-mode-link');
+  if (linkOpt) {
+    linkOpt.disabled = !state.savedDatasetId;
+    linkOpt.textContent = state.savedDatasetId
+      ? 'Saved Dataset Link (scan to open) ✓'
+      : 'Saved Dataset Link (Save first)';
+  }
+
+  document.getElementById('qr-section').classList.remove('hidden');
+  const mode = document.getElementById('qr-mode').value;
+  const px   = parseInt(document.getElementById('qr-px').value, 10);
+  const payload = buildQRPayload(mode);
+  const bytes = new TextEncoder().encode(payload).length;
+  const wrap = document.getElementById('qr-canvas-wrap');
+  const meta = document.getElementById('qr-meta');
+
+  // Byte count pill
+  let sizeClass = bytes < 1500 ? 'ok' : bytes < QR_BYTE_LIMIT ? 'warn' : 'err';
+  let sizeLabel = bytes < 1500 ? '✓ Small payload' : bytes < QR_BYTE_LIMIT ? '⚠ Large payload' : '✗ Too large';
+  meta.innerHTML = `
+    <span class="qr-pill ${sizeClass}">${sizeLabel} — ${bytes.toLocaleString()} bytes</span>
+    <span class="qr-pill">${mode === 'compact' ? 'Compact mode' : 'Full mode'}</span>
+    <span class="qr-pill">${px}px</span>
+  `;
+
+  if (bytes > QR_BYTE_LIMIT) {
+    wrap.innerHTML = `<div class="qr-placeholder" style="color:#e57373">
+      ⚠ Payload too large for QR<br>
+      <span style="font-size:11px">(${bytes.toLocaleString()} bytes — switch to Compact mode<br>or reduce unique values)</span>
+    </div>`;
+    return;
+  }
+
+  wrap.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  wrap.appendChild(canvas);
+
+  QRCode.toCanvas(canvas, payload, {
+    width: px,
+    margin: 1,
+    errorCorrectionLevel: bytes < 1000 ? 'M' : 'L',
+    color: { dark: '#000000', light: '#ffffff' },
+  }, err => {
+    if (err) {
+      wrap.innerHTML = `<div class="qr-placeholder" style="color:#e57373">QR generation failed:<br>${err.message}</div>`;
+    }
+  });
+}
+
+function downloadQR() {
+  const canvas = document.querySelector('#qr-canvas-wrap canvas');
+  if (!canvas) { showToast('Generate QR first'); return; }
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = (state.cfg.layer.name || 'layer') + '_display_config_qr.png';
+  a.click();
+  showToast('QR image saved');
+}
+
+// Auto-regenerate QR after config changes (debounced)
+let qrDebounce;
+function scheduleQRRefresh() {
+  if (!state.rows.length) return;
+  clearTimeout(qrDebounce);
+  qrDebounce = setTimeout(generateQR, 600);
+}
+
+// Init empty tabs
+renderAllTabs();
+
+// If opened as /featurelink-configs/configurator?load=<id> (from the hub page, a
+// copied link, or a scanned "Saved Dataset Link" QR), load that dataset + its
+// saved config automatically.
+(function initFromQuery() {
+  const loadId = new URLSearchParams(window.location.search).get('load');
+  if (loadId) loadSavedDataset(loadId);
+})();
+</script>
+</body>
+</html>

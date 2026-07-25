@@ -2,22 +2,27 @@
 <%- include("partials/sidebar") %>
 
 <main class="main">
-  <h1>FeatureLink Configs</h1>
-  <p class="muted">
-    Prep display configs here for field users to browse and download. Users
-    connect via <a href="/featurelink">FeatureLink</a> under Onboarding.
-  </p>
+  <div class="row" style="justify-content: space-between; align-items: center;">
+    <div>
+      <h1 style="margin-bottom: 4px;">FeatureLink Configs</h1>
+      <p class="muted" style="margin: 0;">
+        Saved display configs for FeatureLayer exports — symbology, labels, popups, and QR
+        sharing for the FeatureLink ATAK plugin. Field users browse the finished configs at
+        <a href="/featurelink">FeatureLink</a> under Onboarding.
+      </p>
+    </div>
+    <a class="btn" href="/featurelink-configs/configurator">+ New Dataset Config</a>
+  </div>
 
-  <div class="card">
-    <h2 style="margin-top: 0;">Configs</h2>
+  <div class="card" style="margin-top: 16px;">
     <div id="configsMsg" class="msg"></div>
     <div id="configsLoading" class="muted">Loading...</div>
     <table id="configsTable" class="table" style="display: none;">
       <thead>
         <tr>
           <th>Name</th>
-          <th>Target</th>
           <th>Source</th>
+          <th>Fields</th>
           <th>Updated</th>
           <th></th>
         </tr>
@@ -25,231 +30,29 @@
       <tbody id="configsBody"></tbody>
     </table>
     <div id="configsEmpty" class="muted" style="display: none; margin-top: 16px;">
-      No configs yet — add one below.
+      No saved dataset configs yet. <a href="/featurelink-configs/configurator">Open the Display Configurator</a>
+      to upload a dataset, set up its display config, and click Save — it'll show up here.
     </div>
   </div>
-
-  <details class="card" open>
-    <summary class="fl-summary">Add Config</summary>
-    <div style="margin-top: 16px;">
-      <div class="row" style="align-items: flex-start;">
-        <div class="col" style="flex: 1; min-width: 240px;">
-          <label>Name
-            <input type="text" id="newName" placeholder="e.g. County Boundaries" />
-          </label>
-          <label>Description (optional)
-            <input type="text" id="newDescription" />
-          </label>
-          <label>Target
-            <select id="newTargetApp">
-              <option value="Both" selected>Both</option>
-              <option value="ATAK">ATAK</option>
-              <option value="WinTAK">WinTAK</option>
-            </select>
-          </label>
-        </div>
-        <div class="col" style="flex: 1; min-width: 240px;">
-          <label class="btn" style="justify-content: flex-start;">Choose File
-            <input type="file" id="newFile" style="display: none;" />
-          </label>
-          <span id="newFileName" class="muted" style="font-size: 12px;">No file chosen</span>
-          <p class="muted fl-or">— or —</p>
-          <label>ArcGIS FeatureLayer URL <span class="muted">(enables display styling below)</span>
-            <input type="url" id="newSourceUrl" placeholder="https://.../FeatureServer/0" />
-          </label>
-        </div>
-      </div>
-
-      <!-- Display Configurator — only meaningful for a FeatureLayer URL source -->
-      <div id="displayConfigurator" class="fl-configurator">
-        <h2>Display Styling</h2>
-        <p class="muted" style="margin-top: -6px;">
-          Applies when this config is opened in the FeatureLink plugin (download or Open in ATAK).
-          Leave everything below at its default to use the plugin's plain styling.
-        </p>
-
-        <div class="fl-subcard">
-          <h3>Layer</h3>
-          <div class="row" style="align-items: center;">
-            <label style="flex: 1; min-width: 200px;">Opacity
-              <span class="row" style="gap: 8px;">
-                <input type="range" id="symLayerOpacity" min="0" max="1" step="0.05" value="1" style="flex: 1;" />
-                <span class="fl-range-value" id="symLayerOpacityVal">100%</span>
-              </span>
-            </label>
-            <label class="fl-check"><input type="checkbox" id="symLayerVisible" checked /> Visible by default</label>
-          </div>
-        </div>
-
-        <div class="fl-subcard">
-          <h3>Symbology</h3>
-          <label style="max-width: 280px;">Type
-            <select id="symType">
-              <option value="s">Simple (one color/shape)</option>
-              <option value="uv">Unique Value (by field)</option>
-              <option value="rb">Rule-Based</option>
-              <option value="cb">Class Breaks (numeric ranges)</option>
-            </select>
-          </label>
-
-          <div id="symSimple" class="symSection">
-            <div class="row" style="margin-top: 12px; align-items: center;">
-              <label>Color <input type="color" id="symColor" value="#3388ff" /></label>
-              <label>Outline <input type="color" id="symOutlineColor" value="#000000" /></label>
-              <label>Size (px) <input type="number" id="symSize" value="12" min="1" style="width: 70px;" /></label>
-              <label>Shape
-                <select id="symShape">
-                  <option value="circle">Circle</option>
-                  <option value="square">Square</option>
-                  <option value="diamond">Diamond</option>
-                  <option value="triangle">Triangle</option>
-                  <option value="cross">Cross</option>
-                  <option value="x">X</option>
-                </select>
-              </label>
-              <label style="min-width: 140px;">Opacity
-                <span class="row" style="gap: 8px;">
-                  <input type="range" id="symOpacity" min="0" max="1" step="0.05" value="1" style="flex: 1;" />
-                  <span class="fl-range-value" id="symOpacityVal">100%</span>
-                </span>
-              </label>
-            </div>
-          </div>
-
-          <div id="symUv" class="symSection" style="display: none;">
-            <label style="margin-top: 12px; max-width: 280px;">Field name
-              <input type="text" id="symUvField" placeholder="e.g. STATUS" />
-            </label>
-            <div id="symUvRows" class="fl-dynlist"></div>
-            <button class="btn" type="button" id="symUvAddRow">+ Add Value</button>
-          </div>
-
-          <div id="symRb" class="symSection" style="display: none;">
-            <label style="margin-top: 12px; max-width: 280px;">Default color (no rule matches)
-              <input type="color" id="symRbDefaultColor" value="#3388ff" />
-            </label>
-            <div id="symRbRows" class="fl-dynlist"></div>
-            <button class="btn" type="button" id="symRbAddRow">+ Add Rule</button>
-          </div>
-
-          <div id="symCb" class="symSection" style="display: none;">
-            <label style="margin-top: 12px; max-width: 280px;">Field name (numeric)
-              <input type="text" id="symCbField" placeholder="e.g. POPULATION" />
-            </label>
-            <div id="symCbRows" class="fl-dynlist"></div>
-            <button class="btn" type="button" id="symCbAddRow">+ Add Break</button>
-          </div>
-        </div>
-
-        <div class="fl-subcard">
-          <h3>Labels</h3>
-          <label class="fl-check"><input type="checkbox" id="lblEnabled" /> Show labels</label>
-          <div class="row" id="lblFields" style="margin-top: 12px; align-items: center; opacity: 0.5;">
-            <label>Field <input type="text" id="lblField" style="width: 160px;" disabled /></label>
-            <label>Size (sp) <input type="number" id="lblSize" value="12" min="1" style="width: 70px;" disabled /></label>
-            <label>Color <input type="color" id="lblColor" value="#ffffff" disabled /></label>
-            <label class="fl-check"><input type="checkbox" id="lblBold" disabled /> Bold</label>
-            <label class="fl-check"><input type="checkbox" id="lblItalic" disabled /> Italic</label>
-          </div>
-        </div>
-
-        <div class="fl-subcard">
-          <h3>Popup</h3>
-          <label class="fl-check"><input type="checkbox" id="popupEnabled" /> Show popup fields as ATAK remarks</label>
-          <div id="popupFields" style="margin-top: 12px; opacity: 0.5;">
-            <label style="max-width: 280px;">Title field
-              <input type="text" id="popupTitleField" disabled />
-            </label>
-            <div id="popupRows" class="fl-dynlist" style="margin-top: 8px;"></div>
-            <button class="btn" type="button" id="popupAddRow" disabled>+ Add Field</button>
-          </div>
-        </div>
-      </div>
-
-      <button class="btn" type="button" id="addConfigBtn" style="margin-top: 16px;">Add Config</button>
-      <div id="addConfigMsg" class="msg"></div>
-    </div>
-  </details>
 </main>
 
-<style>
-  /* Native <details>/<summary> has no site styling — give it one that matches .card conventions */
-  .fl-summary {
-    cursor: pointer;
-    font-size: 16px;
-    color: var(--muted);
-    font-weight: 600;
-    list-style: none;
-  }
-  .fl-summary::-webkit-details-marker { display: none; }
-  .fl-summary::before { content: '▸ '; }
-  details[open] .fl-summary::before { content: '▾ '; }
+<div class="modalOverlay" id="qrModalOverlay" style="display: none;" onclick="if(event.target===this) closeQrModal()">
+  <div class="modal" style="width: 320px; max-width: 90vw; text-align: center;">
+    <div class="modalHeader">
+      <h2 id="qrModalName" style="margin: 0; font-size: 14px; word-break: break-word;"></h2>
+      <button class="btn" type="button" onclick="closeQrModal()">Close</button>
+    </div>
+    <div class="modalBody">
+      <div id="qrCanvasWrap" style="display: flex; justify-content: center; margin-bottom: 16px; min-height: 220px; align-items: center;"></div>
+      <div id="qrLinkText" class="muted" style="font-size: 11px; word-break: break-all; margin-bottom: 12px;"></div>
+      <button class="btn" type="button" onclick="copyQrLink()">Copy link</button>
+    </div>
+  </div>
+</div>
 
-  .fl-or { text-align: center; margin: 6px 0; }
-
-  .fl-configurator {
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--line);
-  }
-  .fl-configurator h2 { margin-bottom: 4px; }
-
-  /* Nested grouping inside Display Styling — a step darker/lighter than the outer .card */
-  .fl-subcard {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 14px;
-    margin-top: 14px;
-  }
-  .fl-subcard h3 {
-    margin: 0 0 10px;
-    font-size: 14px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  /* Checkbox + text on one line — the site's global `label{flex-direction:column}` stacks them
-     otherwise, same pattern as .groupItem elsewhere in the app. */
-  .fl-check {
-    flex-direction: row !important;
-    align-items: center;
-    gap: 8px !important;
-    cursor: pointer;
-  }
-  .fl-check input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    flex: 0 0 auto;
-    padding: 0;
-  }
-
-  .fl-range-value {
-    font-size: 12px;
-    color: var(--muted);
-    min-width: 3.5em;
-    text-align: right;
-  }
-
-  /* Dynamic rows (Unique Value / Rule-Based / Class Breaks / Popup fields) */
-  .fl-dynlist { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
-  .dynRow {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 8px 10px;
-  }
-  .dynRow label { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-  .dynRow input[type="text"],
-  .dynRow input[type="number"] { width: 110px; }
-  .dynRow .removeRowBtn { margin-left: auto; background: var(--danger); }
-</style>
-
+<!-- QR code generation. Pinned to 1.4.4 — same version Infra-TAK's hub uses (1.5.x's build/
+     isn't a standalone browser bundle). -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
 <script>
 (function () {
   const msgEl = document.getElementById('configsMsg');
@@ -264,194 +67,59 @@
     });
   }
 
-  // ---------------------------------------------------------------------
-  // Source type toggle: styling only makes sense for a FeatureLayer URL
-  // ---------------------------------------------------------------------
-  const newFile = document.getElementById('newFile');
-  const newFileName = document.getElementById('newFileName');
-  const newSourceUrl = document.getElementById('newSourceUrl');
-  const displayConfigurator = document.getElementById('displayConfigurator');
-
-  function syncConfiguratorVisibility() {
-    displayConfigurator.style.display = newSourceUrl.value.trim() ? '' : 'none';
+  function datasetLink(id) {
+    return window.location.origin + '/featurelink-configs/configurator?load=' + encodeURIComponent(id);
   }
-  newSourceUrl.addEventListener('input', syncConfiguratorVisibility);
-  newFile.addEventListener('change', function () {
-    newFileName.textContent = newFile.files.length ? newFile.files[0].name : 'No file chosen';
-    if (newFile.files.length) newSourceUrl.value = '';
-    syncConfiguratorVisibility();
-  });
-  syncConfiguratorVisibility();
 
-  // ---------------------------------------------------------------------
-  // Live range readouts
-  // ---------------------------------------------------------------------
-  function wireRange(rangeId, outId) {
-    const range = document.getElementById(rangeId);
-    const out = document.getElementById(outId);
-    const update = () => { out.textContent = Math.round(parseFloat(range.value) * 100) + '%'; };
-    range.addEventListener('input', update);
-    update();
-  }
-  wireRange('symLayerOpacity', 'symLayerOpacityVal');
-  wireRange('symOpacity', 'symOpacityVal');
-
-  // ---------------------------------------------------------------------
-  // Enable/disable Labels + Popup fields based on their checkboxes
-  // ---------------------------------------------------------------------
-  function wireEnableToggle(checkboxId, fieldsContainerId) {
-    const checkbox = document.getElementById(checkboxId);
-    const container = document.getElementById(fieldsContainerId);
-    const update = () => {
-      const on = checkbox.checked;
-      container.style.opacity = on ? '1' : '0.5';
-      container.querySelectorAll('input, select, button').forEach((el) => { el.disabled = !on; });
-    };
-    checkbox.addEventListener('change', update);
-    update();
-  }
-  wireEnableToggle('lblEnabled', 'lblFields');
-  wireEnableToggle('popupEnabled', 'popupFields');
-
-  // ---------------------------------------------------------------------
-  // Symbology type sections
-  // ---------------------------------------------------------------------
-  const symType = document.getElementById('symType');
-  const symSections = {
-    s: document.getElementById('symSimple'),
-    uv: document.getElementById('symUv'),
-    rb: document.getElementById('symRb'),
-    cb: document.getElementById('symCb'),
+  let qrLinkId = null;
+  window.showQr = function (id, name) {
+    qrLinkId = id;
+    document.getElementById('qrModalName').textContent = name || 'Saved Dataset Config';
+    document.getElementById('qrLinkText').textContent = datasetLink(id);
+    const wrap = document.getElementById('qrCanvasWrap');
+    wrap.innerHTML = '';
+    const canvas = document.createElement('canvas');
+    wrap.appendChild(canvas);
+    QRCode.toCanvas(canvas, datasetLink(id), { width: 220, margin: 1, errorCorrectionLevel: 'M' }, function (err) {
+      if (err) wrap.innerHTML = '<span class="muted">QR generation failed</span>';
+    });
+    document.getElementById('qrModalOverlay').style.display = 'flex';
   };
-  symType.addEventListener('change', function () {
-    Object.keys(symSections).forEach((k) => { symSections[k].style.display = (k === symType.value) ? '' : 'none'; });
-  });
+  window.closeQrModal = function () {
+    document.getElementById('qrModalOverlay').style.display = 'none';
+    qrLinkId = null;
+  };
+  window.copyQrLink = function () {
+    if (!qrLinkId) return;
+    navigator.clipboard.writeText(datasetLink(qrLinkId)).then(
+      () => { msgEl.textContent = 'Link copied.'; },
+      () => { msgEl.textContent = datasetLink(qrLinkId); }
+    );
+  };
+  window.copyLink = function (id) {
+    navigator.clipboard.writeText(datasetLink(id)).then(
+      () => { msgEl.textContent = 'Link copied.'; },
+      () => { msgEl.textContent = datasetLink(id); }
+    );
+  };
 
-  // ---------------------------------------------------------------------
-  // Dynamic row builders (Unique Value / Rule-Based / Class Breaks / Popup fields)
-  // ---------------------------------------------------------------------
-  function addRow(container, html) {
-    const div = document.createElement('div');
-    div.className = 'dynRow';
-    div.innerHTML = html + '<button type="button" class="btn removeRowBtn">Remove</button>';
-    div.querySelector('.removeRowBtn').addEventListener('click', () => div.remove());
-    container.appendChild(div);
-    return div;
-  }
-
-  document.getElementById('symUvAddRow').addEventListener('click', () => {
-    addRow(document.getElementById('symUvRows'),
-      '<label>Value <input type="text" class="uvValue" /></label>' +
-      '<label>Color <input type="color" class="uvColor" value="#3388ff" /></label>');
-  });
-
-  const RULE_OPS = ['=', '≠', 'contains', 'starts with', 'is empty', 'is not empty', '>', '<', '>=', '<='];
-  document.getElementById('symRbAddRow').addEventListener('click', () => {
-    const opsHtml = RULE_OPS.map((o) => '<option value="' + escapeHtml(o) + '">' + escapeHtml(o) + '</option>').join('');
-    addRow(document.getElementById('symRbRows'),
-      '<label>Field <input type="text" class="rbField" /></label>' +
-      '<label>Op <select class="rbOp">' + opsHtml + '</select></label>' +
-      '<label>Value <input type="text" class="rbValue" /></label>' +
-      '<label>Color <input type="color" class="rbColor" value="#3388ff" /></label>');
-  });
-
-  document.getElementById('symCbAddRow').addEventListener('click', () => {
-    addRow(document.getElementById('symCbRows'),
-      '<label>Min <input type="number" class="cbMin" /></label>' +
-      '<label>Max <input type="number" class="cbMax" /></label>' +
-      '<label>Color <input type="color" class="cbColor" value="#3388ff" /></label>');
-  });
-
-  document.getElementById('popupAddRow').addEventListener('click', () => {
-    addRow(document.getElementById('popupRows'),
-      '<label>Field <input type="text" class="popupField" /></label>' +
-      '<label>Alias <input type="text" class="popupAlias" /></label>');
-  });
-
-  // ---------------------------------------------------------------------
-  // Build the compact display JSON (matches DisplayConfig.fromJson in the plugin)
-  // ---------------------------------------------------------------------
-  function buildDisplayJson() {
-    const display = {
-      layer: {
-        opacity: parseFloat(document.getElementById('symLayerOpacity').value) || 1,
-        visible: document.getElementById('symLayerVisible').checked,
-      },
-    };
-
-    const type = symType.value;
-    if (type === 's') {
-      display.sym = {
-        t: 's',
-        c: document.getElementById('symColor').value,
-        oc: document.getElementById('symOutlineColor').value,
-        sz: parseInt(document.getElementById('symSize').value, 10) || 12,
-        sh: document.getElementById('symShape').value,
-        op: parseFloat(document.getElementById('symOpacity').value) || 1,
-      };
-    } else if (type === 'uv') {
-      const uv = Array.from(document.querySelectorAll('#symUvRows .dynRow')).map((row) => ({
-        v: row.querySelector('.uvValue').value,
-        c: row.querySelector('.uvColor').value,
-      })).filter((e) => e.v);
-      display.sym = { t: 'uv', f: document.getElementById('symUvField').value, uv, c: '#3388ff', op: 1 };
-    } else if (type === 'rb') {
-      const rules = Array.from(document.querySelectorAll('#symRbRows .dynRow')).map((row) => ({
-        f: row.querySelector('.rbField').value,
-        o: row.querySelector('.rbOp').value,
-        v: row.querySelector('.rbValue').value,
-        c: row.querySelector('.rbColor').value,
-      })).filter((r) => r.f);
-      display.sym = {
-        t: 'rb', rules,
-        dc: document.getElementById('symRbDefaultColor').value,
-        c: document.getElementById('symRbDefaultColor').value,
-        op: 1,
-      };
-    } else if (type === 'cb') {
-      const cb = Array.from(document.querySelectorAll('#symCbRows .dynRow')).map((row) => ({
-        mn: parseFloat(row.querySelector('.cbMin').value),
-        mx: parseFloat(row.querySelector('.cbMax').value),
-        c: row.querySelector('.cbColor').value,
-      })).filter((b) => !isNaN(b.mn) && !isNaN(b.mx));
-      display.sym = { t: 'cb', f: document.getElementById('symCbField').value, cb, c: '#3388ff', op: 1 };
-    }
-
-    if (document.getElementById('lblEnabled').checked) {
-      display.lbl = {
-        f: document.getElementById('lblField').value,
-        sz: parseInt(document.getElementById('lblSize').value, 10) || 12,
-        c: document.getElementById('lblColor').value,
-        b: document.getElementById('lblBold').checked,
-        i: document.getElementById('lblItalic').checked,
-      };
-    }
-
-    if (document.getElementById('popupEnabled').checked) {
-      const flds = Array.from(document.querySelectorAll('#popupRows .dynRow')).map((row) => {
-        const f = row.querySelector('.popupField').value;
-        const a = row.querySelector('.popupAlias').value || f;
-        return [f, a];
-      }).filter((pair) => pair[0]);
-      display.popup = { t: document.getElementById('popupTitleField').value, flds };
-    }
-
-    return display;
-  }
-
-  // ---------------------------------------------------------------------
-  // List / delete
-  // ---------------------------------------------------------------------
-  function renderRow(c) {
-    const source = c.sourceType === 'url' ? escapeHtml(c.sourceUrl) : escapeHtml(c.filename || '');
-    const styled = c.sourceType === 'url' && c.display ? ' <span class="muted">(styled)</span>' : '';
+  function renderRow(d) {
+    const source = d.source_type === 'url'
+      ? '<span class="muted">URL</span> <span style="word-break: break-all;">' + escapeHtml(d.source_url) + '</span>'
+      : '<span class="muted">File</span> ' + escapeHtml(d.file_name);
     const tr = document.createElement('tr');
     tr.innerHTML =
-      '<td>' + escapeHtml(c.name) + (c.description ? '<br><span class="muted">' + escapeHtml(c.description) + '</span>' : '') + '</td>' +
-      '<td>' + escapeHtml(c.targetApp) + '</td>' +
-      '<td style="word-break: break-all;">' + source + styled + '</td>' +
-      '<td>' + new Date(c.updatedAt).toLocaleString() + '</td>' +
-      '<td><button class="btn danger deleteBtn" data-id="' + c.id + '">Delete</button></td>';
+      '<td>' + escapeHtml(d.name) + '</td>' +
+      '<td>' + source + '</td>' +
+      '<td>' + d.field_count + '</td>' +
+      '<td>' + (d.updated_at ? new Date(d.updated_at).toLocaleString() : '') + '</td>' +
+      '<td>' +
+      '<div class="row" style="gap: 6px; justify-content: flex-end;">' +
+      '<a class="btn" href="/featurelink-configs/configurator?load=' + encodeURIComponent(d.id) + '">Open</a>' +
+      '<button class="btn" type="button" onclick="showQr(\'' + d.id + '\', ' + JSON.stringify(d.name) + ')">QR</button>' +
+      '<button class="btn" type="button" onclick="copyLink(\'' + d.id + '\')">Copy link</button>' +
+      '<button class="btn danger deleteBtn" data-id="' + d.id + '">Delete</button>' +
+      '</div></td>';
     return tr;
   }
 
@@ -459,25 +127,25 @@
     loadingEl.style.display = '';
     tableEl.style.display = 'none';
     emptyEl.style.display = 'none';
-    fetch('/api/featurelink/admin/configs', { credentials: 'same-origin' })
+    fetch('/api/featurelink/admin/datasets', { credentials: 'same-origin' })
       .then((r) => r.json())
       .then((d) => {
         loadingEl.style.display = 'none';
-        const configs = (d && d.configs) || [];
-        if (!configs.length) {
+        const datasets = (d && d.datasets) || [];
+        if (!datasets.length) {
           emptyEl.style.display = '';
           return;
         }
         bodyEl.innerHTML = '';
-        configs.forEach((c) => bodyEl.appendChild(renderRow(c)));
+        datasets.forEach((ds) => bodyEl.appendChild(renderRow(ds)));
         tableEl.style.display = '';
         bodyEl.querySelectorAll('.deleteBtn').forEach((btn) => {
           btn.addEventListener('click', function () {
-            if (!confirm('Delete this config?')) return;
-            fetch('/api/featurelink/admin/configs/' + btn.dataset.id, { method: 'DELETE', credentials: 'same-origin' })
+            if (!confirm('Delete this saved dataset config? This cannot be undone.')) return;
+            fetch('/api/featurelink/admin/datasets/' + btn.dataset.id, { method: 'DELETE', credentials: 'same-origin' })
               .then((r) => r.json())
               .then((dd) => {
-                if (dd && dd.success) loadConfigs();
+                if (dd && dd.ok) loadConfigs();
                 else msgEl.textContent = (dd && dd.error) || 'Delete failed.';
               });
           });
@@ -485,47 +153,6 @@
       })
       .catch(() => { loadingEl.style.display = 'none'; msgEl.textContent = 'Failed to load configs.'; });
   }
-
-  document.getElementById('addConfigBtn').addEventListener('click', function () {
-    const addMsg = document.getElementById('addConfigMsg');
-    const name = document.getElementById('newName').value.trim();
-    const description = document.getElementById('newDescription').value.trim();
-    const targetApp = document.getElementById('newTargetApp').value;
-    const file = newFile.files[0];
-    const sourceUrl = newSourceUrl.value.trim();
-
-    if (!name) { addMsg.textContent = 'Name is required.'; return; }
-    if (!file && !sourceUrl) { addMsg.textContent = 'Upload a file or provide a FeatureLayer URL.'; return; }
-
-    const form = new FormData();
-    form.append('name', name);
-    form.append('description', description);
-    form.append('targetApp', targetApp);
-    if (file) {
-      form.append('sourceType', 'file');
-      form.append('config', file);
-    } else {
-      form.append('sourceType', 'url');
-      form.append('sourceUrl', sourceUrl);
-      form.append('display', JSON.stringify(buildDisplayJson()));
-    }
-
-    addMsg.textContent = 'Adding...';
-    fetch('/api/featurelink/admin/configs', { method: 'POST', credentials: 'same-origin', body: form })
-      .then((r) => r.json())
-      .then((d) => {
-        if (!d || !d.success) { addMsg.textContent = (d && d.error) || 'Failed to add config.'; return; }
-        addMsg.textContent = 'Added.';
-        document.getElementById('newName').value = '';
-        document.getElementById('newDescription').value = '';
-        newFile.value = '';
-        newFileName.textContent = 'No file chosen';
-        newSourceUrl.value = '';
-        syncConfiguratorVisibility();
-        loadConfigs();
-      })
-      .catch(() => { addMsg.textContent = 'Failed to add config.'; });
-  });
 
   loadConfigs();
 })();

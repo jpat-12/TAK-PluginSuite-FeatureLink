@@ -70,14 +70,14 @@
   function renderCard(c) {
     const div = document.createElement('div');
     div.className = 'fl-card';
+    const actions = c.hasLiveLayer
+      ? '<button type="button" class="btn openAtakBtn" data-id="' + c.id + '">Open in ATAK</button>' +
+        '<a class="btn" href="/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download">Download</a>'
+      : '<span class="muted">No live FeatureLayer configured yet</span>';
     div.innerHTML =
       '<span class="fl-card-name">' + escapeHtml(c.name) + '</span>' +
-      (c.description ? '<span class="muted">' + escapeHtml(c.description) + '</span>' : '') +
-      '<span class="muted">Target: ' + escapeHtml(c.targetApp) + '</span>' +
-      '<div class="fl-card-actions">' +
-      (c.sourceType === 'url' ? '<button type="button" class="btn openAtakBtn" data-id="' + c.id + '">Open in ATAK</button>' : '') +
-      '<a class="btn" href="/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download">Download</a>' +
-      '</div>';
+      '<span class="muted">Updated ' + (c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—') + '</span>' +
+      '<div class="fl-card-actions">' + actions + '</div>';
     const openBtn = div.querySelector('.openAtakBtn');
     if (openBtn) openBtn.addEventListener('click', () => openInAtak(c.id, openBtn));
     return div;
