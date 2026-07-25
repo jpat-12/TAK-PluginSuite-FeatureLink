@@ -61,9 +61,10 @@ also what TAK Portal's `featurelinkDatasets.service.js` stores as
   "sym": { /* compact symbology — see below */ },
   "lbl": { /* compact labels, or omitted */ },
   "popup": { "t": "titleField", "flds": [["field","alias"], "plainField", ...] },
-  "cm": { "uf": "AssetID", "tf": "SymbolCode", "cf": "UnitName", "rf": "Notes" }
+  "cm": { "uf": ["AssetID"], "tf": ["SymbolCode","Type"], "cf": ["UnitName"], "rf": ["Notes"] }
   // "cm" (CoT field mapping) is entirely optional — omitted whenever every
-  // mapping is left on "(default)" in the CoT Mapping tab. See below.
+  // mapping is left on "(default)" in the CoT Mapping tab. Each key is a
+  // candidate-column array, not a single field — see below.
 }
 ```
 
@@ -87,7 +88,7 @@ it immediately — layer + styling in one shot, no picker.
 | `rules` / `r` | (type `rb` uses `rules`, `adv` uses `r`) `[{"f":field,"o":op,"v":value,"c":color,"sh":shape}, ...]`. `o` is one of `= ≠ contains "starts with" "is empty" "is not empty" > < >= <=` |
 | `dc` | (type `rb`) default color when no rule matches |
 | `cb` | (type `cb`) `[{"mn":min,"mx":max,"c":color}, ...]` |
-| `is`, `ic` | (type `ic`/`adv` icon entries) iconset name, icon filename |
+| `is`, `ic` | (type `ic`/`adv` icon entries) iconset name, icon filename. `is` may name a custom uploaded icon set (see "Custom icon sets" below), not just a bundled one — the plugin can't tell the difference from this field alone, only from whether `up` is present. |
 | `up` | Server-resolved `"<iconset-uid>/<group>/<filename>"` — the exact ATAK `IconsetPath` value, resolved by the configurator against `icons/manifest.json` (`resolveUsericonPath()` in `index.html`). Prefer this over `is`/`ic` — see `DisplayConfig.resolvedOrLegacy()`. |
 | `vs` | (type `adv`) per-value entries: `[{"v":value,"c":color,"sh":shape,"m":"shape"\|"icon","is":iconset,"ic":icon,"up":usericonPath}, ...]` |
 
@@ -109,13 +110,51 @@ column names off each downloaded feature:
 
 A FeatureLayer whose schema doesn't happen to use those exact names — a
 pre-existing agency layer you don't want to rename columns on — can map its
-own columns instead, via the configurator's **CoT Mapping** tab. Compact key
-names: `uf` (UID field), `tf` (type field), `cf` (callsign field), `rf`
-(remarks field). Any field left blank keeps that one part's default
-behavior — the mapping is per-part, not all-or-nothing. Only carried by Mode
-2 (`cm`) and Mode 3 (`cotMapping`, same four fields, spelled out:
-`uidField`/`typeField`/`callsignField`/`remarksField`) — Mode 1 has no `url`
-to redownload from, so field mapping doesn't apply.
+own columns instead, via the configurator's **CoT Mapping** tab. Each of the
+four parts (UID, CoT type, callsign, remarks) accepts **multiple** candidate
+columns via checkboxes, tried in the order checked — first non-blank value
+on a feature wins, and if none of the checked columns have a value (or none
+are checked) that part falls back to its default column/value from the table
+above. This is a fallback chain, not a merge — only one candidate's value is
+ever used per feature.
+
+Compact key names (Mode 2, `cm`): `uf` (UID fields), `tf` (type fields), `cf`
+(callsign fields), `rf` (remarks fields) — each an array, omitted entirely if
+empty. Mode 3 (`cotMapping`) spells the same four out as
+`uidFields`/`typeFields`/`callsignFields`/`remarksFields`, also arrays. Both
+are parsed by the same `DisplayConfig.CotMapping` class in
+`DisplayConfig.java` (`fromJson()` for `cm`, `fromJsonV3()` for `cotMapping`),
+whose `fieldList()` helper also accepts a bare string for backward
+compatibility with configs saved before multi-select existed. Mode 1 has no
+`url` to redownload from, so field mapping doesn't apply there.
+
+### Custom icon sets
+
+Uploaded via the Symbology tab's icon picker (Display Configurator only, not
+in Infra-TAK's copy), stored server-side by `featurelinkCustomIcons.service.js`
+at `data/featurelink-configs/custom-icons/<setName>/`, listed/served by
+`featurelinkCustomIcons.routes.js` at `/api/featurelink/admin/custom-icons`.
+They merge into the same `iconManifest.iconsets` array the bundled sets use
+(marked `custom: true`), so they show up in both the iconset dropdown and
+global icon search identically. `iconUrl()` in `index.html` routes a custom
+set's images to that API route instead of the bundled `ICONS_BASE` static
+path.
+
+**Known limitation:** custom sets have no ATAK iconset UID, so
+`resolveUsericonPath()` can't produce an `up` value for one — a config
+referencing a custom icon (`is`/`ic` only, no `up`) has nothing for
+`DisplayConfig.resolvedOrLegacy()` to resolve on the plugin side, and ATAK
+falls back to its default marker styling instead of rendering the uploaded
+image. Custom icons are fine for previewing/organizing in the configurator
+today; making them actually render as ATAK markers would need the plugin to
+fetch and cache arbitrary bitmaps by URL, which hasn't been built yet.
+
+When an icon symbol *is* resolvable (bundled set, `up` present), the marker's
+color is left white rather than tinted with the symbol's configured color —
+`FeatureLinkDropDownReceiver`'s CoT-application code only applies
+`resolveColor()`'s tint when no iconset path was set on the marker, so a
+picked icon always renders in its own native colors instead of behind a
+colored circle.
 
 ## Mode 3 — full export (`_version`/`_v`)
 
@@ -138,7 +177,7 @@ expect genuine Esri renderer objects.
   "symbology": { /* Esri renderer JSON — see below */ },
   "labels": { "enabled": true, "field": "...", "fontSize": 12, "color": "#fff", "haloColor": "#000", "haloSize": 1, "bold": false, "italic": false },
   "popup": { "enabled": true, "titleField": "...", "fields": [{"field":"...","alias":"..."}], "customHtml": false, "htmlTemplate": null },
-  "cotMapping": { "uidField": "", "typeField": "", "callsignField": "", "remarksField": "" }
+  "cotMapping": { "uidFields": [], "typeFields": [], "callsignFields": [], "remarksFields": [] }
 }
 ```
 

@@ -40,6 +40,19 @@ app.use("/api/featurelink/admin/datasets", requirePermission("page.featurelink_c
 app.use("/featurelink-configs/configurator", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigurator.routes"));
 app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));`, '');
 
+// Open-access variant (permission wrapper removed by a later install.sh run)
+src = src.replace(`
+app.use("/api/featurelink/admin/datasets", require("./routes/featurelinkDatasetsAdmin.routes"));
+app.use("/featurelink-configs/configurator", require("./routes/featurelinkConfigurator.routes"));
+app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));`, '');
+
+// Open-access variant + custom icon set routes (current state)
+src = src.replace(`
+app.use("/api/featurelink/admin/datasets", require("./routes/featurelinkDatasetsAdmin.routes"));
+app.use("/api/featurelink/admin/custom-icons", require("./routes/featurelinkCustomIcons.routes"));
+app.use("/featurelink-configs/configurator", require("./routes/featurelinkConfigurator.routes"));
+app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));`, '');
+
 src = src.replace(`app.get("/featurelink-configs", requirePermission("page.featurelink_configs"), (req, res) =>
   res.render("featurelink-configs")
 );
@@ -71,6 +84,19 @@ src = src.replace(`
   if (p.startsWith("/api/featurelink/configs")) return [];
   if (p === "/featurelink" || p.startsWith("/featurelink/")) return [];`, '');
 
+// Current (open-access + custom icon sets) state
+src = src.replace(`
+  if (p === "/featurelink-configs/configurator" || p.startsWith("/featurelink-configs/configurator/")) return [];
+  if (p === "/featurelink-configs" || p.startsWith("/featurelink-configs/")) return ["page.featurelink_configs"];
+  if (p.startsWith("/api/featurelink/admin/datasets") || p.startsWith("/api/featurelink/admin/custom-icons")) return [];`, '');
+
+// Open-access state, pre-custom-icon-sets
+src = src.replace(`
+  if (p === "/featurelink-configs/configurator" || p.startsWith("/featurelink-configs/configurator/")) return [];
+  if (p === "/featurelink-configs" || p.startsWith("/featurelink-configs/")) return ["page.featurelink_configs"];
+  if (p.startsWith("/api/featurelink/admin/datasets")) return [];`, '');
+
+// Older (fully permission-gated, pre-open-access) state, in case uninstall runs against that
 src = src.replace(`
   if (p === "/featurelink-configs" || p.startsWith("/featurelink-configs/")) return ["page.featurelink_configs"];
   if (p.startsWith("/api/featurelink/admin")) return ["page.featurelink_configs"];`, '');
@@ -84,16 +110,6 @@ const fs = require('fs');
 const path = process.argv[2];
 let src = fs.readFileSync(path, 'utf-8');
 
-const patched = `      const isAllowedNonAdminPath =
-        normalizedPath === "/setup-my-device" ||
-        normalizedPath.startsWith("/api/setup-my-device") ||
-        normalizedPath === "/api/mou/user-agreement/accept" ||
-        normalizedPath === "/api/mou/user-agreement/decline" ||
-        normalizedPath === "/plugins" ||
-        normalizedPath === "/featurelink" ||
-        normalizedPath.startsWith("/api/featurelink/configs") ||
-        isPluginDownloadApi;`;
-
 const original = `      const isAllowedNonAdminPath =
         normalizedPath === "/setup-my-device" ||
         normalizedPath.startsWith("/api/setup-my-device") ||
@@ -102,7 +118,44 @@ const original = `      const isAllowedNonAdminPath =
         normalizedPath === "/plugins" ||
         isPluginDownloadApi;`;
 
-src = src.replace(patched, original);
+// Current (fully open + custom icon sets) state
+src = src.replace(`      const isAllowedNonAdminPath =
+        normalizedPath === "/setup-my-device" ||
+        normalizedPath.startsWith("/api/setup-my-device") ||
+        normalizedPath === "/api/mou/user-agreement/accept" ||
+        normalizedPath === "/api/mou/user-agreement/decline" ||
+        normalizedPath === "/plugins" ||
+        normalizedPath === "/featurelink" ||
+        normalizedPath.startsWith("/api/featurelink/configs") ||
+        normalizedPath.startsWith("/featurelink-configs/configurator") ||
+        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||
+        normalizedPath.startsWith("/api/featurelink/admin/custom-icons") ||
+        isPluginDownloadApi;`, original);
+
+// Fully open state, pre-custom-icon-sets
+src = src.replace(`      const isAllowedNonAdminPath =
+        normalizedPath === "/setup-my-device" ||
+        normalizedPath.startsWith("/api/setup-my-device") ||
+        normalizedPath === "/api/mou/user-agreement/accept" ||
+        normalizedPath === "/api/mou/user-agreement/decline" ||
+        normalizedPath === "/plugins" ||
+        normalizedPath === "/featurelink" ||
+        normalizedPath.startsWith("/api/featurelink/configs") ||
+        normalizedPath.startsWith("/featurelink-configs/configurator") ||
+        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||
+        isPluginDownloadApi;`, original);
+
+// Older (pre-configurator-open-access) state, in case uninstall runs against that
+src = src.replace(`      const isAllowedNonAdminPath =
+        normalizedPath === "/setup-my-device" ||
+        normalizedPath.startsWith("/api/setup-my-device") ||
+        normalizedPath === "/api/mou/user-agreement/accept" ||
+        normalizedPath === "/api/mou/user-agreement/decline" ||
+        normalizedPath === "/plugins" ||
+        normalizedPath === "/featurelink" ||
+        normalizedPath.startsWith("/api/featurelink/configs") ||
+        isPluginDownloadApi;`, original);
+
 fs.writeFileSync(path, src, 'utf-8');
 console.log('    - removed /featurelink from isAllowedNonAdminPath');
 NODEEOF

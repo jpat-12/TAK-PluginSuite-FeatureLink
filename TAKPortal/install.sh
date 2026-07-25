@@ -72,8 +72,10 @@ rm -f "$PORTAL_DIR/services/featurelinkConfigs.service.js"
 
 cp -f "$SRC_DIR/routes/featurelinkDatasetsAdmin.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/routes/featurelinkConfigurator.routes.js" "$PORTAL_DIR/routes/"
+cp -f "$SRC_DIR/routes/featurelinkCustomIcons.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/routes/featurelinkBrowse.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/services/featurelinkDatasets.service.js" "$PORTAL_DIR/services/"
+cp -f "$SRC_DIR/services/featurelinkCustomIcons.service.js" "$PORTAL_DIR/services/"
 cp -f "$SRC_DIR/views/featurelink-configs.ejs" "$PORTAL_DIR/views/"
 cp -f "$SRC_DIR/views/featurelink.ejs" "$PORTAL_DIR/views/"
 
@@ -147,13 +149,51 @@ if (!src.includes(PAGE_MARKER)) {
     process.exit(1);
   }
   const block = `
+  if (p === "/featurelink-configs/configurator" || p.startsWith("/featurelink-configs/configurator/")) return [];
   if (p === "/featurelink-configs" || p.startsWith("/featurelink-configs/")) return ["page.featurelink_configs"];
-  if (p.startsWith("/api/featurelink/admin")) return ["page.featurelink_configs"];`;
+  if (p.startsWith("/api/featurelink/admin/datasets") || p.startsWith("/api/featurelink/admin/custom-icons")) return [];`;
   src = src.replace(anchor, anchor + block);
   changed = true;
   console.log('    + added admin page/API route mapping');
 } else {
   console.log('    = admin page/API route mapping already present');
+}
+
+// Open access migration: anyone can create/edit their own configs — the configurator
+// and its dataset API no longer require page.featurelink_configs (ownership is now
+// enforced per-record inside featurelinkDatasetsAdmin.routes.js instead). The
+// Administration hub page (/featurelink-configs exactly) stays admin-only above.
+const OPEN_MARKER = 'featurelink-configs/configurator" || p.startsWith("/featurelink-configs/configurator/")) return [];';
+if (!src.includes(OPEN_MARKER)) {
+  const oldAdminLine = '  if (p.startsWith("/api/featurelink/admin")) return ["page.featurelink_configs"];';
+  if (src.includes(oldAdminLine)) {
+    src = src.replace(oldAdminLine, '  if (p.startsWith("/api/featurelink/admin/datasets") || p.startsWith("/api/featurelink/admin/custom-icons")) return [];');
+  }
+  const featurelinkConfigsRule = '  if (p === "/featurelink-configs" || p.startsWith("/featurelink-configs/")) return ["page.featurelink_configs"];';
+  if (src.includes(featurelinkConfigsRule)) {
+    const configuratorCarveout = '  if (p === "/featurelink-configs/configurator" || p.startsWith("/featurelink-configs/configurator/")) return [];\n';
+    src = src.replace(featurelinkConfigsRule, configuratorCarveout + featurelinkConfigsRule);
+  }
+  changed = true;
+  console.log('    + opened /api/featurelink/admin/datasets and /featurelink-configs/configurator to any logged-in user');
+} else {
+  console.log('    = open-access carve-outs already present');
+}
+
+// Independent of the two migrations above: add the custom-icons carve-out even if this
+// file was already fully migrated to the open-access state by an earlier install.sh run
+// (before custom icon sets existed) — those two blocks' own guard markers would already
+// be satisfied and skip entirely otherwise.
+const CUSTOM_ICONS_CARVEOUT_MARKER = '/api/featurelink/admin/custom-icons';
+if (!src.includes(CUSTOM_ICONS_CARVEOUT_MARKER)) {
+  const datasetsLine = '  if (p.startsWith("/api/featurelink/admin/datasets")) return [];';
+  if (src.includes(datasetsLine)) {
+    src = src.replace(datasetsLine, '  if (p.startsWith("/api/featurelink/admin/datasets") || p.startsWith("/api/featurelink/admin/custom-icons")) return [];');
+    changed = true;
+    console.log('    + added custom icon set carve-out');
+  }
+} else {
+  console.log('    = custom icon set carve-out already present');
 }
 
 if (changed) fs.writeFileSync(path, src, 'utf-8');
@@ -189,12 +229,51 @@ if (!src.includes(MARKER)) {
         normalizedPath === "/plugins" ||
         normalizedPath === "/featurelink" ||
         normalizedPath.startsWith("/api/featurelink/configs") ||
+        normalizedPath.startsWith("/featurelink-configs/configurator") ||
+        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||
+        normalizedPath.startsWith("/api/featurelink/admin/custom-icons") ||
         isPluginDownloadApi;`;
   src = src.replace(anchor, replacement);
   changed = true;
-  console.log('    + added /featurelink to isAllowedNonAdminPath');
+  console.log('    + added /featurelink, the configurator, and its dataset API to isAllowedNonAdminPath');
 } else {
   console.log('    = /featurelink already in isAllowedNonAdminPath');
+}
+
+// Migration: an earlier version of this patch only added /featurelink + /api/featurelink/configs —
+// add the configurator + dataset-API paths too if they're missing from an already-migrated file.
+const CONFIGURATOR_MARKER = 'featurelink-configs/configurator")';
+if (src.includes(MARKER) && !src.includes(CONFIGURATOR_MARKER)) {
+  const oldTail = `        normalizedPath === "/featurelink" ||
+        normalizedPath.startsWith("/api/featurelink/configs") ||
+        isPluginDownloadApi;`;
+  if (src.includes(oldTail)) {
+    src = src.replace(oldTail, `        normalizedPath === "/featurelink" ||
+        normalizedPath.startsWith("/api/featurelink/configs") ||
+        normalizedPath.startsWith("/featurelink-configs/configurator") ||
+        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||
+        normalizedPath.startsWith("/api/featurelink/admin/custom-icons") ||
+        isPluginDownloadApi;`);
+    changed = true;
+    console.log('    + added the configurator + dataset-API paths to an already-migrated isAllowedNonAdminPath');
+  }
+} else if (src.includes(CONFIGURATOR_MARKER)) {
+  console.log('    = configurator + dataset-API paths already in isAllowedNonAdminPath');
+}
+
+// Independent of the above: add custom-icons even if this file already has the
+// configurator + dataset-API paths from an earlier install.sh run (before custom icon
+// sets existed) — both blocks above would already consider themselves done otherwise.
+const CUSTOM_ICONS_MARKER = 'admin/custom-icons")';
+if (!src.includes(CUSTOM_ICONS_MARKER)) {
+  const datasetsLine = '        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||';
+  if (src.includes(datasetsLine)) {
+    src = src.replace(datasetsLine, datasetsLine + '\n        normalizedPath.startsWith("/api/featurelink/admin/custom-icons") ||');
+    changed = true;
+    console.log('    + added custom icon set path to isAllowedNonAdminPath');
+  }
+} else {
+  console.log('    = custom icon set path already in isAllowedNonAdminPath');
 }
 
 if (changed) fs.writeFileSync(path, src, 'utf-8');
@@ -228,14 +307,44 @@ if (!src.includes(ROUTES_MARKER)) {
     process.exit(1);
   }
   const block = `
-app.use("/api/featurelink/admin/datasets", requirePermission("page.featurelink_configs"), require("./routes/featurelinkDatasetsAdmin.routes"));
-app.use("/featurelink-configs/configurator", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigurator.routes"));
+app.use("/api/featurelink/admin/datasets", require("./routes/featurelinkDatasetsAdmin.routes"));
+app.use("/api/featurelink/admin/custom-icons", require("./routes/featurelinkCustomIcons.routes"));
+app.use("/featurelink-configs/configurator", require("./routes/featurelinkConfigurator.routes"));
 app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));`;
   src = src.replace(anchor, anchor + block);
   changed = true;
   console.log('    + mounted FeatureLink Configs routes');
 } else {
   console.log('    = routes already mounted');
+}
+
+// Open access migration: an earlier version of this patch gated both mounts behind
+// requirePermission("page.featurelink_configs") — any logged-in user can now reach them
+// (ownership of individual configs is enforced inside featurelinkDatasetsAdmin.routes.js).
+// Runs BEFORE the custom-icons mount check below so that check's anchor search always
+// sees the current (unwrapped) mount form within a single pass, even on a first run
+// against an old, permission-gated install.
+const OLD_DATASETS_MOUNT = 'app.use("/api/featurelink/admin/datasets", requirePermission("page.featurelink_configs"), require("./routes/featurelinkDatasetsAdmin.routes"));';
+const OLD_CONFIGURATOR_MOUNT = 'app.use("/featurelink-configs/configurator", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigurator.routes"));';
+if (src.includes(OLD_DATASETS_MOUNT) || src.includes(OLD_CONFIGURATOR_MOUNT)) {
+  src = src.replace(OLD_DATASETS_MOUNT, 'app.use("/api/featurelink/admin/datasets", require("./routes/featurelinkDatasetsAdmin.routes"));');
+  src = src.replace(OLD_CONFIGURATOR_MOUNT, 'app.use("/featurelink-configs/configurator", require("./routes/featurelinkConfigurator.routes"));');
+  changed = true;
+  console.log('    + opened the dataset API + configurator mounts to any logged-in user');
+} else {
+  console.log('    = dataset API + configurator mounts already open');
+}
+
+const CUSTOM_ICONS_MOUNT_MARKER = 'featurelinkCustomIcons.routes';
+if (!src.includes(CUSTOM_ICONS_MOUNT_MARKER)) {
+  const anchor = 'app.use("/api/featurelink/admin/datasets", require("./routes/featurelinkDatasetsAdmin.routes"));';
+  if (src.includes(anchor)) {
+    src = src.replace(anchor, anchor + '\napp.use("/api/featurelink/admin/custom-icons", require("./routes/featurelinkCustomIcons.routes"));');
+    changed = true;
+    console.log('    + mounted custom icon set routes');
+  }
+} else {
+  console.log('    = custom icon set routes already mounted');
 }
 
 const PAGE_MARKER = 'app.get("/featurelink-configs"';

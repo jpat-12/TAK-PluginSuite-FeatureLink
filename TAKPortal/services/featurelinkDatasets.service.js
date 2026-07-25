@@ -59,12 +59,19 @@ function listDatasets() {
       file_name: record.file_name || "",
       field_count: ((record.state || {}).fields || []).length,
       has_export: !!record.exported_config,
+      created_by: record.created_by || null,
       created_at: record.created_at || "",
       updated_at: record.updated_at || "",
     });
   }
   out.sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
   return out;
+}
+
+/** True if `username` created this record, or the record predates ownership tracking
+ * (created_by unset) — treated as unowned/editable-by-anyone rather than locked out. */
+function isOwnedBy(record, username) {
+  return !record.created_by || record.created_by === username;
 }
 
 function loadDataset(id) {
@@ -83,8 +90,10 @@ function loadDataset(id) {
 
 /**
  * payload: { id?, name, source_type, source_url, file_name, state, exported_config?, file_content_b64? }
+ * actorUsername: the caller's identity (server-determined — never trust a client-supplied
+ * "created_by"), recorded as owner on first create only; preserved as-is on update.
  */
-function saveDataset(payload) {
+function saveDataset(payload, actorUsername) {
   const id = cleanId(payload.id) || crypto.randomUUID().replace(/-/g, "");
   const dir = datasetDir(id);
   fs.mkdirSync(dir, { recursive: true });
@@ -100,6 +109,7 @@ function saveDataset(payload) {
     file_name: String(payload.file_name || "").trim(),
     state: payload.state || {},
     exported_config: payload.exported_config || existing.exported_config || null,
+    created_by: existing.created_by || actorUsername || null,
     created_at: existing.created_at || now,
     updated_at: now,
   };
@@ -140,4 +150,5 @@ module.exports = {
   saveDataset,
   deleteDataset,
   getDatasetFilePath,
+  isOwnedBy,
 };

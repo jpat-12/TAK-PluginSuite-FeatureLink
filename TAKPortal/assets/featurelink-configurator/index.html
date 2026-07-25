@@ -114,7 +114,13 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      position: relative;
+      flex-shrink: 0;
     }
+    .panel-left.collapsed { width: 36px !important; min-width: 36px; }
+    .panel-left.collapsed .panel-scroll,
+    .panel-left.collapsed .panel-header-label,
+    .panel-left.collapsed .panel-header .count { display: none; }
 
     /* ── Center: preview table ── */
     .panel-center {
@@ -122,6 +128,7 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      min-width: 200px;
     }
 
     /* ── Right panel: style config ── */
@@ -132,7 +139,39 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      position: relative;
+      flex-shrink: 0;
     }
+    .panel-right.collapsed { width: 36px !important; min-width: 36px; }
+    .panel-right.collapsed .style-tabs, .panel-right.collapsed .panel-scroll, .panel-right.collapsed .panel-header-label { display: none; }
+
+    /* ── Drag-to-resize handles ── */
+    .panel-resizer {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 6px;
+      cursor: col-resize;
+      z-index: 20;
+      background: transparent;
+    }
+    .panel-resizer:hover, .panel-resizer.dragging { background: var(--accent); opacity: .5; }
+    .panel-left .panel-resizer { right: -3px; }
+    .panel-right .panel-resizer { left: -3px; }
+    .panel-left.collapsed .panel-resizer, .panel-right.collapsed .panel-resizer { display: none; }
+
+    .panel-toggle-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 2px 4px;
+      line-height: 1;
+    }
+    .panel-toggle-btn:hover { color: var(--text); }
+    .panel-header { position: relative; }
+    .panel-header-label { flex: 1; }
 
     /* ── Panel headers ── */
     .panel-header {
@@ -610,6 +649,12 @@
     .sym-ed-done { margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;line-height:1; }
     .sym-ed-done:hover { color:var(--text); }
     .sym-ed-icon-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(36px,1fr));gap:2px;max-height:160px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:3px;margin-top:6px; }
+    .cot-map-checklist { max-height:160px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px;margin-top:6px; }
+    .cot-map-row { display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:3px;cursor:pointer;font-size:13px; }
+    .cot-map-row:hover { background:rgba(255,255,255,.04); }
+    .cot-map-row input { flex:0 0 auto; }
+    .cot-map-row span:nth-child(2) { flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+    .cot-map-order { flex:0 0 auto;color:var(--accent);font-weight:600;font-size:11px;min-width:14px;text-align:right; }
     .sym-ed-icon-thumb { width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:3px;border:2px solid transparent;cursor:pointer;transition:border-color .1s; }
     .sym-ed-icon-thumb:hover { border-color:var(--border); }
     .sym-ed-icon-thumb.selected { border-color:var(--accent);background:rgba(0,120,212,.15); }
@@ -736,10 +781,19 @@
     .url-zone .url-row {
       display: flex;
       gap: 6px;
+      align-items: flex-start;
     }
-    .url-zone .url-row input {
+    .url-zone .url-row textarea {
       flex: 1;
       font-size: 12px;
+      font-family: inherit;
+      resize: none;
+      overflow: hidden;
+      min-height: 32px;
+      max-height: 200px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
     .url-zone .url-row button {
       background: var(--accent);
@@ -799,11 +853,13 @@
 <div class="workspace">
 
   <!-- LEFT: Upload + Fields -->
-  <div class="panel-left">
+  <div class="panel-left" id="panel-left">
     <div class="panel-header">
-      📁 Data Source
+      <span class="panel-header-label">📁 Data Source</span>
       <span class="count" id="field-count">0 fields</span>
+      <button class="panel-toggle-btn" onclick="togglePanel('left')" title="Collapse/expand">⟨⟩</button>
     </div>
+    <div class="panel-resizer" id="panel-left-resizer"></div>
     <div class="panel-scroll">
 
       <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
@@ -816,7 +872,7 @@
       <div class="url-zone" id="url-zone">
         <div class="or-label">Or paste a FeatureLayer URL</div>
         <div class="url-row">
-          <input type="text" id="layer-url-input" placeholder="https://…/FeatureServer/0" />
+          <textarea id="layer-url-input" rows="1" placeholder="https://…/FeatureServer/0" oninput="autoGrowUrlInput(this)"></textarea>
           <button id="url-load-btn" onclick="loadFromUrl()">Load</button>
         </div>
         <div id="url-status"></div>
@@ -846,8 +902,12 @@
   </div>
 
   <!-- RIGHT: Style Config -->
-  <div class="panel-right">
-    <div class="panel-header">🎨 Display Configuration</div>
+  <div class="panel-right" id="panel-right">
+    <div class="panel-header">
+      <span class="panel-header-label">🎨 Display Configuration</span>
+      <button class="panel-toggle-btn" onclick="togglePanel('right')" title="Collapse/expand">⟨⟩</button>
+    </div>
+    <div class="panel-resizer" id="panel-right-resizer"></div>
     <div class="style-tabs">
       <button class="active" onclick="switchTab('symbology')">Symbols</button>
       <button onclick="switchTab('labels')">Labels</button>
@@ -936,6 +996,7 @@
 // "icons/..." path resolves differently in each case. Anchoring to an
 // absolute path sidesteps that entirely.
 const ICONS_BASE = '/featurelink-configs/configurator/icons/';
+const CUSTOM_ICONS_BASE = '/api/featurelink/admin/custom-icons/';
 
 let state = {
   fileName: null,
@@ -995,13 +1056,14 @@ let state = {
       maxScale: 0,
       visible: true,
     },
-    // Which dataset column feeds each CoT part — blank means "use the plugin's
-    // default column name for that part" (see cotMapping.md for the full contract).
+    // Which dataset column(s) feed each CoT part — a candidate list tried in order,
+    // first non-empty value wins; empty array means "use the plugin's default column
+    // name for that part" (see CONFIG-FORMAT.md for the full contract).
     cotMapping: {
-      uidField: '',
-      typeField: '',
-      callsignField: '',
-      remarksField: '',
+      uidFields: [],
+      typeFields: [],
+      callsignFields: [],
+      remarksFields: [],
     }
   }
 };
@@ -1035,9 +1097,22 @@ function resolveUsericonPath(iconsetName, iconFile) {
   return `${is.uid}/${group}/${iconFile}`;
 }
 
+/** Image src for an (iconset, filename) pair — custom uploaded sets are served from a different route. */
+function iconUrl(iconsetName, iconFile) {
+  const is = iconManifest && iconManifest.iconsets.find(x => x.name === iconsetName);
+  const base = is && is.custom ? CUSTOM_ICONS_BASE : ICONS_BASE;
+  return `${base}${encodeURIComponent(iconsetName)}/${encodeURIComponent(iconFile)}`;
+}
+
 // ══════════════════════════════════════════
 //  FeatureLayer URL loading
 // ══════════════════════════════════════════
+/** Grows the URL textarea to fit its content (up to the CSS max-height, which scrolls beyond that). */
+function autoGrowUrlInput(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
+
 async function loadFromUrl() {
   const input  = document.getElementById('layer-url-input');
   const btn    = document.getElementById('url-load-btn');
@@ -1048,6 +1123,14 @@ async function loadFromUrl() {
 
   // Normalise: strip trailing slash and any accidental /query suffix
   let baseUrl = rawUrl.replace(/\/+$/, '').replace(/\/query(\?.*)?$/i, '');
+
+  // A FeatureServer URL with no layer index (e.g. ends in .../FeatureServer, not
+  // .../FeatureServer/0) is a service root, not a queryable layer — default to layer 0.
+  if (!/\/\d+$/.test(baseUrl)) {
+    baseUrl += '/0';
+    input.value = baseUrl;
+    autoGrowUrlInput(input);
+  }
 
   btn.disabled = true;
   status.style.color = '';
@@ -1526,15 +1609,30 @@ function renderSymbologyTab() {
       : '';
     rendererSection = `
       <div class="cfg-section">
-        <div class="cfg-label">Iconset</div>
+        <div class="cfg-label">Search Icons <span style="font-weight:400;color:var(--text-muted)">(searches every iconset)</span></div>
+        <input type="text" id="icon-search-input" value="${iconSearchTerm.replace(/"/g,'&quot;')}" placeholder="Search all iconsets…" oninput="iconSearchTerm=this.value;renderIconGrid()" style="margin-bottom:8px" />
+      </div>
+      <div class="cfg-section">
+        <div class="cfg-label">Iconset ${iconSearchTerm ? '<span style="font-weight:400;color:var(--text-muted)">(ignored while searching)</span>' : ''}</div>
         <select onchange="setIconset(this.value)">
           <option value="">— Choose iconset —</option>${setOpts}
         </select>
       </div>
-      ${s.icon.iconset ? `
+      <div class="cfg-section">
+        <div class="cfg-label">Custom Icon Sets</div>
+        ${customIconSetsListHtml()}
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <input type="text" id="custom-icon-set-name" placeholder="Set name" style="flex:1;min-width:120px" />
+          <input type="file" id="custom-icon-set-files" accept="image/png,image/*" multiple style="flex:2;min-width:160px" />
+          <button class="btn-sm" onclick="uploadCustomIconSet()">Upload</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+          Uploaded icons preview here and in search, but ATAK doesn't yet render arbitrary custom images as map markers —
+          selecting one falls back to the plugin's default marker styling until that's supported.
+        </div>
+      </div>
+      ${(s.icon.iconset || iconSearchTerm) ? `
         <div class="cfg-section">
-          <div class="cfg-label">Search Icons</div>
-          <input type="text" id="icon-search-input" value="${iconSearchTerm.replace(/"/g,'&quot;')}" placeholder="Filter by name…" oninput="iconSearchTerm=this.value;renderIconGrid()" style="margin-bottom:8px" />
           <div id="icon-grid-container"></div>
         </div>
       ` : ''}
@@ -1542,7 +1640,7 @@ function renderSymbologyTab() {
         <div class="cfg-section">
           <div class="cfg-label">Selected Icon</div>
           <div class="icon-selected-chip">
-            <img src="${ICONS_BASE}${encodeURIComponent(s.icon.iconset)}/${encodeURIComponent(s.icon.icon)}" />
+            <img src="${iconUrl(s.icon.iconset, s.icon.icon)}" />
             <span>${s.icon.icon.replace(/\.png$/i,'')}</span>
           </div>
           <div class="cfg-label">Size</div>
@@ -1790,31 +1888,119 @@ async function loadManifest() {
     const r = await fetch(ICONS_BASE + 'manifest.json');
     iconManifest = await r.json();
   } catch(e) { console.warn('Icon manifest unavailable:', e); }
+  await refreshCustomIconsets();
+}
+
+/**
+ * Re-fetches uploaded custom icon sets and merges them into iconManifest.iconsets,
+ * replacing any previous custom entries (marked with `custom: true`). Called on load
+ * and again after an upload/delete so the picker reflects the current set without a
+ * full page reload. Custom sets have no ATAK iconset uid — see
+ * featurelinkCustomIcons.service.js's KNOWN LIMITATION doc comment.
+ */
+async function refreshCustomIconsets() {
+  if (!iconManifest) return;
+  try {
+    const r = await fetch(CUSTOM_ICONS_BASE);
+    const data = await r.json();
+    const customSets = (data.ok && data.iconsets ? data.iconsets : [])
+      .map(s => ({ name: s.name, icons: s.icons, custom: true, created_by: s.created_by }));
+    iconManifest.iconsets = iconManifest.iconsets.filter(is => !is.custom).concat(customSets);
+  } catch (e) { console.warn('Custom icon sets unavailable:', e); }
+}
+
+async function uploadCustomIconSet() {
+  const nameInput = document.getElementById('custom-icon-set-name');
+  const fileInput = document.getElementById('custom-icon-set-files');
+  const name = nameInput && nameInput.value.trim();
+  const files = fileInput && fileInput.files;
+  if (!name) { alert('Enter a name for the icon set.'); return; }
+  if (!files || !files.length) { alert('Choose at least one icon image.'); return; }
+
+  const fd = new FormData();
+  fd.append('name', name);
+  for (const f of files) fd.append('icons', f);
+
+  try {
+    const r = await fetch(CUSTOM_ICONS_BASE, { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!data.ok) { alert('Upload failed: ' + (data.error || 'unknown error')); return; }
+    if (nameInput) nameInput.value = '';
+    if (fileInput) fileInput.value = '';
+    await refreshCustomIconsets();
+    renderSymbologyTab();
+  } catch (e) { alert('Upload failed: ' + e.message); }
+}
+
+async function deleteCustomIconSetUI(name) {
+  if (!confirm(`Delete custom icon set "${name}"? This removes its uploaded images.`)) return;
+  try {
+    const r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name), { method: 'DELETE' });
+    const data = await r.json();
+    if (!data.ok) { alert('Delete failed: ' + (data.error || 'unknown error')); return; }
+    if (state.cfg.symbology.icon.iconset === name) {
+      state.cfg.symbology.icon.iconset = '';
+      state.cfg.symbology.icon.icon = '';
+    }
+    await refreshCustomIconsets();
+    renderSymbologyTab();
+  } catch (e) { alert('Delete failed: ' + e.message); }
+}
+
+/** Collects {iconset, icon} matches across every loaded iconset (built-in + custom). */
+function searchAllIconsets(term) {
+  const t = term.toLowerCase();
+  const out = [];
+  for (const is of iconManifest.iconsets) {
+    for (const ic of is.icons) {
+      if (ic.toLowerCase().includes(t)) out.push({ iconset: is.name, icon: ic });
+    }
+  }
+  return out;
 }
 
 function renderIconGrid() {
   const container = document.getElementById('icon-grid-container');
   if (!container || !iconManifest) return;
   const s = state.cfg.symbology;
-  const iconset = iconManifest.iconsets.find(is => is.name === s.icon.iconset);
-  if (!iconset) return;
-  const term = iconSearchTerm.toLowerCase();
-  const filtered = term ? iconset.icons.filter(ic => ic.toLowerCase().includes(term)) : iconset.icons;
+  const term = iconSearchTerm.trim();
   const MAX = 200;
-  const shown = filtered.slice(0, MAX);
+
+  let matches;
+  if (term) {
+    // Global search — ignores the iconset picker entirely, searches everything loaded.
+    matches = searchAllIconsets(term);
+  } else {
+    const iconset = iconManifest.iconsets.find(is => is.name === s.icon.iconset);
+    if (!iconset) { container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px">Choose an iconset, or search across all of them above.</div>'; return; }
+    matches = iconset.icons.map(ic => ({ iconset: iconset.name, icon: ic }));
+  }
+
+  const shown = matches.slice(0, MAX);
   if (!shown.length) { container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px">No icons match.</div>'; return; }
-  const moreNote = filtered.length > MAX ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Showing ${MAX} of ${filtered.length} — refine search</div>` : '';
+  const moreNote = matches.length > MAX ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Showing ${MAX} of ${matches.length} — refine search</div>` : '';
   container.innerHTML = `
     <div class="icon-grid">
-      ${shown.map(ic => {
-        const setEnc = encodeURIComponent(s.icon.iconset);
-        const icEnc  = encodeURIComponent(ic);
-        const setEsc = s.icon.iconset.replace(/"/g,'&quot;');
-        const icEsc  = ic.replace(/"/g,'&quot;');
-        return `<div class="icon-thumb${s.icon.icon===ic?' selected':''}" title="${ic.replace(/\.png$/i,'')}" data-is="${setEsc}" data-ic="${icEsc}" onclick="selectIcon(this.dataset.is,this.dataset.ic)">
-          <img src="${ICONS_BASE}${setEnc}/${icEnc}" loading="lazy" onerror="this.style.opacity=0" /></div>`;
+      ${shown.map(({ iconset, icon }) => {
+        const setEsc = iconset.replace(/"/g,'&quot;');
+        const icEsc  = icon.replace(/"/g,'&quot;');
+        const label = term ? `${icon.replace(/\.png$/i,'')} — ${iconset}` : icon.replace(/\.png$/i,'');
+        return `<div class="icon-thumb${(s.icon.icon===icon && s.icon.iconset===iconset)?' selected':''}" title="${label}" data-is="${setEsc}" data-ic="${icEsc}" onclick="selectIcon(this.dataset.is,this.dataset.ic)">
+          <img src="${iconUrl(iconset, icon)}" loading="lazy" onerror="this.style.opacity=0" /></div>`;
       }).join('')}
     </div>${moreNote}`;
+}
+
+function customIconSetsListHtml() {
+  const sets = (iconManifest?.iconsets || []).filter(is => is.custom);
+  if (!sets.length) return '<div style="color:var(--text-muted);font-size:12px">No custom icon sets uploaded yet.</div>';
+  return `<div style="display:flex;flex-direction:column;gap:4px">${sets.map(s => {
+    const nameEsc = s.name.replace(/"/g,'&quot;');
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px">
+      <span>${s.name} (${s.icons.length})</span>
+      <button class="btn-sm" onclick="deleteCustomIconSetUI('${nameEsc}')">Delete</button>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 function selectIcon(iconset, icon) {
@@ -1839,7 +2025,7 @@ function setIconset(name) {
 function advSwatchHtml(sym, ctx, idx) {
   const isOpen = symEdCtx && symEdCtx.ctx===ctx && symEdCtx.idx===idx;
   const inner = sym.mode==='icon' && sym.icon
-    ? `<img src="${ICONS_BASE}${encodeURIComponent(sym.iconset||'')}/${encodeURIComponent(sym.icon)}" style="width:20px;height:20px;object-fit:contain">`
+    ? `<img src="${iconUrl(sym.iconset||'', sym.icon)}" style="width:20px;height:20px;object-fit:contain">`
     : `<div style="width:18px;height:18px;background:${sym.color||'#888'};border-radius:${(sym.shape||'circle')==='circle'?'50%':'3px'};opacity:${sym.opacity??0.85}"></div>`;
   return `<div class="adv-sym-btn${isOpen?' is-open':''}" title="Edit symbol" onclick="openSymEd('${ctx}',${idx})">${inner}</div>`;
 }
@@ -1928,24 +2114,27 @@ function renderSymEdHtml(sym) {
       ? iconManifest.iconsets.map(is=>`<option value="${is.name}" ${is.name===(sym.iconset||'')?'selected':''}>${is.name} (${is.icons.length})</option>`).join('')
       : '';
     const iconset = iconManifest?.iconsets.find(is=>is.name===sym.iconset);
-    const term = symEdIconSearch.toLowerCase();
-    const icons = iconset ? (term ? iconset.icons.filter(ic=>ic.toLowerCase().includes(term)) : iconset.icons) : [];
-    const shown = icons.slice(0,150);
+    const term = symEdIconSearch.trim();
+    let matches;
+    if (term && iconManifest) matches = searchAllIconsets(term);
+    else if (iconset) matches = iconset.icons.map(ic => ({ iconset: iconset.name, icon: ic }));
+    else matches = [];
+    const shown = matches.slice(0,150);
     const gridHtml = shown.length
-      ? shown.map(ic=>{
-          const sEnc=encodeURIComponent(sym.iconset||''), iEnc=encodeURIComponent(ic);
-          const sEsc=(sym.iconset||'').replace(/"/g,'&quot;'), iEsc=ic.replace(/"/g,'&quot;');
-          return `<div class="sym-ed-icon-thumb${sym.icon===ic?' selected':''}" title="${ic.replace(/\.png$/i,'')}" data-is="${sEsc}" data-ic="${iEsc}" onclick="selectSymIcon(this.dataset.is,this.dataset.ic)"><img src="${ICONS_BASE}${sEnc}/${iEnc}" loading="lazy" onerror="this.style.opacity=0"/></div>`;
+      ? shown.map(({iconset: is, icon: ic})=>{
+          const sEsc=is.replace(/"/g,'&quot;'), iEsc=ic.replace(/"/g,'&quot;');
+          const label = term ? `${ic.replace(/\.png$/i,'')} — ${is}` : ic.replace(/\.png$/i,'');
+          return `<div class="sym-ed-icon-thumb${(sym.icon===ic && sym.iconset===is)?' selected':''}" title="${label}" data-is="${sEsc}" data-ic="${iEsc}" onclick="selectSymIcon(this.dataset.is,this.dataset.ic)"><img src="${iconUrl(is, ic)}" loading="lazy" onerror="this.style.opacity=0"/></div>`;
         }).join('')
-      : `<div style="color:var(--text-muted);font-size:11px;padding:8px">${iconset?'No icons match.':'Choose an iconset above.'}</div>`;
-    const moreNote = icons.length>150 ? `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">Showing 150 of ${icons.length} — refine search</div>` : '';
+      : `<div style="color:var(--text-muted);font-size:11px;padding:8px">${term||iconset?'No icons match.':'Choose an iconset, or search above.'}</div>`;
+    const moreNote = matches.length>150 ? `<div style="font-size:10px;color:var(--text-muted);margin-top:3px">Showing 150 of ${matches.length} — refine search</div>` : '';
     body = `
-      <div class="cfg-label">Iconset</div>
+      <input type="text" value="${symEdIconSearch.replace(/"/g,'&quot;')}" placeholder="Search all iconsets…" oninput="symEdIconSearch=this.value;renderSymbologyTab()" style="margin-bottom:6px" />
+      <div class="cfg-label">Iconset ${term ? '<span style="font-weight:400;color:var(--text-muted)">(ignored while searching)</span>' : ''}</div>
       <select onchange="setSymIconset(this.value)" style="margin-bottom:6px">
         <option value="">— choose iconset —</option>${setOpts}
       </select>
-      ${sym.iconset ? `<input type="text" value="${symEdIconSearch.replace(/"/g,'&quot;')}" placeholder="Search icons…" oninput="symEdIconSearch=this.value;renderSymbologyTab()" style="margin-bottom:4px" />
-        <div class="sym-ed-icon-grid">${gridHtml}</div>${moreNote}` : ''}
+      <div class="sym-ed-icon-grid">${gridHtml}</div>${moreNote}
       ${sym.icon ? `
         <div class="cfg-label" style="margin-top:8px">Size</div>
         <div class="range-row" style="margin-bottom:8px">
@@ -2220,35 +2409,49 @@ function renderLayerTab() {
 // ══════════════════════════════════════════
 //  CoT Mapping Tab
 // ══════════════════════════════════════════
-function renderCotMappingTab() {
-  const cm = state.cfg.cotMapping;
+// Ordered checkbox list for one CoT mapping part — first checked field (in the order
+// the user checked them) wins at runtime if it has a non-empty value. `key` is the
+// state.cfg.cotMapping array property name (e.g. "uidFields").
+function cotMappingChecklistHtml(key, label, defaultCols) {
   const allFields = state.fields.map(f => f.name);
-  const fieldOpts = (sel) => '<option value="">(default)</option>' +
-    allFields.map(f => `<option value="${f}" ${f === sel ? 'selected' : ''}>${f}</option>`).join('');
+  const selected = state.cfg.cotMapping[key] || [];
+  const rows = allFields.map(f => {
+    const checked = selected.includes(f);
+    const order = checked ? selected.indexOf(f) + 1 : '';
+    return `<label class="cot-map-row">
+      <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleCotMappingField('${key}','${f.replace(/'/g,"\\'")}',this.checked)" />
+      <span>${f}</span>
+      <span class="cot-map-order">${order}</span>
+    </label>`;
+  }).join('');
+  return `
+    <div class="cfg-section">
+      <div class="cfg-label">${label} <span style="font-weight:400;color:var(--text-muted)">(tries in check order; falls back to <code>${defaultCols}</code>)</span></div>
+      <div class="cot-map-checklist">${rows || '<div style="font-size:12px;color:var(--text-muted)">Load a dataset first.</div>'}</div>
+    </div>`;
+}
 
+function toggleCotMappingField(key, field, checked) {
+  const list = state.cfg.cotMapping[key] || (state.cfg.cotMapping[key] = []);
+  const i = list.indexOf(field);
+  if (checked && i === -1) list.push(field);
+  else if (!checked && i !== -1) list.splice(i, 1);
+  renderCotMappingTab();
+  scheduleQRRefresh();
+}
+
+function renderCotMappingTab() {
   document.getElementById('tab-cotmapping').innerHTML = `
     <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">
-      Map dataset columns to CoT parts. Leave any of these on <strong>(default)</strong> to use the
-      plugin's built-in column names (<code>uid</code>, <code>cot_type</code>,
-      <code>tak_callsign</code>, <code>tak_remarks</code>) instead — only set one here if this
-      dataset's column is named something else.
+      Map dataset columns to CoT parts. Check one or more columns per part — at runtime the
+      plugin tries them in the order you checked them and uses the first one with a value,
+      falling back to its built-in default column name if none of your picks are set (or if you
+      leave a part with nothing checked).
     </p>
-    <div class="cfg-section">
-      <div class="cfg-label">UID field</div>
-      <select onchange="state.cfg.cotMapping.uidField=this.value">${fieldOpts(cm.uidField)}</select>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">CoT Type field</div>
-      <select onchange="state.cfg.cotMapping.typeField=this.value">${fieldOpts(cm.typeField)}</select>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Callsign field</div>
-      <select onchange="state.cfg.cotMapping.callsignField=this.value">${fieldOpts(cm.callsignField)}</select>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Remarks field</div>
-      <select onchange="state.cfg.cotMapping.remarksField=this.value">${fieldOpts(cm.remarksField)}</select>
-    </div>`;
+    ${cotMappingChecklistHtml('uidFields', 'UID', 'uid')}
+    ${cotMappingChecklistHtml('typeFields', 'CoT Type', 'cot_type')}
+    ${cotMappingChecklistHtml('callsignFields', 'Callsign', 'tak_callsign')}
+    ${cotMappingChecklistHtml('remarksFields', 'Remarks', 'tak_remarks')}`;
 }
 
 // ══════════════════════════════════════════
@@ -2591,7 +2794,9 @@ async function loadSavedDataset(id) {
     state.pendingConfig = { _internal: true, cfg: (rec.state || {}).cfg || {} };
 
     if (rec.source_type === 'url' && rec.source_url) {
-      document.getElementById('layer-url-input').value = rec.source_url;
+      const urlInputEl = document.getElementById('layer-url-input');
+      urlInputEl.value = rec.source_url;
+      autoGrowUrlInput(urlInputEl);
       await loadFromUrl();
     } else {
       const fileResp = await fetch(`/api/featurelink/admin/datasets/${encodeURIComponent(id)}/file`);
@@ -2622,16 +2827,16 @@ function showToast(msg) {
 // ══════════════════════════════════════════
 const QR_BYTE_LIMIT = 2900;  // conservative QR binary capacity at error-correction L
 
-/** Compact {uf,tf,cf,rf} form of cotMapping — null if every field is still "(default)", so an
- * untouched mapping adds nothing to the QR payload's byte budget. */
+/** Compact {uf,tf,cf,rf} form of cotMapping (each an array, tried in order) — null if
+ * every list is empty, so an untouched mapping adds nothing to the QR payload's byte budget. */
 function buildCotMappingCompact() {
   const cm = state.cfg.cotMapping;
-  if (!cm.uidField && !cm.typeField && !cm.callsignField && !cm.remarksField) return null;
+  if (!cm.uidFields.length && !cm.typeFields.length && !cm.callsignFields.length && !cm.remarksFields.length) return null;
   const out = {};
-  if (cm.uidField) out.uf = cm.uidField;
-  if (cm.typeField) out.tf = cm.typeField;
-  if (cm.callsignField) out.cf = cm.callsignField;
-  if (cm.remarksField) out.rf = cm.remarksField;
+  if (cm.uidFields.length) out.uf = cm.uidFields;
+  if (cm.typeFields.length) out.tf = cm.typeFields;
+  if (cm.callsignFields.length) out.cf = cm.callsignFields;
+  if (cm.remarksFields.length) out.rf = cm.remarksFields;
   return out;
 }
 
@@ -2778,6 +2983,7 @@ async function importConfig() {
     state.pendingConfig = parsed;
     const urlInput = document.getElementById('layer-url-input');
     urlInput.value = parsed.url;
+    autoGrowUrlInput(urlInput);
     // Show the URL zone in case data was already loaded from a file
     const urlZone = document.getElementById('url-zone');
     if (urlZone.style.display === 'none') {
@@ -2992,6 +3198,60 @@ renderAllTabs();
 (function initFromQuery() {
   const loadId = new URLSearchParams(window.location.search).get('load');
   if (loadId) loadSavedDataset(loadId);
+})();
+
+// ══════════════════════════════════════════
+//  Resizable / collapsible side panels
+// ══════════════════════════════════════════
+(function initResizablePanels() {
+  const PANELS = {
+    left:  { el: document.getElementById('panel-left'),  resizer: document.getElementById('panel-left-resizer'),  min: 260, max: 600, storageKey: 'fl-panel-left-width' },
+    right: { el: document.getElementById('panel-right'), resizer: document.getElementById('panel-right-resizer'), min: 280, max: 640, storageKey: 'fl-panel-right-width' },
+  };
+
+  Object.entries(PANELS).forEach(([side, p]) => {
+    if (!p.el || !p.resizer) return;
+
+    // Restore saved width/collapsed state
+    try {
+      const savedWidth = localStorage.getItem(p.storageKey);
+      if (savedWidth) p.el.style.width = savedWidth + 'px';
+      if (localStorage.getItem(p.storageKey + '-collapsed') === '1') p.el.classList.add('collapsed');
+    } catch (e) {}
+
+    let dragging = false, startX = 0, startWidth = 0;
+    p.resizer.addEventListener('mousedown', (e) => {
+      if (p.el.classList.contains('collapsed')) return;
+      dragging = true;
+      startX = e.clientX;
+      startWidth = p.el.getBoundingClientRect().width;
+      p.resizer.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const delta = side === 'left' ? (e.clientX - startX) : (startX - e.clientX);
+      const newWidth = Math.min(p.max, Math.max(p.min, startWidth + delta));
+      p.el.style.width = newWidth + 'px';
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      p.resizer.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      try { localStorage.setItem(p.storageKey, Math.round(p.el.getBoundingClientRect().width)); } catch (e) {}
+    });
+  });
+
+  window.togglePanel = function (side) {
+    const p = PANELS[side];
+    if (!p || !p.el) return;
+    const collapsed = p.el.classList.toggle('collapsed');
+    try { localStorage.setItem(p.storageKey + '-collapsed', collapsed ? '1' : '0'); } catch (e) {}
+  };
 })();
 </script>
 </body>

@@ -23,6 +23,16 @@ any other download link in the portal), then the plugin either opens it via
 the `featurelink://import` deep link or the user imports the downloaded file
 manually, same as any other exported FeatureLink display config.
 
+**Anyone logged in can also open the Display Configurator itself** and create
+their own dataset configs — creating is not restricted to
+`page.featurelink_configs` holders. Editing or deleting a config, though, is
+restricted to whoever created it (`created_by`, stamped server-side at save
+time) or a true `page.featurelink_configs` admin — enforced in
+`featurelinkDatasetsAdmin.routes.js`'s `canModify()`, not trusted from the
+client. The Administration hub page (`/featurelink-configs` itself, the list
+view) still requires `page.featurelink_configs`; only the configurator tool
+and its dataset API are open-access.
+
 ## Why a module instead of a fork
 
 TAK Portal is deployed by cloning straight from upstream
@@ -65,14 +75,24 @@ network call it has to authenticate on its own.
   already builds client-side — saving now sends that alongside the internal
   state, so TAK Portal never has to re-derive Esri-renderer-to-plugin-schema
   logic on the server side.
-- **`routes/featurelinkDatasetsAdmin.routes.js`** — admin CRUD backing the
+- **`routes/featurelinkDatasetsAdmin.routes.js`** — CRUD backing the
   configurator (list/save/load/delete/raw-file), mirroring
-  `featurelink_displayconfig.py`'s Flask routes 1:1. Mounted at
-  `/api/featurelink/admin/datasets` behind
-  `requirePermission("page.featurelink_configs")`.
+  `featurelink_displayconfig.py`'s Flask routes 1:1. Mounted open-access at
+  `/api/featurelink/admin/datasets` (any logged-in user) — ownership is
+  enforced per-record inside the route handlers instead (see `canModify()`),
+  not by a permission gate on the mount.
 - **`routes/featurelinkConfigurator.routes.js`** — serves the ported
-  `index.html` + iconsets at `/featurelink-configs/configurator`, same
-  permission gate.
+  `index.html` + iconsets at `/featurelink-configs/configurator`, also
+  open-access.
+- **`routes/featurelinkCustomIcons.routes.js`** /
+  **`services/featurelinkCustomIcons.service.js`** — lets any logged-in user
+  upload their own icon images into the configurator's icon picker, stored
+  under `data/featurelink-configs/custom-icons/`. Mounted open-access at
+  `/api/featurelink/admin/custom-icons`; deleting a set is restricted to its
+  uploader or a `page.featurelink_configs` admin, same ownership pattern as
+  datasets. See [`../CONFIG-FORMAT.md`](../CONFIG-FORMAT.md)'s "Custom icon
+  sets" section for the known limitation that ATAK can't yet render an
+  arbitrary uploaded image as a marker icon.
 - **`routes/featurelinkBrowse.routes.js`** — the field-user list/download API
   behind the Onboarding page, mounted at `/api/featurelink/configs*`. Requires
   nothing beyond an ordinary logged-in session — by the time these handlers
@@ -84,14 +104,22 @@ network call it has to authenticate on its own.
   Open in ATAK for any dataset with a live FeatureLayer configured).
 - Patches (idempotent) to:
   - **`services/permissions.registry.js`** — `page.featurelink_configs`
-    permission for the admin page/API, plus carve-outs so `/featurelink` and
-    its API require no specific permission.
-  - **`services/portalAuth.middleware.js`** — adds `/featurelink` and its API
-    to `isAllowedNonAdminPath`, the same list `/setup-my-device` and
-    `/plugins` are already on, so any logged-in user reaches it even if
-    they're not in an admin/agency-admin/bridge-member group.
-  - **`server.js`** — mounts the route files, adds the two page routes.
+    permission for the Administration hub page, plus carve-outs so
+    `/featurelink`, the configurator, and the dataset/custom-icons APIs
+    require no specific permission (open to any logged-in user).
+  - **`services/portalAuth.middleware.js`** — adds `/featurelink`, the
+    configurator, and the dataset/custom-icons APIs to
+    `isAllowedNonAdminPath`, the same list `/setup-my-device` and `/plugins`
+    are already on, so any logged-in user reaches them even if they're not in
+    an admin/agency-admin/bridge-member group.
+  - **`server.js`** — mounts the route files (including custom-icons), adds
+    the two page routes.
   - **`views/partials/sidebar.ejs`** — the two nav links.
+
+CoT field mapping (in the configurator's **CoT Mapping** tab) supports
+multiple candidate columns per part — UID, CoT type, callsign, and remarks
+each accept a checked list tried in order, first non-blank value wins. See
+[`../CONFIG-FORMAT.md`](../CONFIG-FORMAT.md)'s "CoT field mapping" section.
 
 ## Install
 
