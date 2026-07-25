@@ -10,8 +10,10 @@ deployed by [infra-TAK](https://github.com/jpat-12/infra-TAK), default
 Configurator — the same tool infra-TAK runs at `Infra-TAK/`
 (`featurelink_displayconfig_assets/index.html`), ported into TAK Portal as its
 own copy rather than a smaller hand-built form. Upload a dataset or point at a
-live ArcGIS FeatureLayer URL, then set up symbology, labels, popups, and layer
-properties with a live preview, and Save.
+live ArcGIS FeatureLayer URL, then set up symbology, labels, popups, CoT field
+mapping, and layer properties with a live preview, and Save. See
+[`../CONFIG-FORMAT.md`](../CONFIG-FORMAT.md) for the exact JSON/QR payload
+contract this tool and the ATAK/WinTAK plugin share.
 
 **Onboarding → FeatureLink** is where field users go: anyone already logged
 into TAK Portal can browse the saved configs and download or **Open in ATAK**

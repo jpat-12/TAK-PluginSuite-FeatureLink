@@ -853,6 +853,7 @@
       <button onclick="switchTab('labels')">Labels</button>
       <button onclick="switchTab('popup')">Popup</button>
       <button onclick="switchTab('layer')">Layer</button>
+      <button onclick="switchTab('cotmapping')">CoT Mapping</button>
       <button onclick="switchTab('linkqr')">Link QR</button>
     </div>
     <div class="panel-scroll" id="cfg-panel">
@@ -860,6 +861,7 @@
       <div id="tab-labels" style="display:none"></div>
       <div id="tab-popup" style="display:none"></div>
       <div id="tab-layer" style="display:none"></div>
+      <div id="tab-cotmapping" style="display:none"></div>
       <div id="tab-linkqr" style="display:none"></div>
     </div>
   </div>
@@ -992,6 +994,14 @@ let state = {
       minScale: 0,
       maxScale: 0,
       visible: true,
+    },
+    // Which dataset column feeds each CoT part — blank means "use the plugin's
+    // default column name for that part" (see cotMapping.md for the full contract).
+    cotMapping: {
+      uidField: '',
+      typeField: '',
+      callsignField: '',
+      remarksField: '',
     }
   }
 };
@@ -1400,13 +1410,16 @@ function filterTable() {
 // ══════════════════════════════════════════
 //  Tabs
 // ══════════════════════════════════════════
+const TAB_NAMES = ['symbology','labels','popup','layer','cotmapping','linkqr'];
+
 function switchTab(name) {
-  ['symbology','labels','popup','layer','linkqr'].forEach(t => {
+  TAB_NAMES.forEach(t => {
     document.getElementById('tab-'+t).style.display = t === name ? '' : 'none';
   });
   document.querySelectorAll('.style-tabs button').forEach((btn, i) => {
-    btn.classList.toggle('active', ['symbology','labels','popup','layer','linkqr'][i] === name);
+    btn.classList.toggle('active', TAB_NAMES[i] === name);
   });
+  if (name === 'cotmapping') renderCotMappingTab();
   if (name === 'linkqr') renderLinkQRTab();
 }
 
@@ -1415,6 +1428,7 @@ function renderAllTabs() {
   renderLabelsTab();
   renderPopupTab();
   renderLayerTab();
+  renderCotMappingTab();
   renderLinkQRTab();
 }
 
@@ -2204,6 +2218,40 @@ function renderLayerTab() {
 }
 
 // ══════════════════════════════════════════
+//  CoT Mapping Tab
+// ══════════════════════════════════════════
+function renderCotMappingTab() {
+  const cm = state.cfg.cotMapping;
+  const allFields = state.fields.map(f => f.name);
+  const fieldOpts = (sel) => '<option value="">(default)</option>' +
+    allFields.map(f => `<option value="${f}" ${f === sel ? 'selected' : ''}>${f}</option>`).join('');
+
+  document.getElementById('tab-cotmapping').innerHTML = `
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">
+      Map dataset columns to CoT parts. Leave any of these on <strong>(default)</strong> to use the
+      plugin's built-in column names (<code>uid</code>, <code>cot_type</code>,
+      <code>tak_callsign</code>, <code>tak_remarks</code>) instead — only set one here if this
+      dataset's column is named something else.
+    </p>
+    <div class="cfg-section">
+      <div class="cfg-label">UID field</div>
+      <select onchange="state.cfg.cotMapping.uidField=this.value">${fieldOpts(cm.uidField)}</select>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">CoT Type field</div>
+      <select onchange="state.cfg.cotMapping.typeField=this.value">${fieldOpts(cm.typeField)}</select>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Callsign field</div>
+      <select onchange="state.cfg.cotMapping.callsignField=this.value">${fieldOpts(cm.callsignField)}</select>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-label">Remarks field</div>
+      <select onchange="state.cfg.cotMapping.remarksField=this.value">${fieldOpts(cm.remarksField)}</select>
+    </div>`;
+}
+
+// ══════════════════════════════════════════
 //  Link QR Tab
 // ══════════════════════════════════════════
 let linkQRDebounce;
@@ -2312,7 +2360,8 @@ function buildExportPayload() {
       fields: state.cfg.popup.fields.filter(f=>f.visible).map(f=>({ field: f.name, alias: f.alias })),
       customHtml: state.cfg.popup.customHtml,
       htmlTemplate: state.cfg.popup.html || null,
-    }
+    },
+    cotMapping: { ...state.cfg.cotMapping },
   };
 }
 
@@ -2328,29 +2377,51 @@ function exportConfig() {
   showToast('Config exported!');
 }
 
+// Esri REST renderer JSON constants (developers.arcgis.com renderer-objects) — the ATAK
+// plugin's SymConfig.fromEsriRenderer() only recognizes these exact strings, not arbitrary
+// CSS-style shape/marker names.
+const SHAPE_TO_ESRI_SMS = {
+  circle: 'esriSMSCircle', square: 'esriSMSSquare', diamond: 'esriSMSDiamond',
+  triangle: 'esriSMSTriangle', cross: 'esriSMSCross', x: 'esriSMSX',
+};
+
+/**
+ * "rule-based" is not a real Esri renderer type — Esri's REST API only standardizes simple/
+ * uniqueValue/classBreaks. It's this tool's own extension for Rule-Based/Advanced-with-rules
+ * symbology, recognized by a matching case in the plugin's SymConfig.fromEsriRenderer(). Each
+ * rule carries both a real Esri "where" clause (for genuine interop with other Esri REST
+ * consumers) and the raw field/op/value the plugin actually evaluates (matching how Mode 2's
+ * compact "rb"/"adv" sym types already work) — the plugin ignores "where" entirely.
+ */
 function buildSymbologyExport() {
   const s = state.cfg.symbology;
+
+  const symToEsri = sym => {
+    if (sym.mode==='icon' && sym.icon)
+      return { type:'esriPMS', url:`icons/${sym.iconset}/${sym.icon}`, usericonPath: resolveUsericonPath(sym.iconset, sym.icon), width:sym.size||24, height:sym.size||24, opacity:sym.opacity??1 };
+    return { type:'esriSMS', color:hexToRgba(sym.color||'#888',sym.opacity??0.85), size:sym.size||8, style:SHAPE_TO_ESRI_SMS[sym.shape]||'esriSMSCircle' };
+  };
+  const makeWhere = r => {
+    if (r.op==='is empty')     return `${r.field} IS NULL OR ${r.field} = ''`;
+    if (r.op==='is not empty') return `${r.field} IS NOT NULL AND ${r.field} <> ''`;
+    if (r.op==='contains')     return `${r.field} LIKE '%${r.value}%'`;
+    if (r.op==='starts with')  return `${r.field} LIKE '${r.value}%'`;
+    const op = r.op==='≠'?'<>':r.op;
+    const isNum = r.value!=='' && !isNaN(Number(r.value));
+    return `${r.field} ${op} ${isNum?r.value:`'${r.value}'`}`;
+  };
+
   if (s.type === 'advanced') {
     const adv = s.advanced;
-    const symToEsri = sym => {
-      if (sym.mode==='icon' && sym.icon)
-        return { type:'picture-marker', url:`icons/${sym.iconset}/${sym.icon}`, usericonPath: resolveUsericonPath(sym.iconset, sym.icon), width:sym.size||24, height:sym.size||24, opacity:sym.opacity??1 };
-      return { type:'simple-marker', color:hexToRgba(sym.color||'#888',sym.opacity??0.85), size:sym.size||8, style:sym.shape||'circle' };
-    };
-    const makeWhere = r => {
-      if (r.op==='is empty')     return `${r.field} IS NULL OR ${r.field} = ''`;
-      if (r.op==='is not empty') return `${r.field} IS NOT NULL AND ${r.field} <> ''`;
-      if (r.op==='contains')     return `${r.field} LIKE '%${r.value}%'`;
-      if (r.op==='starts with')  return `${r.field} LIKE '${r.value}%'`;
-      const op = r.op==='≠'?'<>':r.op;
-      const isNum = r.value!=='' && !isNaN(Number(r.value));
-      return `${r.field} ${op} ${isNum?r.value:`'${r.value}'`}`;
-    };
     const rules = [
-      ...adv.rules.map(r => ({ where:makeWhere(r), label:r.label||makeWhere(r), symbol:symToEsri(r.symbol) })),
+      ...adv.rules.map(r => ({
+        where: makeWhere(r), label: r.label||makeWhere(r),
+        field: r.field, op: r.op, value: r.value,
+        symbol: symToEsri(r.symbol),
+      })),
       ...(adv.field ? adv.valueSymbols.map(vs => ({
-        where: `${adv.field} = '${vs.value}'`,
-        label: vs.value||'(blank)',
+        where: `${adv.field} = '${vs.value}'`, label: vs.value||'(blank)',
+        field: adv.field, op: '=', value: vs.value,
         symbol: symToEsri(vs.symbol),
       })) : []),
     ];
@@ -2364,28 +2435,28 @@ function buildSymbologyExport() {
     return {
       type: 'simple',
       symbol: {
-        type: 'simple-marker',
+        type: 'esriSMS',
         color: hexToRgba(s.simple.color, s.simple.opacity),
         outline: { color: s.simple.outlineColor, width: 1 },
         size: s.simple.size,
-        style: s.simple.shape,
+        style: SHAPE_TO_ESRI_SMS[s.simple.shape] || 'esriSMSCircle',
       }
     };
   } else if (s.type === 'uniqueValue') {
     return {
-      type: 'unique-value',
+      type: 'uniqueValue',
       field: s.field,
       uniqueValueInfos: s.uniqueValues.map(uv => ({
         value: uv.value,
         label: uv.label || uv.value,
-        symbol: { type: 'simple-marker', color: hexToRgba(uv.color, 0.85), size: 8 }
+        symbol: { type: 'esriSMS', color: hexToRgba(uv.color, 0.85), size: 8, style: 'esriSMSCircle' }
       }))
     };
   } else if (s.type === 'icon') {
     return {
       type: 'simple',
       symbol: {
-        type: 'picture-marker',
+        type: 'esriPMS',
         url: `icons/${s.icon.iconset}/${s.icon.icon}`,
         usericonPath: resolveUsericonPath(s.icon.iconset, s.icon.icon),
         width: s.icon.size,
@@ -2395,39 +2466,29 @@ function buildSymbologyExport() {
     };
   } else if (s.type === 'rulesBased') {
     const rb = s.rulesBased;
-    const makeWhere = r => {
-      if (r.op === 'is empty')     return `${r.field} IS NULL OR ${r.field} = ''`;
-      if (r.op === 'is not empty') return `${r.field} IS NOT NULL AND ${r.field} <> ''`;
-      if (r.op === 'contains')     return `${r.field} LIKE '%${r.value}%'`;
-      if (r.op === 'starts with')  return `${r.field} LIKE '${r.value}%'`;
-      const esriOp = r.op === '≠' ? '<>' : r.op;
-      const isNum = !isNaN(Number(r.value)) && r.value !== '';
-      const val = isNum ? r.value : `'${r.value}'`;
-      return `${r.field} ${esriOp} ${val}`;
-    };
     return {
       type: 'rule-based',
       rules: rb.rules.map(r => ({
-        where: makeWhere(r),
-        label: r.label || makeWhere(r),
-        symbol: { type: 'simple-marker', color: hexToRgba(r.color, r.opacity), size: r.size, style: r.shape },
+        where: makeWhere(r), label: r.label || makeWhere(r),
+        field: r.field, op: r.op, value: r.value,
+        symbol: { type: 'esriSMS', color: hexToRgba(r.color, r.opacity), size: r.size, style: SHAPE_TO_ESRI_SMS[r.shape] || 'esriSMSCircle' },
       })),
       defaultSymbol: {
-        type: 'simple-marker',
+        type: 'esriSMS',
         color: hexToRgba(rb.defaultColor, rb.defaultOpacity),
         size: rb.defaultSize,
-        style: rb.defaultShape,
+        style: SHAPE_TO_ESRI_SMS[rb.defaultShape] || 'esriSMSCircle',
       },
     };
   } else {
     return {
-      type: 'class-breaks',
+      type: 'classBreaks',
       field: s.field,
       classBreakInfos: s.classBreaks.map(cb => ({
-        minValue: cb.min,
-        maxValue: cb.max,
+        classMinValue: cb.min,
+        classMaxValue: cb.max,
         label: cb.label || `${cb.min} – ${cb.max}`,
-        symbol: { type: 'simple-marker', color: hexToRgba(cb.color, 0.85), size: 8 }
+        symbol: { type: 'esriSMS', color: hexToRgba(cb.color, 0.85), size: 8, style: 'esriSMSCircle' }
       }))
     };
   }
@@ -2480,9 +2541,14 @@ async function saveDataset() {
     source_url: state.featureLayerUrl || '',
     file_name: state.rawFile ? state.rawFile.name : (state.fileName || ''),
     state: { cfg: state.cfg, fields: state.fields },
-    // Plugin-ready Mode 3 JSON — TAK Portal serves this as-is for field-user
-    // downloads and the Open in ATAK deep link, no server-side rebuild needed.
-    exported_config: buildExportPayload(),
+    // Plugin-ready Mode 2 JSON (same builder as the "URL + Config" QR payload) — TAK
+    // Portal serves this as-is for field-user downloads and the Open in ATAK deep
+    // link, no server-side rebuild needed. Deliberately Mode 2, not Mode 3's
+    // "Export Config JSON" shape: Mode 2 maps directly onto DisplayConfig.fromJson()
+    // with no Esri-renderer translation layer, so it round-trips correctly for every
+    // symbology type (Mode 3's translation has gaps for Rule-Based/Advanced — see
+    // cotMapping.md). Only meaningful for a live FeatureLayer URL source.
+    exported_config: sourceType === 'url' ? buildUrlConfigExport() : null,
   };
 
   const btn = document.getElementById('save-btn');
@@ -2556,6 +2622,52 @@ function showToast(msg) {
 // ══════════════════════════════════════════
 const QR_BYTE_LIMIT = 2900;  // conservative QR binary capacity at error-correction L
 
+/** Compact {uf,tf,cf,rf} form of cotMapping — null if every field is still "(default)", so an
+ * untouched mapping adds nothing to the QR payload's byte budget. */
+function buildCotMappingCompact() {
+  const cm = state.cfg.cotMapping;
+  if (!cm.uidField && !cm.typeField && !cm.callsignField && !cm.remarksField) return null;
+  const out = {};
+  if (cm.uidField) out.uf = cm.uidField;
+  if (cm.typeField) out.tf = cm.typeField;
+  if (cm.callsignField) out.cf = cm.callsignField;
+  if (cm.remarksField) out.rf = cm.remarksField;
+  return out;
+}
+
+/**
+ * Mode 2 compact "url + config" export — {"v":2,"url",...,"sym","lbl","popup","cm"?}. This is
+ * the schema DisplayConfig.fromJson() parses directly (no Esri-renderer translation layer), so
+ * unlike Mode 3's "Export Config JSON" it round-trips correctly for every symbology type,
+ * including Rule-Based and Advanced-with-rules. Used for both the "URL + Config" QR payload and
+ * (via saveDataset()) the exported_config TAK Portal serves for field-user Download/Open in ATAK.
+ */
+function buildUrlConfigExport() {
+  const s = state.cfg.symbology;
+  const compact = {
+    v: 2,
+    url: state.featureLayerUrl,
+    layer: { name: state.cfg.layer.name, opacity: state.cfg.layer.opacity, visible: state.cfg.layer.visible },
+    sym: (() => {
+      if (s.type === 'simple') return { t:'s', c:s.simple.color, oc:s.simple.outlineColor, sz:s.simple.size, sh:s.simple.shape, op:s.simple.opacity };
+      if (s.type === 'advanced') return {
+        t:'adv', f:s.advanced.field,
+        vs: s.advanced.valueSymbols.slice(0,20).map(v=>({ v:v.value, c:v.symbol.color, sh:v.symbol.shape, m:v.symbol.mode, is:v.symbol.iconset, ic:v.symbol.icon, up:resolveUsericonPath(v.symbol.iconset, v.symbol.icon) })),
+        r:  s.advanced.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.symbol.color, sh:r.symbol.shape, m:r.symbol.mode, is:r.symbol.iconset, ic:r.symbol.icon, up:resolveUsericonPath(r.symbol.iconset, r.symbol.icon) })),
+      };
+      if (s.type === 'icon') return { t:'ic', is:s.icon.iconset, ic:s.icon.icon, up:resolveUsericonPath(s.icon.iconset, s.icon.icon), sz:s.icon.size, op:s.icon.opacity };
+      if (s.type === 'rulesBased') return { t:'rb', rules:s.rulesBased.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.color, sh:r.shape })), dc:s.rulesBased.defaultColor };
+      if (s.type === 'uniqueValue') return { t:'uv', f:s.field, uv:s.uniqueValues.slice(0,30).map(u=>({ v:u.value, c:u.color })) };
+      return { t:'cb', f:s.field, cb:s.classBreaks.map(b=>({ mn:b.min, mx:b.max, c:b.color })) };
+    })(),
+    lbl: state.cfg.labels.enabled ? { f:state.cfg.labels.field, sz:state.cfg.labels.fontSize, c:state.cfg.labels.color, b:state.cfg.labels.bold, i:state.cfg.labels.italic } : null,
+    popup: { t: state.cfg.popup.title, flds: state.cfg.popup.fields.filter(f=>f.visible).map(f=>f.alias!==f.name?[f.name,f.alias]:f.name) },
+  };
+  const cm = buildCotMappingCompact();
+  if (cm) compact.cm = cm;
+  return compact;
+}
+
 function buildQRPayload(mode) {
   if (mode === 'link') {
     if (!state.savedDatasetId) return buildQRPayload('compact');
@@ -2564,27 +2676,7 @@ function buildQRPayload(mode) {
 
   if (mode === 'urlcfg') {
     if (!state.featureLayerUrl) return buildQRPayload('compact');
-    const s = state.cfg.symbology;
-    const compact = {
-      v: 2,
-      url: state.featureLayerUrl,
-      layer: { name: state.cfg.layer.name, opacity: state.cfg.layer.opacity, visible: state.cfg.layer.visible },
-      sym: (() => {
-        if (s.type === 'simple') return { t:'s', c:s.simple.color, oc:s.simple.outlineColor, sz:s.simple.size, sh:s.simple.shape, op:s.simple.opacity };
-        if (s.type === 'advanced') return {
-          t:'adv', f:s.advanced.field,
-          vs: s.advanced.valueSymbols.slice(0,20).map(v=>({ v:v.value, c:v.symbol.color, sh:v.symbol.shape, m:v.symbol.mode, is:v.symbol.iconset, ic:v.symbol.icon, up:resolveUsericonPath(v.symbol.iconset, v.symbol.icon) })),
-          r:  s.advanced.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.symbol.color, sh:r.symbol.shape, m:r.symbol.mode, is:r.symbol.iconset, ic:r.symbol.icon, up:resolveUsericonPath(r.symbol.iconset, r.symbol.icon) })),
-        };
-        if (s.type === 'icon') return { t:'ic', is:s.icon.iconset, ic:s.icon.icon, up:resolveUsericonPath(s.icon.iconset, s.icon.icon), sz:s.icon.size, op:s.icon.opacity };
-        if (s.type === 'rulesBased') return { t:'rb', rules:s.rulesBased.rules.map(r=>({ f:r.field, o:r.op, v:r.value, c:r.color, sh:r.shape })), dc:s.rulesBased.defaultColor };
-        if (s.type === 'uniqueValue') return { t:'uv', f:s.field, uv:s.uniqueValues.slice(0,30).map(u=>({ v:u.value, c:u.color })) };
-        return { t:'cb', f:s.field, cb:s.classBreaks.map(b=>({ mn:b.min, mx:b.max, c:b.color })) };
-      })(),
-      lbl: state.cfg.labels.enabled ? { f:state.cfg.labels.field, sz:state.cfg.labels.fontSize, c:state.cfg.labels.color, b:state.cfg.labels.bold, i:state.cfg.labels.italic } : null,
-      popup: { t: state.cfg.popup.title, flds: state.cfg.popup.fields.filter(f=>f.visible).map(f=>f.alias!==f.name?[f.name,f.alias]:f.name) },
-    };
-    return JSON.stringify(compact);
+    return JSON.stringify(buildUrlConfigExport());
   }
 
   if (mode === 'compact') {

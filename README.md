@@ -88,6 +88,7 @@ Not yet published — placeholders for upcoming ports.
 
 ## Related
 
+- [CONFIG-FORMAT.md](CONFIG-FORMAT.md) — the display-config/QR payload contract between the Display Configurator and the ATAK/WinTAK plugin
 - [ATAK-Plugin_FeatureLink](https://github.com/jpat-12/ATAK-Plugin_FeatureLink) — original standalone repo for the ATAK plugin
 - [infra-TAK](https://github.com/jpat-12/infra-TAK) — the console the `Infra-TAK/` module installs into
 - [TAK-Portal](https://github.com/AdventureSeeker423/TAK-Portal) — the portal the `TAKPortal/` module installs into
