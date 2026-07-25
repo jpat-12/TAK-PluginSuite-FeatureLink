@@ -7,6 +7,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -60,8 +61,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     public static final String TAG = "FeatureLinkDropDown";
 
-    public static final String SHOW_PLUGIN   = "com.atakmap.android.featurelink.SHOW_PLUGIN";
-    public static final String SEND_TO_LAYER = "com.atakmap.android.featurelink.SEND_TO_LAYER";
+    public static final String SHOW_PLUGIN    = "com.atakmap.android.featurelink.SHOW_PLUGIN";
+    public static final String SEND_TO_LAYER  = "com.atakmap.android.featurelink.SEND_TO_LAYER";
+    /** From ImportConfigActivity's featurelink://import deep link — carries "config" (JSON string) extra. */
+    public static final String IMPORT_CONFIG  = "com.atakmap.android.featurelink.IMPORT_CONFIG";
 
     private static final String PREFS_NAME              = "featurelink_prefs";
     private static final String PREF_PLI_LAYER_URL      = "pli_layer_url";
@@ -93,6 +96,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private android.widget.ImageButton collapseStatsBtn;
     private boolean statsExpanded = true;
 
+    // Home page — quick-glance status card
+    private TextView statusAccountText, statusPliText, statusAutoSendText, statusLayersText;
+
     // Overlay — full-screen pushed pages (Account, Add Layer)
     private FrameLayout overlayContainer;
     private View accountPageView, addLayerPageView;
@@ -112,6 +118,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
 
     // PLI page
+    private TextView pliFeatureLayerTitle;
     private LinearLayout pliContent;
     private TextView pliSignInHint;
     private RadioGroup pliRadioGroup;
@@ -275,6 +282,11 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         statsContent      = homePageView.findViewById(R.id.stats_content);
         collapseStatsBtn  = homePageView.findViewById(R.id.collapse_stats_btn);
 
+        statusAccountText  = homePageView.findViewById(R.id.status_account_text);
+        statusPliText      = homePageView.findViewById(R.id.status_pli_text);
+        statusAutoSendText = homePageView.findViewById(R.id.status_autosend_text);
+        statusLayersText   = homePageView.findViewById(R.id.status_layers_text);
+
         Button refreshBtn = homePageView.findViewById(R.id.home_refresh_btn);
         refreshBtn.setOnClickListener(v -> refreshHomeStats());
 
@@ -282,6 +294,30 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
         setPliEndpointBtn.setOnClickListener(v -> navigatePage(2));
         updateSetPliEndpointBtn();
+    }
+
+    /** Updates the Home page's quick-glance Status card (account, PLI, auto-send, layer counts). */
+    private void refreshHomeStatusCard() {
+        if (statusAccountText == null) return;
+
+        boolean authed = authManager.isAuthenticated();
+        statusAccountText.setText(authed ? "Signed In" : "Not Signed In");
+        statusAccountText.setTextColor(authed ? 0xFF4CAF50 : 0xFFFF5722);
+
+        boolean pliConnected = isPliConnected();
+        statusPliText.setText(pliConnected ? "Connected" : "Not Configured");
+        statusPliText.setTextColor(pliConnected ? 0xFF4CAF50 : 0xFFFF5722);
+
+        boolean autoSend = prefs.getBoolean(PREF_PLI_AUTO_SEND, false);
+        statusAutoSendText.setText(autoSend ? "On" : "Off");
+        statusAutoSendText.setTextColor(autoSend ? 0xFF4CAF50 : 0xFF7A7A7A);
+
+        statusLayersText.setText(privateLayers.size() + " private, " + publicLayers.size() + " public");
+    }
+
+    /** A PLI destination is "connected" when it's configured and the session can actually send to it. */
+    private boolean isPliConnected() {
+        return pliLayerUrl != null && !pliLayerUrl.isEmpty() && authManager.isAuthenticated();
     }
 
     private void toggleStatsSection() {
@@ -324,6 +360,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void wirePliPageViews() {
+        pliFeatureLayerTitle = pliPageView.findViewById(R.id.pli_feature_layer_title);
         pliSignInHint      = pliPageView.findViewById(R.id.pli_sign_in_hint);
         pliContent         = pliPageView.findViewById(R.id.pli_content);
         pliRadioGroup      = pliPageView.findViewById(R.id.pli_radio_group);
@@ -360,6 +397,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             prefs.edit().putBoolean(PREF_PLI_AUTO_SEND, checked).apply();
             if (checked) startPliScheduler();
             else         stopPliScheduler();
+            refreshHomeStatusCard();
         });
 
     }
@@ -381,6 +419,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             authStatusText.setTextColor(0xFFFF5722);
         }
         updateAccountButtonColor(authed);
+        refreshHomeStatusCard();
     }
 
     private void updateAccountButtonColor(boolean authed) {
@@ -407,6 +446,14 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void updateQrShareButton() {
         pliShareQrBtn.setEnabled(pliLayerUrl != null && !pliLayerUrl.isEmpty()
                 && authManager.isAuthenticated());
+        updatePliConnectionIndicator();
+        refreshHomeStatusCard();
+    }
+
+    /** Colors the "PLI Feature Layer" section header red/green based on connection status. */
+    private void updatePliConnectionIndicator() {
+        if (pliFeatureLayerTitle == null) return;
+        pliFeatureLayerTitle.setTextColor(isPliConnected() ? 0xFF4CAF50 : 0xFFFF5722);
     }
 
     // -------------------------------------------------------------------------
@@ -631,6 +678,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 savePrivateLayers();
                 authStatusText.setText("Signed in as: " + authManager.getUsername());
                 refreshHomeStats();
+                refreshHomeStatusCard();
                 if (currentPage == 1) refreshLayersList();
                 if (currentPage == 2) syncPliPageAuthState();
             });
@@ -680,6 +728,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void refreshLayersList() {
         refreshPublicLayers();
         refreshPrivateLayers();
+        refreshHomeStatusCard();
     }
 
     private void refreshPublicLayers() {
@@ -730,17 +779,32 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void onLayerAction(ArcGISLayer layer) {
         if ("public".equals(layer.type)) {
-            // Action button on a public layer = remove it
+            // Action button on a public layer = remove it — confirm first, it also removes
+            // any markers already placed on the map
             if (publicLayers.contains(layer)) {
-                publicLayers.remove(layer);
-                savePublicLayers();
-                refreshPublicLayers();
+                confirmRemovePublicLayer(layer);
             }
         } else {
             // Action button or interval change on a private layer — save and sync
             savePrivateLayers();
             downloadLayer(layer);
         }
+    }
+
+    private void confirmRemovePublicLayer(ArcGISLayer layer) {
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Remove Layer?")
+                .setMessage("Remove \"" + layer.name + "\" from your layer list? "
+                        + "Any markers it added to the map will also be removed.")
+                .setPositiveButton("Remove", (d, w) -> {
+                    publicLayers.remove(layer);
+                    savePublicLayers();
+                    removeLayerMarkers(layer);
+                    layerDisplayConfigs.remove(layer.url);
+                    refreshPublicLayers();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void addPublicLayer() {
@@ -770,22 +834,38 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         });
     }
 
+    /** Removes any ATAK markers previously placed on the map for this layer. */
+    private void removeLayerMarkers(ArcGISLayer layer) {
+        List<Marker> old = layerMarkers.remove(layer.url);
+        if (old != null) {
+            MapGroup root = getMapView().getRootGroup();
+            for (Marker m : old) root.removeItem(m);
+        }
+    }
+
     private void downloadLayer(ArcGISLayer layer) {
         String token = "private".equals(layer.type) ? authManager.getToken() : null;
         DisplayConfig displayConfig = layerDisplayConfigs.get(layer.url);
+        Log.d(TAG, "downloadLayer: layer.url=" + layer.url + " displayConfig=" + (displayConfig != null)
+                + " layerDisplayConfigs.keys=" + layerDisplayConfigs.keySet());
+        ArcGISRestClient.CotFieldMapping cotMapping = (displayConfig != null && displayConfig.cotMapping != null)
+                ? new ArcGISRestClient.CotFieldMapping(
+                        displayConfig.cotMapping.uidFields,
+                        displayConfig.cotMapping.typeFields,
+                        displayConfig.cotMapping.callsignFields,
+                        displayConfig.cotMapping.remarksFields)
+                : null;
         executor.submit(() -> {
             try {
                 List<ArcGISRestClient.DownloadedFeature> features =
-                        restClient.downloadLayerAsCoT(layer.url, token);
+                        restClient.downloadLayerAsCoT(layer.url, token, cotMapping);
+                Log.d(TAG, "downloadLayer: downloaded " + features.size() + " features from " + layer.url);
                 layer.lastSync = System.currentTimeMillis();
                 savePrivateLayers();
                 mainHandler.post(() -> {
                     // Swap out old markers for this layer
                     MapGroup root = getMapView().getRootGroup();
-                    List<Marker> old = layerMarkers.remove(layer.url);
-                    if (old != null) {
-                        for (Marker m : old) root.removeItem(m);
-                    }
+                    removeLayerMarkers(layer);
                     List<Marker> added = new ArrayList<>(features.size());
                     for (ArcGISRestClient.DownloadedFeature f : features) {
                         GeoPoint gp = Double.isNaN(f.hae)
@@ -795,8 +875,17 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         m.setType(f.cotType);
 
                         if (displayConfig != null) {
-                            // Apply sym color
-                            int color = displayConfig.resolveColor(f.attributes);
+                            // Apply custom iconset icon (sym type "ic", or "adv" per-value icon)
+                            String iconsetPath = displayConfig.resolveIconsetPath(f.attributes);
+                            if (iconsetPath != null) {
+                                m.setMetaString(com.atakmap.android.icons.UserIcon.IconsetPath,
+                                        iconsetPath);
+                            }
+
+                            // Marker color also tints custom icon bitmaps — a colored fill only
+                            // makes sense for shape symbology. When an icon actually applies,
+                            // force white (no tint) so the icon shows its own real colors.
+                            int color = iconsetPath != null ? Color.WHITE : displayConfig.resolveColor(f.attributes);
                             m.setColor(color);
 
                             // Apply label from lbl.field; fall back to callsign
@@ -961,32 +1050,70 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void startQrScan() {
         QrScanDialog dialog = new QrScanDialog(getMapView().getContext(), payload -> {
+            // Mode 4 — "Saved Dataset Link": a bare URL, not JSON. Fetch it and treat the
+            // response body as the real (Mode 1/2/3) config payload.
+            if (QrHelper.isSavedDatasetLink(payload)) {
+                resolveSavedDatasetLink(payload.trim());
+                return;
+            }
             mainHandler.post(() -> {
                 // Close the Add Layer overlay (if that's what triggered this scan) — the
                 // apply* handlers below navigate to whichever page the result belongs on.
                 hideOverlay();
-
-                // v:2 / v:1-display QR takes priority over v:1 operational QR
-                DisplayConfig displayConfig = QrHelper.parseDisplayConfig(payload);
-                if (displayConfig != null) {
-                    applyScannedDisplayConfig(displayConfig);
-                    return;
-                }
-                JSONObject config = QrHelper.parse(payload);
-                if (config != null) applyScannedConfig(config);
-                else Toast.makeText(pluginContext,
-                        "Not a valid FeatureLink QR code", Toast.LENGTH_SHORT).show();
+                applyScannedPayload(payload);
             });
         });
         dialog.show();
     }
 
+    /** Fetches a Mode 4 link's response body and applies it as a normal scanned payload. */
+    private void resolveSavedDatasetLink(String url) {
+        executor.submit(() -> {
+            String body;
+            try {
+                body = QrHelper.fetchSavedDatasetLink(url);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to fetch saved dataset link: " + url, e);
+                body = null;
+            }
+            final String fetched = body;
+            mainHandler.post(() -> {
+                hideOverlay();
+                if (fetched == null || fetched.isEmpty()) {
+                    Toast.makeText(pluginContext, "Could not load config from link",
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                applyScannedPayload(fetched);
+            });
+        });
+    }
+
+    /** Parses a scanned (or fetched) payload as Mode 1/2/3 display config or an operational QR. */
+    private void applyScannedPayload(String payload) {
+        Log.d(TAG, "applyScannedPayload: payload=" + payload);
+        // Mode 1/2/3 display config takes priority over operational (credentials/PLI/layer) QR
+        DisplayConfig displayConfig = QrHelper.parseDisplayConfig(payload);
+        Log.d(TAG, "applyScannedPayload: parseDisplayConfig -> " + (displayConfig == null ? "null"
+                : ("url='" + displayConfig.url + "' sym=" + (displayConfig.sym != null) + " lbl=" + (displayConfig.lbl != null) + " popup=" + (displayConfig.popup != null))));
+        if (displayConfig != null) {
+            applyScannedDisplayConfig(displayConfig);
+            return;
+        }
+        JSONObject config = QrHelper.parse(payload);
+        if (config != null) applyScannedConfig(config);
+        else Toast.makeText(pluginContext,
+                "Not a valid FeatureLink QR code", Toast.LENGTH_SHORT).show();
+    }
+
     private void applyScannedDisplayConfig(DisplayConfig config) {
         if (config.url != null && !config.url.isEmpty()) {
+            Log.d(TAG, "applyScannedDisplayConfig: url branch, url=" + config.url);
             // v:2 — store the config, load the layer, and download with styling applied
             layerDisplayConfigs.put(config.url, config);
             executor.submit(() -> {
                 ArcGISLayer layer = restClient.fetchLayerInfo(config.url);
+                Log.d(TAG, "applyScannedDisplayConfig: fetchLayerInfo -> " + (layer == null ? "null" : ("name=" + layer.name + " url=" + layer.url)));
                 mainHandler.post(() -> {
                     if (layer == null) {
                         Toast.makeText(pluginContext, "Could not load layer from display config",
@@ -1003,6 +1130,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     for (ArcGISLayer l : privateLayers) {
                         if (l.url.equals(config.url)) { alreadyAdded = true; break; }
                     }
+                    Log.d(TAG, "applyScannedDisplayConfig: alreadyAdded=" + alreadyAdded
+                            + " publicLayers.size=" + publicLayers.size() + " lookup(displayConfig present)=" + (layerDisplayConfigs.get(layer.url) != null));
                     if (!alreadyAdded) {
                         publicLayers.add(layer);
                         savePublicLayers();
@@ -1015,6 +1144,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 });
             });
         } else {
+            Log.d(TAG, "applyScannedDisplayConfig: else branch (no url) — display-only, needs existing layer");
             // v:1 display-only — apply to an existing layer chosen by the user
             List<ArcGISLayer> all = new ArrayList<>();
             all.addAll(publicLayers);
@@ -1364,6 +1494,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         } else if (SEND_TO_LAYER.equals(action)) {
             String uid = intent.getStringExtra("uid");
             if (uid != null) handleSendToLayer(uid);
+        } else if (IMPORT_CONFIG.equals(action)) {
+            String config = intent.getStringExtra("config");
+            Log.d(TAG, "IMPORT_CONFIG received, payload length=" + (config != null ? config.length() : -1));
+            if (config != null) {
+                hideOverlay();
+                applyScannedPayload(config);
+            }
         }
     }
 

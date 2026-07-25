@@ -8,6 +8,13 @@
 
     <uses-feature android:name="android.hardware.camera2" android:required="false" />
 
+    <!-- Android 11+ package-visibility: required for ImportConfigActivity's
+         getPackageManager().getLaunchIntentForPackage("com.atakmap.app.civ") to resolve
+         anything (it's a separate app/package from this plugin's own). -->
+    <queries>
+        <package android:name="com.atakmap.app.civ" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
@@ -39,6 +46,28 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="featurelink" android:host="auth" />
+            </intent-filter>
+        </activity>
+
+        <!-- Catches featurelink://import?config=... from TAK Portal's "Open in ATAK" button.
+             Tried nesting this under the "tak" scheme instead (host = our own package name)
+             on the theory that ATAK's enrollment flow's tak://com.atakmap.app/enroll links
+             hand off from Chrome more reliably than a plugin-invented scheme — confirmed via
+             adb that this doesn't work: ATAK core claims the entire "tak" scheme centrally
+             (ATAKActivity's own intent-filter matches ANY tak:// host) and swallows it into
+             its own internal URI processor before Android's normal per-app dispatch ever
+             gets a chance, regardless of what host/path we declare. "featurelink" is the
+             correct scheme — it's the one that's confirmed to actually reach this activity. -->
+        <activity
+            android:name="com.atakmap.android.featurelink.ImportConfigActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="featurelink" android:host="import" />
             </intent-filter>
         </activity>
 

@@ -8,7 +8,7 @@
 
 buildscript {
 
-    ext.PLUGIN_VERSION = "2.6.4"
+    ext.PLUGIN_VERSION = "2.6.13"
     ext.ATAK_VERSION = '5.6.0'
 
     def takdevVersion = '3.+'
@@ -188,8 +188,8 @@ android {
     defaultConfig {
         minSdkVersion 21
         targetSdkVersion 34
-        versionCode 3
-        versionName "1.2.1"
+        versionCode 4
+        versionName PLUGIN_VERSION
 
         def runTasks = gradle.startParameter.taskNames
         if (runTasks.toString().contains('bundle')) {

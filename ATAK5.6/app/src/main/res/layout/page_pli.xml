@@ -39,6 +39,7 @@
                 android:layout_marginBottom="@dimen/fl_space_md">
 
                 <TextView
+                    android:id="@+id/pli_feature_layer_title"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="PLI Feature Layer"

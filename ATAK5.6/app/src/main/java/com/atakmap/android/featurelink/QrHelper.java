@@ -11,10 +11,17 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.EnumMap;
 import java.util.Map;
 
 final class QrHelper {
+
+    private static final int HTTP_TIMEOUT_MS = 15_000;
 
     static final String V          = "v";
     static final String TYPE       = "type";
@@ -101,6 +108,40 @@ final class QrHelper {
                 .toString();
     }
 
+    /** True if the scanned payload is a Mode 4 "Saved Dataset Link" — a bare URL, not JSON. */
+    static boolean isSavedDatasetLink(String payload) {
+        String trimmed = payload.trim();
+        return trimmed.startsWith("http://") || trimmed.startsWith("https://");
+    }
+
+    /**
+     * Fetches a Mode 4 "Saved Dataset Link" URL and returns the response body, which is
+     * expected to be a Mode 1/2/3 JSON config. Blocking — must be called off the main thread.
+     */
+    static String fetchSavedDatasetLink(String url) throws Exception {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(HTTP_TIMEOUT_MS);
+            conn.setReadTimeout(HTTP_TIMEOUT_MS);
+            conn.setRequestProperty("Accept", "application/json");
+            int code = conn.getResponseCode();
+            java.io.InputStream is = (code >= 200 && code < 300)
+                    ? conn.getInputStream() : conn.getErrorStream();
+            if (is == null) return null;
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(
+                    new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = br.readLine()) != null) sb.append(line);
+            }
+            return sb.toString();
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     /** Returns the parsed object if this is a valid FeatureLink QR payload, null otherwise. */
     static JSONObject parse(String json) {
         try {
@@ -125,15 +166,23 @@ final class QrHelper {
     }
 
     /**
-     * Returns a {@link DisplayConfig} if this JSON is a v:2 display config QR or a v:1
-     * display-only QR (has "sym" or "layer" but no "type" field). Returns null otherwise.
+     * Returns a {@link DisplayConfig} if this JSON is a Mode 3 ("_v" full config), Mode 2
+     * (v:2 url+config), or Mode 1 (v:1 compact / display-only) config. Returns null otherwise.
      *
-     * v:2 schema: {"v":2,"url":"...","layer":{...},"sym":{...},"lbl":{...},"popup":{...}}
-     * v:1 display-only: same shape but "v":1, no "url" field.
+     * Mode 3 schema: {"_v":"1.1","featureLayerUrl":"...","layer":{...},"symbology":{...},
+     *                 "labels":{...},"popup":{...}}
+     * Mode 2 schema: {"v":2,"url":"...","layer":{...},"sym":{...},"lbl":{...},"popup":{...}}
+     * Mode 1 display-only: same shape as Mode 2 but "v":1, no "url" field.
      */
     static DisplayConfig parseDisplayConfig(String json) {
         try {
             JSONObject o = new JSONObject(json.trim());
+
+            // Mode 3 — discriminated by the presence of "_v" rather than "v"
+            if (o.has("_v")) {
+                return DisplayConfig.fromJsonV3(o);
+            }
+
             int version = o.optInt(V, 0);
             if (version == 2) {
                 // v:2 must have a URL

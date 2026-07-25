@@ -109,6 +109,36 @@ public class ArcGISRestClient {
     // -------------------------------------------------------------------------
 
     /**
+     * Which attribute column to read for each CoT part, overriding the hardcoded defaults
+     * below (empty/null field = keep that one part's default). Deliberately its own small
+     * struct rather than depending on the outer featurelink package's DisplayConfig — this
+     * package doesn't otherwise know about display-config concepts, just field names.
+     */
+    public static final class CotFieldMapping {
+        /** Candidate columns per part, tried in order — first one present with a non-empty
+         * value on a given feature wins. Empty list = keep that part's hardcoded default. */
+        public final List<String> uidFields, typeFields, callsignFields, remarksFields;
+
+        public CotFieldMapping(List<String> uidFields, List<String> typeFields,
+                List<String> callsignFields, List<String> remarksFields) {
+            this.uidFields      = uidFields      != null ? uidFields      : Collections.emptyList();
+            this.typeFields     = typeFields     != null ? typeFields     : Collections.emptyList();
+            this.callsignFields = callsignFields != null ? callsignFields : Collections.emptyList();
+            this.remarksFields  = remarksFields  != null ? remarksFields  : Collections.emptyList();
+        }
+    }
+
+    /** Tries each candidate column in order against this feature's attributes; returns the
+     * first non-empty value found, or "" if none of them (or the fallback) have one. */
+    private static String resolveField(JSONObject attrs, List<String> candidates, String fallbackField) {
+        for (String field : candidates) {
+            String v = nullToEmpty(attrs.optString(field, null));
+            if (!v.isEmpty()) return v;
+        }
+        return nullToEmpty(attrs.optString(fallbackField, null));
+    }
+
+    /**
      * Downloads all features from a layer and returns them as a list of
      * {@link DownloadedFeature} objects ready for direct injection into the ATAK map.
      * Supports point, polyline, and polygon geometry (polyline/polygon uses first vertex).
@@ -119,6 +149,18 @@ public class ArcGISRestClient {
      */
     public List<DownloadedFeature> downloadLayerAsCoT(String serviceUrl, String token)
             throws Exception {
+        return downloadLayerAsCoT(serviceUrl, token, null);
+    }
+
+    /**
+     * Same as {@link #downloadLayerAsCoT(String, String)}, but lets the caller map CoT
+     * parts to whichever attribute columns the layer actually has (e.g. an existing
+     * FeatureLayer whose asset-ID column isn't named "uid").
+     *
+     * @param mapping field mapping to use, or null to use the hardcoded defaults for every part
+     */
+    public List<DownloadedFeature> downloadLayerAsCoT(String serviceUrl, String token,
+            CotFieldMapping mapping) throws Exception {
         List<DownloadedFeature> results = new ArrayList<>();
         String layerUrl = ensureLayerIndex(serviceUrl);
         String params = "where=1%3D1&outFields=*&outSR=4326&f=json"
@@ -157,10 +199,15 @@ public class ArcGISRestClient {
                         Object v = attrs.opt(k);
                         if (v != null && v != JSONObject.NULL) attrMap.put(k, v.toString());
                     }
-                    uid      = nullToEmpty(attrs.optString("uid",          null));
-                    cotType  = nullToEmpty(attrs.optString("cot_type",     null));
-                    callsign = nullToEmpty(attrs.optString("tak_callsign", null));
-                    remarks  = nullToEmpty(attrs.optString("tak_remarks",  null));
+                    List<String> uidCandidates      = mapping != null ? mapping.uidFields      : Collections.emptyList();
+                    List<String> typeCandidates     = mapping != null ? mapping.typeFields     : Collections.emptyList();
+                    List<String> callsignCandidates = mapping != null ? mapping.callsignFields : Collections.emptyList();
+                    List<String> remarksCandidates  = mapping != null ? mapping.remarksFields  : Collections.emptyList();
+
+                    uid      = resolveField(attrs, uidCandidates,      "uid");
+                    cotType  = resolveField(attrs, typeCandidates,     "cot_type");
+                    callsign = resolveField(attrs, callsignCandidates, "tak_callsign");
+                    remarks  = resolveField(attrs, remarksCandidates,  "tak_remarks");
                     hae      = attrs.optDouble("hae", Double.NaN);
                     if (uid.isEmpty())      uid      = "FL-" + i + "-" + System.currentTimeMillis();
                     if (cotType.isEmpty())  cotType  = "a-f-G";
