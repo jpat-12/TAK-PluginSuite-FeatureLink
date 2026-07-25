@@ -55,15 +55,28 @@
 
   // Custom-scheme intent links need to fire synchronously inside the click handler —
   // an async fetch() beforehand loses the user-gesture context Android/Chrome requires
-  // to hand off to the app, and location.href= falls back to a plain (failed)
-  // navigation instead. Matches the exact technique setup-my-device.ejs's "Open URL"
+  // to hand off to the app. Matches the exact technique setup-my-device.ejs's "Open URL"
   // button already uses successfully for enrollment links: pre-fetch the payload
   // ahead of time, then on click just create+click a real <a> synchronously.
+  //
+  // Uses Chrome's intent:// syntax rather than a bare featurelink:// link — a bare
+  // custom scheme handed to a JS-created <a>.click() is unreliable on Android/Chrome
+  // (frequently just opens a new blank/error tab instead of the app, especially the
+  // first time that scheme's ever been invoked in that browser). intent:// explicitly
+  // names the target package, so there's no ambiguity for Chrome to get wrong.
+  const FEATURELINK_PLUGIN_PACKAGE = 'com.atakmap.android.featurelink.plugin';
+
+  function buildImportIntentUri(config) {
+    const query = 'config=' + encodeURIComponent(JSON.stringify(config));
+    const fallback = encodeURIComponent(window.location.href);
+    return 'intent://import?' + query +
+      '#Intent;scheme=featurelink;package=' + FEATURELINK_PLUGIN_PACKAGE +
+      ';S.browser_fallback_url=' + fallback + ';end';
+  }
+
   function openLinkSync(url) {
     const a = document.createElement('a');
     a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -87,7 +100,7 @@
       fetch('/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download', { credentials: 'same-origin' })
         .then((r) => r.json())
         .then((config) => {
-          const uri = 'featurelink://import?config=' + encodeURIComponent(JSON.stringify(config));
+          const uri = buildImportIntentUri(config);
           openBtn.textContent = 'Open in ATAK';
           openBtn.disabled = false;
           openBtn.addEventListener('click', () => openLinkSync(uri));
