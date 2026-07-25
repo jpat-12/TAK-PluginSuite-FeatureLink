@@ -53,33 +53,47 @@
     });
   }
 
-  function openInAtak(id, btn) {
-    const originalText = btn.textContent;
-    btn.textContent = 'Loading...';
-    btn.disabled = true;
-    fetch('/api/featurelink/configs/' + encodeURIComponent(id) + '/download', { credentials: 'same-origin' })
-      .then((r) => r.json())
-      .then((config) => {
-        const uri = 'featurelink://import?config=' + encodeURIComponent(JSON.stringify(config));
-        window.location.href = uri;
-      })
-      .catch(() => { alert('Failed to load config.'); })
-      .finally(() => { btn.textContent = originalText; btn.disabled = false; });
+  // Custom-scheme intent links need to fire synchronously inside the click handler —
+  // an async fetch() beforehand loses the user-gesture context Android/Chrome requires
+  // to hand off to the app, and location.href= falls back to a plain (failed)
+  // navigation instead. Matches the exact technique setup-my-device.ejs's "Open URL"
+  // button already uses successfully for enrollment links: pre-fetch the payload
+  // ahead of time, then on click just create+click a real <a> synchronously.
+  function openLinkSync(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   function renderCard(c) {
     const div = document.createElement('div');
     div.className = 'fl-card';
     const actions = c.hasLiveLayer
-      ? '<button type="button" class="btn openAtakBtn" data-id="' + c.id + '">Open in ATAK</button>' +
+      ? '<button type="button" class="btn openAtakBtn" data-id="' + c.id + '" disabled>Loading...</button>' +
         '<a class="btn" href="/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download">Download</a>'
       : '<span class="muted">No live FeatureLayer configured yet</span>';
     div.innerHTML =
       '<span class="fl-card-name">' + escapeHtml(c.name) + '</span>' +
       '<span class="muted">Updated ' + (c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—') + '</span>' +
       '<div class="fl-card-actions">' + actions + '</div>';
+
     const openBtn = div.querySelector('.openAtakBtn');
-    if (openBtn) openBtn.addEventListener('click', () => openInAtak(c.id, openBtn));
+    if (openBtn) {
+      // Pre-fetch now, off the click path, so the click itself is fully synchronous.
+      fetch('/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download', { credentials: 'same-origin' })
+        .then((r) => r.json())
+        .then((config) => {
+          const uri = 'featurelink://import?config=' + encodeURIComponent(JSON.stringify(config));
+          openBtn.textContent = 'Open in ATAK';
+          openBtn.disabled = false;
+          openBtn.addEventListener('click', () => openLinkSync(uri));
+        })
+        .catch(() => { openBtn.textContent = 'Failed to load'; });
+    }
     return div;
   }
 
