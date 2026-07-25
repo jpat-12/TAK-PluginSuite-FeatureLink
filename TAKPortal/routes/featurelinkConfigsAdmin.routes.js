@@ -36,6 +36,17 @@ function auditUserOf(req) {
   return req.authentikUser;
 }
 
+/** req.body.display arrives as a JSON string (form field, alongside the optional file upload). */
+function parseDisplayField(raw) {
+  if (raw == null || raw === "") return undefined;
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return undefined;
+  }
+}
+
 /**
  * GET /api/featurelink/admin/configs
  */
@@ -62,6 +73,7 @@ router.post("/configs", upload.single("config"), (req, res) => {
       targetApp,
       sourceType,
       sourceUrl,
+      display: parseDisplayField(req.body && req.body.display),
       uploadedFile: req.file || null,
       createdBy: user?.username || null,
     });
@@ -94,13 +106,20 @@ router.post("/configs", upload.single("config"), (req, res) => {
 
 /**
  * PATCH /api/featurelink/admin/configs/:id
- * Body: { name?, description?, targetApp? }
+ * Body: { name?, description?, targetApp?, sourceUrl?, display? } — sourceUrl/display only
+ * apply to "url" entries.
  */
 router.patch("/configs/:id", (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, targetApp } = req.body || {};
-    const result = configsSvc.updateConfig(id, { name, description, targetApp });
+    const { name, description, targetApp, sourceUrl } = req.body || {};
+    const result = configsSvc.updateConfig(id, {
+      name,
+      description,
+      targetApp,
+      sourceUrl,
+      display: parseDisplayField(req.body && req.body.display),
+    });
     if (!result.success) {
       return res.status(404).json({ error: result.error });
     }

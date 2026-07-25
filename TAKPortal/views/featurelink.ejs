@@ -4,8 +4,10 @@
 <main class="main">
   <h1>FeatureLink</h1>
   <p class="muted">
-    Download a display config below, then open it in the FeatureLink plugin
-    in ATAK or WinTAK (Import Config). You're already signed in to TAK
+    On the device running ATAK, tap <strong>Open in ATAK</strong> to load a
+    config with its styling directly into the FeatureLink plugin — no QR scan
+    needed. On WinTAK (or any other device), use <strong>Download</strong> and
+    import the file into the plugin manually. You're already signed in to TAK
     Portal, so no separate login is needed on the device.
   </p>
 
@@ -32,6 +34,20 @@
     });
   }
 
+  function openInAtak(id, btn) {
+    const originalText = btn.textContent;
+    btn.textContent = 'Loading...';
+    btn.disabled = true;
+    fetch('/api/featurelink/configs/' + encodeURIComponent(id) + '/download', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((config) => {
+        const uri = 'featurelink://import?config=' + encodeURIComponent(JSON.stringify(config));
+        window.location.href = uri;
+      })
+      .catch(() => { alert('Failed to load config.'); })
+      .finally(() => { btn.textContent = originalText; btn.disabled = false; });
+  }
+
   function renderCard(c) {
     const div = document.createElement('div');
     div.className = 'plugin-card';
@@ -39,7 +55,10 @@
       '<strong>' + escapeHtml(c.name) + '</strong>' +
       (c.description ? '<span class="muted">' + escapeHtml(c.description) + '</span>' : '') +
       '<span class="muted">Target: ' + escapeHtml(c.targetApp) + '</span>' +
+      (c.sourceType === 'url' ? '<button type="button" class="btn openAtakBtn" data-id="' + c.id + '">Open in ATAK</button>' : '') +
       '<a class="btn" href="/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download">Download</a>';
+    const openBtn = div.querySelector('.openAtakBtn');
+    if (openBtn) openBtn.addEventListener('click', () => openInAtak(c.id, openBtn));
     return div;
   }
 

@@ -38,7 +38,9 @@ router.get("/configs", (req, res) => {
 
 /**
  * GET /api/featurelink/configs/:id/download
- * File-backed entries: streams the file. URL-backed entries: redirects to the source URL.
+ * "url" entries: returns the Mode 2 display config JSON ({"v":2,"url",...,"sym","lbl","popup"})
+ * — the same schema the plugin's QR scanner already parses, so this file can be opened directly
+ * with the styling attached. "file" entries: streams the raw uploaded file as-is.
  */
 router.get("/configs/:id/download", (req, res) => {
   try {
@@ -48,7 +50,10 @@ router.get("/configs/:id/download", (req, res) => {
       return res.status(404).json({ error: "Config not found." });
     }
     if (entry.sourceType === "url") {
-      return res.redirect(302, entry.sourceUrl);
+      const payload = configsSvc.buildDownloadPayload(id);
+      const safeName = (entry.name || "config").replace(/[^a-zA-Z0-9._-]/g, "_");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}.json"`);
+      return res.json(payload);
     }
     const filePath = configsSvc.getConfigFilePath(id);
     if (!filePath) {
