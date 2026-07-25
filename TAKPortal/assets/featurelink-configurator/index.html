@@ -911,6 +911,7 @@
     <div class="style-tabs" id="stage-stepper"></div>
     <div class="panel-scroll" id="cfg-panel">
       <div id="stage-content"></div>
+      <div id="stage-nav"></div>
       <div id="advanced-settings-wrap"></div>
       <div id="linkqr-wrap-outer"></div>
     </div>
@@ -1492,14 +1493,13 @@ function filterTable() {
 // ══════════════════════════════════════════
 //  Tabs
 // ══════════════════════════════════════════
-const STAGE_NAMES = ['basics', 'cotmapping', 'iconsets', 'rendercolumn'];
+const STAGE_NAMES = ['cotmapping', 'iconsets', 'rendercolumn'];
 const STAGE_LABELS = {
-  basics: '1. Layer & Labels',
-  cotmapping: '2. CoT Mapping',
-  iconsets: '3. Icon Sets',
-  rendercolumn: '4. Render by Column',
+  cotmapping: '1. CoT Mapping',
+  iconsets: '2. Icon Sets',
+  rendercolumn: '3. Render by Column',
 };
-let currentStage = 'basics';
+let currentStage = 'cotmapping';
 let advancedSettingsOpen = false;
 let linkQRPanelOpen = false;
 
@@ -1516,10 +1516,21 @@ function goToStage(name) {
 }
 
 function renderCurrentStage() {
-  if (currentStage === 'basics') renderStage1();
-  else if (currentStage === 'cotmapping') renderCotMappingTab();
+  if (currentStage === 'cotmapping') renderCotMappingTab();
   else if (currentStage === 'iconsets') renderStage3();
   else if (currentStage === 'rendercolumn') renderSymbologyTab();
+  renderStageNav();
+}
+
+// Next-stage / Save button under the stage content — advances through the wizard,
+// and becomes the Save action on the last stage instead of requiring the user to
+// scroll back up to the top-bar Save button.
+function renderStageNav() {
+  const i = STAGE_NAMES.indexOf(currentStage);
+  const isLast = i === STAGE_NAMES.length - 1;
+  document.getElementById('stage-nav').innerHTML = isLast
+    ? `<button class="btn-sm" style="width:100%;margin-top:4px;background:var(--accent);border:none;color:#fff;font-weight:600" onclick="saveDataset()">💾 Save Dataset</button>`
+    : `<button class="btn-sm" style="width:100%;margin-top:4px" onclick="goToStage('${STAGE_NAMES[i+1]}')">Next: ${STAGE_LABELS[STAGE_NAMES[i+1]].replace(/^\d+\.\s*/,'')} →</button>`;
 }
 
 function renderAllTabs() {
@@ -1530,85 +1541,13 @@ function renderAllTabs() {
 }
 
 // ══════════════════════════════════════════
-//  Stage 1 — Layer Name + Label styling
-// ══════════════════════════════════════════
-function renderStage1() {
-  const l = state.cfg.layer;
-  const lbl = state.cfg.labels;
-
-  document.getElementById('stage-content').innerHTML = `
-    <div class="cfg-section" style="margin-top:4px">
-      <div class="cfg-label">Layer Name</div>
-      <input type="text" value="${l.name}" oninput="state.cfg.layer.name=this.value" placeholder="Layer name" />
-    </div>
-    <hr class="div" />
-    <div class="cfg-section">
-      <div class="toggle-row">
-        <label>Show Labels</label>
-        <label class="toggle">
-          <input type="checkbox" ${lbl.enabled?'checked':''} onchange="state.cfg.labels.enabled=this.checked" />
-          <div class="toggle-slider"></div>
-        </label>
-      </div>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Label Field <span style="font-weight:400;color:var(--text-muted)">(same as Callsign)</span></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:var(--surface2);border-radius:var(--radius);font-size:13px">
-        <span>${lbl.field ? `<strong>${lbl.field}</strong>` : '<span style="color:var(--text-muted)">— none set —</span>'}</span>
-        <button class="btn-sm" onclick="goToStage('cotmapping')">Set in CoT Mapping →</button>
-      </div>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
-        The on-map label always shows whatever column is checked first under Callsign in
-        Stage 2 — set it there.
-      </div>
-    </div>
-    <div class="cfg-section">
-      <div class="row-2">
-        <div>
-          <div class="cfg-label">Size (px)</div>
-          <input type="number" min="6" max="48" value="${lbl.fontSize}" oninput="state.cfg.labels.fontSize=+this.value" />
-        </div>
-        <div>
-          <div class="cfg-label">Color</div>
-          <input type="color" value="${lbl.color}" oninput="state.cfg.labels.color=this.value" />
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:10px">
-        <div class="toggle-row" style="flex:1">
-          <label>Bold</label>
-          <label class="toggle">
-            <input type="checkbox" ${lbl.bold?'checked':''} onchange="state.cfg.labels.bold=this.checked" />
-            <div class="toggle-slider"></div>
-          </label>
-        </div>
-        <div class="toggle-row" style="flex:1">
-          <label>Italic</label>
-          <label class="toggle">
-            <input type="checkbox" ${lbl.italic?'checked':''} onchange="state.cfg.labels.italic=this.checked" />
-            <div class="toggle-slider"></div>
-          </label>
-        </div>
-      </div>
-    </div>
-    <div class="cfg-section">
-      <div class="cfg-label">Halo</div>
-      <div class="color-row">
-        <label>Color</label>
-        <input type="color" value="${lbl.haloColor}" oninput="state.cfg.labels.haloColor=this.value" />
-        <label style="margin-left:12px">Size</label>
-        <input type="number" min="0" max="10" value="${lbl.haloSize}" oninput="state.cfg.labels.haloSize=+this.value" style="width:60px" />
-      </div>
-    </div>`;
-}
-
-// ══════════════════════════════════════════
-//  Stage 3 — Icon Sets (upload/manage only; picking an icon happens in Stage 4)
+//  Stage 2 — Icon Sets (upload/manage only; picking an icon happens in Stage 3)
 // ══════════════════════════════════════════
 function renderStage3() {
   document.getElementById('stage-content').innerHTML = `
     <p style="font-size:12px;color:var(--text-muted);margin:4px 0 12px">
       Upload icon images here to make them available when you assign icons to values in
-      <strong>Render by Column</strong> (Stage 4). Optional — skip this if you just want colored
+      <strong>Render by Column</strong> (Stage 3). Optional — skip this if you just want colored
       markers.
     </p>
     <div class="cfg-section" style="margin-top:0">
@@ -2324,6 +2263,7 @@ function toggleAdvancedSettings() {
 function renderAdvancedSettings() {
   const p = state.cfg.popup;
   const l = state.cfg.layer;
+  const lbl = state.cfg.labels;
   const allFields = state.fields.map(f=>f.name);
   const titleOpts = allFields.map(f=>`<option value="${f}" ${f===p.title?'selected':''}>${f}</option>`).join('');
 
@@ -2341,7 +2281,7 @@ function renderAdvancedSettings() {
     <hr class="div" />
     <div class="cfg-section">
       <div class="cfg-label" style="cursor:pointer" onclick="toggleAdvancedSettings()">
-        ⚙ Advanced Settings <span style="font-weight:400;color:var(--text-muted)">(Popup, Layer Options)</span>
+        ⚙ Advanced Settings <span style="font-weight:400;color:var(--text-muted)">(Popup, Layer, Labels)</span>
         <span style="float:right">${advancedSettingsOpen?'▲':'▼'}</span>
       </div>
       ${advancedSettingsOpen ? `
@@ -2373,6 +2313,8 @@ function renderAdvancedSettings() {
 
           <hr class="div" />
           <div class="cfg-label">Layer Options</div>
+          <div class="cfg-label" style="margin-top:0">Layer Name</div>
+          <input type="text" value="${l.name}" oninput="state.cfg.layer.name=this.value" placeholder="Layer name" style="margin-bottom:10px" />
           <div class="toggle-row">
             <label>Visible</label>
             <label class="toggle">
@@ -2407,6 +2349,54 @@ function renderAdvancedSettings() {
             <div>String fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='str').length}</strong></div>
             <div>Date fields: <strong style="color:var(--text)">${state.fields.filter(f=>f.type==='dat').length}</strong></div>
           </div>
+
+          <hr class="div" />
+          <div class="cfg-label">Label Styling</div>
+          <div class="toggle-row">
+            <label>Show Labels</label>
+            <label class="toggle">
+              <input type="checkbox" ${lbl.enabled?'checked':''} onchange="state.cfg.labels.enabled=this.checked" />
+              <div class="toggle-slider"></div>
+            </label>
+          </div>
+          <div class="cfg-label" style="margin-top:8px">Label Field <span style="font-weight:400;color:var(--text-muted)">(same as Callsign)</span></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:var(--surface2);border-radius:var(--radius);font-size:13px">
+            <span>${lbl.field ? `<strong>${lbl.field}</strong>` : '<span style="color:var(--text-muted)">— none set —</span>'}</span>
+            <button class="btn-sm" onclick="goToStage('cotmapping')">Set in CoT Mapping →</button>
+          </div>
+          <div class="row-2" style="margin-top:10px">
+            <div>
+              <div class="cfg-label">Size (px)</div>
+              <input type="number" min="6" max="48" value="${lbl.fontSize}" oninput="state.cfg.labels.fontSize=+this.value" />
+            </div>
+            <div>
+              <div class="cfg-label">Color</div>
+              <input type="color" value="${lbl.color}" oninput="state.cfg.labels.color=this.value" />
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:10px">
+            <div class="toggle-row" style="flex:1">
+              <label>Bold</label>
+              <label class="toggle">
+                <input type="checkbox" ${lbl.bold?'checked':''} onchange="state.cfg.labels.bold=this.checked" />
+                <div class="toggle-slider"></div>
+              </label>
+            </div>
+            <div class="toggle-row" style="flex:1">
+              <label>Italic</label>
+              <label class="toggle">
+                <input type="checkbox" ${lbl.italic?'checked':''} onchange="state.cfg.labels.italic=this.checked" />
+                <div class="toggle-slider"></div>
+              </label>
+            </div>
+          </div>
+          <div class="cfg-label" style="margin-top:10px">Halo</div>
+          <div class="color-row">
+            <label>Color</label>
+            <input type="color" value="${lbl.haloColor}" oninput="state.cfg.labels.haloColor=this.value" />
+            <label style="margin-left:12px">Size</label>
+            <input type="number" min="0" max="10" value="${lbl.haloSize}" oninput="state.cfg.labels.haloSize=+this.value" style="width:60px" />
+          </div>
         </div>
       ` : ''}
     </div>`;
@@ -2438,7 +2428,7 @@ function cotMappingChecklistHtml(key, label, defaultCols) {
   return `
     <div class="cfg-section">
       <div class="cfg-label">${label} <span style="font-weight:400;color:var(--text-muted)">(tries in check order; falls back to <code>${defaultCols}</code>)</span></div>
-      ${isCallsign ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Also drives the on-map label (Stage 1) — whichever field you check first here is what shows as the label.</div>` : ''}
+      ${isCallsign ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Also drives the on-map label (⚙ Advanced Settings → Label Styling) — whichever field you check first here is what shows as the label.</div>` : ''}
       <div class="cot-map-checklist">${rows || '<div style="font-size:12px;color:var(--text-muted)">Load a dataset first.</div>'}</div>
     </div>`;
 }
@@ -2453,9 +2443,10 @@ function toggleCotMappingField(key, field, checked) {
   scheduleQRRefresh();
 }
 
-// The on-map label and the CoT callsign are the same thing — Stage 1 shows the label
-// field read-only, driven entirely by CoT Mapping's Callsign checklist (Stage 2) rather
-// than a separate independent picker, so there's only one place to set it.
+// The on-map label and the CoT callsign are the same thing — Advanced Settings' Label
+// Styling section shows the label field read-only, driven entirely by CoT Mapping's
+// Callsign checklist (Stage 1) rather than a separate independent picker, so there's
+// only one place to set it.
 function syncLabelFieldFromCallsign() {
   state.cfg.labels.field = state.cfg.cotMapping.callsignFields[0] || '';
 }
