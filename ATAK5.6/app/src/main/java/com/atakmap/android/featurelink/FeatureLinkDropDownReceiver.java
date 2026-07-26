@@ -749,7 +749,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void populateLayerList(LinearLayout container, List<ArcGISLayer> layers) {
         container.removeAllViews();
         LayerListAdapter adapter = new LayerListAdapter(
-                pluginContext, layers, this::onLayerAction, this::toggleLayerVisibility);
+                pluginContext, layers, this::onLayerAction, this::toggleLayerVisibility,
+                this::onLayerIntervalChanged);
         for (int i = 0; i < layers.size(); i++) {
             container.addView(adapter.getView(i, null, container));
             if (i < layers.size() - 1) {
@@ -789,6 +790,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             savePrivateLayers();
             downloadLayer(layer);
         }
+    }
+
+    /** Public-layer refresh interval/unit spinner changed — save only, this device only. The
+     * recurrence scheduler (checkLayerRecurrence()) picks the new value up on its own next tick;
+     * no need to force an immediate re-download just from adjusting the interval. */
+    private void onLayerIntervalChanged(ArcGISLayer layer) {
+        savePublicLayers();
     }
 
     private void confirmRemovePublicLayer(ArcGISLayer layer) {
@@ -1163,6 +1171,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     Log.d(TAG, "applyScannedDisplayConfig: alreadyAdded=" + alreadyAdded
                             + " publicLayers.size=" + publicLayers.size() + " lookup(displayConfig present)=" + (layerDisplayConfigs.get(layer.url) != null));
                     if (!alreadyAdded) {
+                        // TAK Portal's recommended refresh interval is only ever the *initial*
+                        // value for a layer new to this device — once added, the interval lives
+                        // in this device's own SharedPreferences (see LayerListAdapter's public
+                        // interval row) and re-scanning this same config never touches it again.
+                        layer.recurrenceInterval = config.freqInterval;
+                        layer.recurrenceUnit     = config.freqUnit;
                         publicLayers.add(layer);
                         savePublicLayers();
                     }

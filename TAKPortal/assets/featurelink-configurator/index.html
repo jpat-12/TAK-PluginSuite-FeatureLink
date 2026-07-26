@@ -1055,7 +1055,14 @@ let state = {
       typeFields: [],
       callsignFields: [],
       remarksFields: [],
-    }
+    },
+    // Recommended auto-refresh interval — only the *initial* value for a device adding this
+    // layer for the first time; the plugin lets the end user change it per-device afterward and
+    // never re-applies this over their choice on a rescan (see CONFIG-FORMAT.md). 0 = off.
+    updateFrequency: {
+      intervalValue: 0,
+      intervalUnit: 'min',
+    },
   }
 };
 
@@ -1350,7 +1357,11 @@ function processRows(rows, fileName) {
   if (state.pendingConfig) {
     try {
       if (state.pendingConfig._internal) {
-        state.cfg = JSON.parse(JSON.stringify(state.pendingConfig.cfg));
+        // Shallow-merge onto the current (freshly-defaulted) state.cfg rather than a raw
+        // replace, so a dataset saved before some cfg key existed (e.g. updateFrequency)
+        // falls back to that key's default instead of coming back undefined and crashing
+        // whatever tab reads it.
+        Object.assign(state.cfg, JSON.parse(JSON.stringify(state.pendingConfig.cfg)));
         showToast('Saved config applied');
       } else {
         applyConfigPayload(state.pendingConfig);
@@ -1498,11 +1509,12 @@ function filterTable() {
 // ══════════════════════════════════════════
 //  Tabs
 // ══════════════════════════════════════════
-const STAGE_NAMES = ['cotmapping', 'iconsets', 'rendercolumn'];
+const STAGE_NAMES = ['cotmapping', 'iconsets', 'rendercolumn', 'updatefreq'];
 const STAGE_LABELS = {
   cotmapping: '1. CoT Mapping',
   iconsets: '2. Icon Sets',
   rendercolumn: '3. Render by Column',
+  updatefreq: '4. Update Frequency',
 };
 let currentStage = 'cotmapping';
 let advancedSettingsOpen = false;
@@ -1524,6 +1536,7 @@ function renderCurrentStage() {
   if (currentStage === 'cotmapping') renderCotMappingTab();
   else if (currentStage === 'iconsets') renderStage3();
   else if (currentStage === 'rendercolumn') renderSymbologyTab();
+  else if (currentStage === 'updatefreq') renderUpdateFrequencyTab();
   renderStageNav();
 }
 
@@ -1571,6 +1584,55 @@ function renderStage3() {
       </div>
     </div>`;
   if (!iconManifest) loadManifest().then(() => { if (currentStage === 'iconsets') renderStage3(); });
+}
+
+// ══════════════════════════════════════════
+//  Stage 4 — Update Frequency
+// ══════════════════════════════════════════
+// Same interval/unit vocabulary as the plugin's LayerListAdapter (INTERVAL_VALUES/UNITS in
+// LayerListAdapter.java) so a value picked here means exactly the same thing on-device.
+const FREQ_INTERVAL_VALUES = [0, 1, 3, 5, 10, 20, 30, 45];
+const FREQ_INTERVAL_LABELS = ['Off', '1', '3', '5', '10', '20', '30', '45'];
+const FREQ_UNITS = [['s','Seconds'], ['min','Minutes'], ['hr','Hours']];
+
+function renderUpdateFrequencyTab() {
+  const f = state.cfg.updateFrequency;
+  const intervalOpts = FREQ_INTERVAL_VALUES.map((v,i) =>
+    `<option value="${v}" ${v===f.intervalValue?'selected':''}>${FREQ_INTERVAL_LABELS[i]}</option>`).join('');
+  const unitOpts = FREQ_UNITS.map(([u,label]) =>
+    `<option value="${u}" ${u===f.intervalUnit?'selected':''}>${label}</option>`).join('');
+
+  document.getElementById('stage-content').innerHTML = `
+    <p style="font-size:12px;color:var(--text-muted);margin:4px 0 12px">
+      How often ATAK should automatically re-download this layer. This only sets the
+      <strong>starting value</strong> for a device adding the layer for the first time — each
+      end user can change it afterward in the plugin's Layers tab (it's right next to the layer,
+      same as it already is for their own private layers). That's a per-device preference the
+      plugin stores locally; re-scanning or re-opening this config later never overwrites it.
+    </p>
+    <div class="cfg-section" style="margin-top:0">
+      <div class="cfg-label">Auto-Refresh Interval</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="freq-interval-select" onchange="setFreqIntervalValue(this.value)" style="min-width:90px">${intervalOpts}</select>
+        <select id="freq-unit-select" onchange="setFreqIntervalUnit(this.value)" style="min-width:110px" ${f.intervalValue===0?'disabled':''}>${unitOpts}</select>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
+        ${f.intervalValue===0
+          ? 'Off — the layer only refreshes when the end user manually taps refresh, or turns this on themselves in the plugin.'
+          : `Recommended default: every ${f.intervalValue} ${FREQ_UNITS.find(u=>u[0]===f.intervalUnit)[1].toLowerCase()}.`}
+      </div>
+    </div>`;
+}
+
+function setFreqIntervalValue(v) {
+  state.cfg.updateFrequency.intervalValue = parseInt(v, 10) || 0;
+  scheduleQRRefresh();
+  renderUpdateFrequencyTab();
+}
+
+function setFreqIntervalUnit(u) {
+  state.cfg.updateFrequency.intervalUnit = u;
+  scheduleQRRefresh();
 }
 
 // ══════════════════════════════════════════
@@ -2654,6 +2716,11 @@ function buildExportPayload() {
       htmlTemplate: state.cfg.popup.html || null,
     },
     cotMapping: { ...state.cfg.cotMapping },
+    updateFrequency: {
+      enabled: state.cfg.updateFrequency.intervalValue > 0,
+      intervalValue: state.cfg.updateFrequency.intervalValue,
+      intervalUnit: state.cfg.updateFrequency.intervalUnit,
+    },
   };
 }
 
@@ -2963,7 +3030,17 @@ function buildUrlConfigExport() {
   };
   const cm = buildCotMappingCompact();
   if (cm) compact.cm = cm;
+  const freq = buildFreqCompact();
+  if (freq) compact.freq = freq;
   return compact;
+}
+
+/** Compact "freq" export — {"iv":intervalValue,"u":intervalUnit} — omitted entirely when off,
+ * same "don't send it if it's the no-op default" convention buildCotMappingCompact() uses. */
+function buildFreqCompact() {
+  const f = state.cfg.updateFrequency;
+  if (!f.intervalValue) return null;
+  return { iv: f.intervalValue, u: f.intervalUnit };
 }
 
 function buildQRPayload(mode) {
@@ -3148,6 +3225,9 @@ function applyConfigPayload(p) {
 
     const popup = p.popup || p.cfg?.popup;
     if (popup?.t) state.cfg.popup.title = popup.t;
+
+    const freq = p.freq || p.cfg?.freq;
+    if (freq) Object.assign(state.cfg.updateFrequency, { intervalValue: freq.iv ?? 0, intervalUnit: freq.u ?? 'min' });
     return;
   }
 
@@ -3185,6 +3265,10 @@ function applyConfigPayload(p) {
         if (s.classBreakInfos) state.cfg.symbology.classBreaks = s.classBreakInfos.map(cb => ({ min: cb.minValue, max: cb.maxValue, label: cb.label || '', color: '#0078d4' }));
       }
     }
+    if (p.updateFrequency) Object.assign(state.cfg.updateFrequency, {
+      intervalValue: p.updateFrequency.enabled ? (p.updateFrequency.intervalValue ?? 0) : 0,
+      intervalUnit: p.updateFrequency.intervalUnit ?? 'min',
+    });
     return;
   }
 
