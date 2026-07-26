@@ -1918,8 +1918,11 @@ async function loadManifest() {
  * Re-fetches uploaded custom icon sets and merges them into iconManifest.iconsets,
  * replacing any previous custom entries (marked with `custom: true`). Called on load
  * and again after an upload/delete so the picker reflects the current set without a
- * full page reload. Custom sets have no ATAK iconset uid — see
- * featurelinkCustomIcons.service.js's KNOWN LIMITATION doc comment.
+ * full page reload. uid/defaultGroup are only populated when the upload was a .zip
+ * containing an iconset.xml (the standard ATAK custom-iconset package) — see
+ * featurelinkCustomIcons.service.js. Passing them straight through here is what lets
+ * resolveUsericonPath() treat a custom set exactly like a bundled one; a set with no
+ * uid still resolves to null there and falls back to default marker styling in ATAK.
  */
 async function refreshCustomIconsets() {
   if (!iconManifest) return;
@@ -1927,7 +1930,10 @@ async function refreshCustomIconsets() {
     const r = await fetch(CUSTOM_ICONS_BASE);
     const data = await r.json();
     const customSets = (data.ok && data.iconsets ? data.iconsets : [])
-      .map(s => ({ name: s.name, icons: s.icons, custom: true, created_by: s.created_by }));
+      .map(s => ({
+        name: s.name, icons: s.icons, custom: true, created_by: s.created_by,
+        uid: s.uid || null, defaultGroup: s.defaultGroup || null,
+      }));
     iconManifest.iconsets = iconManifest.iconsets.filter(is => !is.custom).concat(customSets);
   } catch (e) { console.warn('Custom icon sets unavailable:', e); }
 }
@@ -2034,11 +2040,11 @@ function customIconUploadHtml() {
             <button class="btn-sm" onclick="uploadCustomIconSet()">Upload</button>
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
-            Pick image file(s), or a single .zip of a whole iconset (unpacked automatically) — your
-            set then shows up in the iconset list and search above, here and anywhere else you pick
-            icons. Note: ATAK doesn't yet render arbitrary uploaded images as map markers, so a
-            custom icon falls back to the plugin's default marker styling in the field until that's
-            supported.
+            For icons that actually render on the map: upload the .zip you originally installed on
+            ATAK as a custom iconset (it must contain iconset.xml — that's where its ATAK-registered
+            ID lives). Loose image files, or a .zip with no iconset.xml, still work for preview and
+            search here, but ATAK has no way to match them to an on-device iconset, so they fall back
+            to the plugin's default marker styling in the field.
           </div>
         </div>
       ` : ''}
@@ -2056,8 +2062,12 @@ function customIconSetsListHtml(compact) {
   if (!sets.length) return '<div style="color:var(--text-muted);font-size:12px">No custom icon sets uploaded yet.</div>';
   return `<div style="display:flex;flex-direction:column;gap:4px">${sets.map(s => {
     const nameEsc = s.name.replace(/"/g,'&quot;');
+    const linked = !!s.uid;
+    const badge = linked
+      ? `<span style="color:#4caf50" title="iconset.xml found — icons resolve on ATAK">&#10003; Linked</span>`
+      : `<span style="color:var(--text-muted)" title="No iconset.xml found — preview only, falls back to default marker styling in ATAK">Preview only</span>`;
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px">
-      <span>${s.name} (${s.icons.length})</span>
+      <span>${s.name} (${s.icons.length}) ${badge}</span>
       <button class="btn-sm" onclick="deleteCustomIconSetUI('${nameEsc}')">Delete</button>
     </div>`;
   }).join('')}</div>`;

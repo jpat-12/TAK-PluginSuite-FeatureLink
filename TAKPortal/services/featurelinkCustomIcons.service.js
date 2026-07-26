@@ -5,16 +5,23 @@
  *
  * Storage: data/featurelink-configs/custom-icons/<setName>/<file>, inside the
  * tak_portal_data volume so uploads survive rebuilds. manifest.json (in the
- * same directory) tracks {name, icons: [filenames], created_by, created_at}
- * per set — same shape the configurator's bundled icons/manifest.json uses
- * for an iconset entry, so the frontend can merge both lists identically.
+ * same directory) tracks {name, uid, defaultGroup, icons: [filenames],
+ * created_by, created_at} per set — same shape the configurator's bundled
+ * icons/manifest.json uses for an iconset entry, so the frontend can merge
+ * both lists identically and resolveUsericonPath() (index.html) needs no
+ * custom-set-specific logic.
  *
- * KNOWN LIMITATION: uploaded icons have no corresponding ATAK iconset UID
- * (resolveUsericonPath() in index.html only resolves bundled sets against
- * icons/manifest.json's uid mappings). A custom icon previews fine in the
- * configurator, but the ATAK plugin currently has no code path to fetch and
- * render an arbitrary uploaded bitmap as a marker icon — selecting one will
- * fall back to the plugin's default marker styling until that's built.
+ * uid/defaultGroup resolution: a .zip upload that includes an iconset.xml —
+ * the standard ATAK custom-iconset package format (<iconset uid="..."
+ * defaultGroup="..."> at the root, one <icon name="..."/> per image) — gets
+ * its real ATAK-registered uid parsed out of that file (see
+ * parseIconsetXmlMeta()) and stored on the set. That's what lets a marker
+ * built from this set actually resolve to the same iconset already installed
+ * on ATAK devices. A zip with no iconset.xml, or loose image files uploaded
+ * directly (no zip at all), have no way to know their ATAK uid — those sets
+ * still preview fine in the configurator but a selected icon falls back to
+ * the plugin's default marker styling in the field, since ATAK has no way to
+ * resolve an arbitrary bitmap it was never told a uid for.
  */
 
 const fs = require("fs");
@@ -28,8 +35,29 @@ const MANIFEST_PATH = path.join(CUSTOM_ICONS_DIR, "manifest.json");
 const NAME_RE = /[^a-zA-Z0-9 _-]/g;
 const FILE_RE = /[^a-zA-Z0-9._-]/g;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|bmp|webp|svg)$/i;
+const ICONSET_XML_RE = /^iconset\.xml$/i;
 const ZIP_ENTRY_LIMIT = 500; // guards against zip-bomb-style entry counts
 const ZIP_ENTRY_MAX_BYTES = 5 * 1024 * 1024; // per-icon uncompressed size cap
+const ICONSET_XML_MAX_BYTES = 1 * 1024 * 1024; // iconset.xml is just attribute/text data
+
+/**
+ * Pulls {uid, defaultGroup} out of an ATAK iconset.xml's root <iconset ...> tag, e.g.
+ * <iconset name="..." uid="db450cbe-..." defaultGroup="Incident Management" version="1">.
+ * Plain attribute regex rather than a full XML parser — the root tag is all that's needed
+ * and iconset.xml has no nested elements worth parsing (icon-level "group" overrides aren't
+ * used by any iconset shipped with this tool; see resolveUsericonPath()'s defaultGroup
+ * fallback in index.html). Returns null if the file isn't a recognizable iconset.xml.
+ */
+function parseIconsetXmlMeta(xmlText) {
+  const tagMatch = xmlText.match(/<iconset\b([^>]*)>/i);
+  if (!tagMatch) return null;
+  const attrs = {};
+  const attrRe = /([\w:-]+)\s*=\s*"([^"]*)"/g;
+  let m;
+  while ((m = attrRe.exec(tagMatch[1]))) attrs[m[1]] = m[2];
+  if (!attrs.uid) return null;
+  return { uid: attrs.uid, defaultGroup: attrs.defaultGroup || null };
+}
 
 function ensureDir() {
   if (!fs.existsSync(CUSTOM_ICONS_DIR)) fs.mkdirSync(CUSTOM_ICONS_DIR, { recursive: true });
@@ -87,8 +115,22 @@ async function extractZipIcons(zipPath, setDir, entry, skipped) {
   let extracted = 0;
   for (const zipEntry of directory.files) {
     if (zipEntry.type !== "File") continue;
-    if (extracted >= ZIP_ENTRY_LIMIT) break;
     const baseName = path.basename(zipEntry.path);
+
+    if (ICONSET_XML_RE.test(baseName)) {
+      if ((zipEntry.vars?.uncompressedSize || 0) <= ICONSET_XML_MAX_BYTES) {
+        try {
+          const meta = parseIconsetXmlMeta((await zipEntry.buffer()).toString("utf-8"));
+          if (meta) {
+            entry.uid = meta.uid;
+            entry.defaultGroup = meta.defaultGroup;
+          }
+        } catch (_) { /* malformed iconset.xml — fall back to preview-only */ }
+      }
+      continue;
+    }
+
+    if (extracted >= ZIP_ENTRY_LIMIT) break;
     if (!IMAGE_EXT_RE.test(baseName)) {
       if (skipped.length < 10) skipped.push(baseName);
       continue;
@@ -123,7 +165,10 @@ async function addCustomIcons(setName, files, actorUsername) {
   const sets = readManifest();
   let entry = sets.find((s) => s.name === name);
   if (!entry) {
-    entry = { name, icons: [], created_by: actorUsername || null, created_at: new Date().toISOString() };
+    entry = {
+      name, icons: [], uid: null, defaultGroup: null,
+      created_by: actorUsername || null, created_at: new Date().toISOString(),
+    };
     sets.push(entry);
   }
 
