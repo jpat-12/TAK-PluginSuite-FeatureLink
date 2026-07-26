@@ -21,19 +21,23 @@
 |---|---|---|
 | [`ATAK5.6/`](ATAK5.6/) | FeatureLink ATAK plugin, built against ATAK-CIV 5.6.0 | Available — see [`ATAK5.6/README.md`](ATAK5.6/README.md) |
 | `ATAK5.7/` | FeatureLink ATAK plugin, ATAK-CIV 5.7.x port | Planned |
-| [`Infra-TAK/`](Infra-TAK/) | Display Configurator — infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | Available — see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
+| `CloudTAK/` | FeatureLink CloudTAK plugin | Planned |
+| [`Infra-TAK/`](Infra-TAK/) | Display Configurator — infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | **Deprecated & not supported** — see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
 | [`TAKPortal/`](TAKPortal/) | FeatureLink Configs — TAK Portal module: full Display Configurator (ported from Infra-TAK) for admins, any logged-in field user browses/downloads the results | Available — see [`TAKPortal/README.md`](TAKPortal/README.md) |
 | `WinTAK5.6/` | FeatureLink WinTAK plugin, WinTAK 5.6.x port | Planned |
 | `WinTAK5.7/` | FeatureLink WinTAK plugin, WinTAK 5.7.x port | Planned |
 
-## Install
+## Configuration & Install
 
 FeatureLink has two halves: a **config source** (where display configs, symbology,
 and layer setup get built) and the **plugins** that consume them in the field. Start
 with whichever config source your team already runs, then set up the plugin for
 your platform below.
 
-### TAK Portal vs. Infra-TAK — which config source should you use?
+### Choose Your Configuration Type
+
+<details>
+<summary><strong>TAK Portal vs. Infra-TAK — which config source should you use?</strong></summary>
 
 | | [TAK Portal](https://github.com/AdventureSeeker423/TAK-Portal) | [infra-TAK](https://github.com/jpat-12/infra-TAK) |
 |---|---|---|
@@ -45,6 +49,8 @@ your platform below.
 Both run the same Display Configurator under the hood — the only difference is
 who can reach it and how a field user gets the result onto their device. See
 [CONFIG-FORMAT.md](CONFIG-FORMAT.md) if you need the payload details.
+
+</details>
 
 <details>
 <summary><strong>TAK Portal Setup</strong></summary>
