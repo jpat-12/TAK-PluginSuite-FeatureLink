@@ -276,6 +276,19 @@ final class DisplayConfig {
         return (color & 0x00FFFFFF) | (alpha << 24);
     }
 
+    /**
+     * Like {@code o.optString(key, null)}, but actually returns Java {@code null} for a JSON
+     * {@code null} value. org.json's optString(key, fallback) calls {@code .toString()} on
+     * whatever {@code opt(key)} returns; for an explicit JSON null that's the JSONObject.NULL
+     * sentinel, whose toString() is the literal string "null" — so optString(key, null) silently
+     * returns the 4-character string "null" instead of the fallback. Every "up" (usericonPath)
+     * field is serialized as an explicit JSON null whenever the web configurator has no resolved
+     * path, so this bit without the guard here.
+     */
+    private static String optStringOrNull(JSONObject o, String key) {
+        return (o.has(key) && !o.isNull(key)) ? o.optString(key) : null;
+    }
+
     static int parseHexColor(String hex, int fallback) {
         if (hex == null || hex.isEmpty()) return fallback;
         try { return Color.parseColor(hex); } catch (Exception e) { return fallback; }
@@ -338,7 +351,7 @@ final class DisplayConfig {
             String fieldName   = j.optString("f",  "");
             String iconset     = j.optString("is", "");
             String iconFile    = j.optString("ic", "");
-            String usericonPath= j.optString("up", null);
+            String usericonPath= optStringOrNull(j, "up");
             int    defaultColor= parseHexColor(j.optString("dc", "#3388ff"), Color.BLUE);
 
             List<UvEntry> uvEntries = parseUvArray(j.optJSONArray("uv"));
@@ -371,7 +384,7 @@ final class DisplayConfig {
                 boolean isIcon = "icon".equals(e.optString("m", "shape"));
                 list.add(new UvEntry(e.optString("v", ""),
                         parseHexColor(e.optString("c", "#3388ff"), Color.BLUE),
-                        isIcon, e.optString("is", ""), e.optString("ic", ""), e.optString("up", null)));
+                        isIcon, e.optString("is", ""), e.optString("ic", ""), optStringOrNull(e, "up")));
             }
             return list;
         }
@@ -400,7 +413,7 @@ final class DisplayConfig {
                         r.optString("v",  ""),
                         ruleColor,
                         r.optString("sh", "circle"),
-                        isIcon, r.optString("is", ""), r.optString("ic", ""), r.optString("up", null)));
+                        isIcon, r.optString("is", ""), r.optString("ic", ""), optStringOrNull(r, "up")));
             }
             return list;
         }
@@ -486,7 +499,7 @@ final class DisplayConfig {
                             boolean isIcon = symbol != null && "esriPMS".equals(symbol.optString("type", ""));
                             String shape = !isIcon && symbol != null
                                     ? esriStyleToShape(symbol.optString("style", "")) : "circle";
-                            String usericonPath = isIcon ? symbol.optString("usericonPath", null) : null;
+                            String usericonPath = isIcon ? optStringOrNull(symbol, "usericonPath") : null;
                             rules.add(new RbRule(
                                     rule.optString("field", ""),
                                     rule.optString("op", "="),
@@ -513,7 +526,7 @@ final class DisplayConfig {
                         // resolveUsericonPath() in index.html); null for older payloads or an
                         // iconset with no ATAK iconset UID (e.g. TAK-UserIcons).
                         int sizePx = (int) Math.round(symbol.optDouble("width", 12));
-                        String usericonPath = symbol.optString("usericonPath", null);
+                        String usericonPath = optStringOrNull(symbol, "usericonPath");
                         return new SymConfig("ic", Color.BLUE, Color.BLACK, sizePx, "circle",
                                 1.0f, "", new ArrayList<>(), new ArrayList<>(), new ArrayList<>(),
                                 Color.BLUE, new ArrayList<>(), "", symbol.optString("url", ""), usericonPath);

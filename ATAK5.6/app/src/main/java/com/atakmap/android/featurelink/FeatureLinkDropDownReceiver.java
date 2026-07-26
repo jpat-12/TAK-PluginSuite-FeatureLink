@@ -848,6 +848,22 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         DisplayConfig displayConfig = layerDisplayConfigs.get(layer.url);
         Log.d(TAG, "downloadLayer: layer.url=" + layer.url + " displayConfig=" + (displayConfig != null)
                 + " layerDisplayConfigs.keys=" + layerDisplayConfigs.keySet());
+        if (displayConfig != null && displayConfig.sym != null) {
+            DisplayConfig.SymConfig sym = displayConfig.sym;
+            StringBuilder vsDump = new StringBuilder();
+            if (sym.advValues != null) {
+                for (DisplayConfig.UvEntry e : sym.advValues) {
+                    vsDump.append("[v=").append(e.value)
+                          .append(" isIcon=").append(e.isIcon)
+                          .append(" iconset=").append(e.iconset)
+                          .append(" iconFile=").append(e.iconFile)
+                          .append(" usericonPath=").append(e.usericonPath)
+                          .append("] ");
+                }
+            }
+            Log.d(TAG, "downloadLayer sym-debug: type=" + sym.type + " fieldName=" + sym.fieldName
+                    + " advValues=" + vsDump);
+        }
         ArcGISRestClient.CotFieldMapping cotMapping = (displayConfig != null && displayConfig.cotMapping != null)
                 ? new ArcGISRestClient.CotFieldMapping(
                         displayConfig.cotMapping.uidFields,
@@ -867,6 +883,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     MapGroup root = getMapView().getRootGroup();
                     removeLayerMarkers(layer);
                     List<Marker> added = new ArrayList<>(features.size());
+                    int debugLogged = 0;
                     for (ArcGISRestClient.DownloadedFeature f : features) {
                         GeoPoint gp = Double.isNaN(f.hae)
                                 ? new GeoPoint(f.lat, f.lon)
@@ -880,6 +897,19 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                             if (iconsetPath != null) {
                                 m.setMetaString(com.atakmap.android.icons.UserIcon.IconsetPath,
                                         iconsetPath);
+                            }
+                            if (debugLogged < 8) {
+                                debugLogged++;
+                                String symType = displayConfig.sym != null ? displayConfig.sym.type : "null";
+                                String fieldName = displayConfig.sym != null ? displayConfig.sym.fieldName : "";
+                                String rawVal = fieldName.isEmpty() ? "" : f.attributes.getOrDefault(fieldName, "<missing>");
+                                int advCount = (displayConfig.sym != null && displayConfig.sym.advValues != null)
+                                        ? displayConfig.sym.advValues.size() : -1;
+                                Log.d(TAG, "downloadLayer icon-debug: uid=" + f.uid
+                                        + " symType=" + symType
+                                        + " field=" + fieldName + "=" + rawVal
+                                        + " advValues.size=" + advCount
+                                        + " resolvedIconsetPath=" + iconsetPath);
                             }
 
                             // Marker color also tints custom icon bitmaps — a colored fill only
