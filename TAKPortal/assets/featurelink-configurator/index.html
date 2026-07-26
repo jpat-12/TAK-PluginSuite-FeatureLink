@@ -2060,17 +2060,34 @@ function customIconSetsListHtml(compact) {
   const sets = (iconManifest?.iconsets || []).filter(is => is.custom);
   if (compact) return sets.length ? `${sets.length} custom set${sets.length===1?'':'s'}` : '';
   if (!sets.length) return '<div style="color:var(--text-muted);font-size:12px">No custom icon sets uploaded yet.</div>';
-  return `<div style="display:flex;flex-direction:column;gap:4px">${sets.map(s => {
+  return `<div style="display:flex;flex-direction:column;gap:4px">${sets.map((s, i) => {
     const nameEsc = s.name.replace(/"/g,'&quot;');
     const linked = !!s.uid;
     const badge = linked
       ? `<span style="color:#4caf50" title="iconset.xml found — icons resolve on ATAK">&#10003; Linked</span>`
       : `<span style="color:var(--text-muted)" title="No iconset.xml found — preview only, falls back to default marker styling in ATAK">Preview only</span>`;
+    const infoBtn = `<button class="btn-sm" style="padding:1px 6px" title="Show iconset UID"
+        onclick="showIconsetUidInfo(${JSON.stringify(s.name).replace(/"/g,'&quot;')},${JSON.stringify(s.uid||'').replace(/"/g,'&quot;')},${JSON.stringify(s.defaultGroup||'').replace(/"/g,'&quot;')})">&#9432;</button>`;
     return `<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px">
-      <span>${s.name} (${s.icons.length}) ${badge}</span>
+      <span>${s.name} (${s.icons.length}) ${infoBtn} ${badge}</span>
       <button class="btn-sm" onclick="deleteCustomIconSetUI('${nameEsc}')">Delete</button>
     </div>`;
   }).join('')}</div>`;
+}
+
+/**
+ * Surfaces a custom set's parsed ATAK uid/defaultGroup — the values pulled out of its
+ * iconset.xml at upload time (see featurelinkCustomIcons.service.js). Uses prompt() rather
+ * than alert() so the UID is selectable/copyable straight out of the dialog, e.g. to compare
+ * against what's actually installed on an ATAK device (Marker > Icon Details, or a dropped
+ * CoT's "icon" field: "<uid>:<group>/<name>").
+ */
+function showIconsetUidInfo(name, uid, defaultGroup) {
+  if (!uid) {
+    alert(`"${name}" has no ATAK uid — no iconset.xml was found in its upload (or the upload was loose image files, not a .zip). It previews fine here but falls back to default marker styling in ATAK.`);
+    return;
+  }
+  prompt(`"${name}" — ATAK iconset uid (default group: ${defaultGroup || '(none)'})\nCompare this against the same iconset already installed on your ATAK devices — they must match exactly for icons to render.`, uid);
 }
 
 function selectIcon(iconset, icon) {
