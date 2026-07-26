@@ -34,16 +34,30 @@ final class DisplayConfig {
     /** Which dataset columns feed CoT uid/type/callsign/remarks. May be null (use defaults). */
     final CotMapping cotMapping;
 
+    /**
+     * Recommended auto-refresh interval for this layer, set in TAK Portal's Display
+     * Configuration (4th section) — applied only as the *initial* value when a layer is first
+     * added from this config; a value the end user later changes in the plugin is a per-device
+     * preference the plugin already persists to SharedPreferences, and this config is never
+     * re-applied over it on a rescan. 0 = auto-refresh off. See ArcGISLayer.recurrenceInterval/
+     * recurrenceUnit for the same fields on the applied side.
+     */
+    final int    freqInterval;
+    final String freqUnit;
+
     private DisplayConfig(String url, String name, float opacity, boolean visible,
-            SymConfig sym, LabelConfig lbl, PopupConfig popup, CotMapping cotMapping) {
-        this.url        = url;
-        this.name       = name;
-        this.opacity    = opacity;
-        this.visible    = visible;
-        this.sym        = sym;
-        this.lbl        = lbl;
-        this.popup      = popup;
-        this.cotMapping = cotMapping;
+            SymConfig sym, LabelConfig lbl, PopupConfig popup, CotMapping cotMapping,
+            int freqInterval, String freqUnit) {
+        this.url          = url;
+        this.name         = name;
+        this.opacity      = opacity;
+        this.visible      = visible;
+        this.sym          = sym;
+        this.lbl          = lbl;
+        this.popup        = popup;
+        this.cotMapping   = cotMapping;
+        this.freqInterval = freqInterval;
+        this.freqUnit     = freqUnit;
     }
 
     /** Parses a v:2 or v:1-display JSONObject. Returns null if the object is not a display config. */
@@ -60,13 +74,17 @@ final class DisplayConfig {
             JSONObject lblJ = o.optJSONObject("lbl");
             JSONObject popupJ = o.optJSONObject("popup");
             JSONObject cmJ  = o.optJSONObject("cm");
+            JSONObject freqJ = o.optJSONObject("freq");
 
             SymConfig   sym        = symJ   != null ? SymConfig.fromJson(symJ)     : null;
             LabelConfig lbl        = lblJ   != null ? LabelConfig.fromJson(lblJ)   : null;
             PopupConfig popup      = popupJ != null ? PopupConfig.fromJson(popupJ) : null;
             CotMapping  cotMapping = cmJ    != null ? CotMapping.fromJson(cmJ)     : null;
+            int    freqInterval    = freqJ  != null ? freqJ.optInt("iv", 0)        : 0;
+            String freqUnit        = freqJ  != null ? freqJ.optString("u", "min")  : "min";
 
-            return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping);
+            return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
+                    freqInterval, freqUnit);
         } catch (Exception e) {
             return null;
         }
@@ -91,13 +109,18 @@ final class DisplayConfig {
             JSONObject labelsJ     = o.optJSONObject("labels");
             JSONObject popupJ      = o.optJSONObject("popup");
             JSONObject cotMappingJ = o.optJSONObject("cotMapping");
+            JSONObject freqJ       = o.optJSONObject("updateFrequency");
 
             SymConfig   sym        = symbologyJ  != null ? SymConfig.fromEsriRenderer(symbologyJ) : null;
             LabelConfig lbl        = labelsJ     != null ? LabelConfig.fromJsonV3(labelsJ)         : null;
             PopupConfig popup      = popupJ      != null ? PopupConfig.fromJsonV3(popupJ)          : null;
             CotMapping  cotMapping = cotMappingJ != null ? CotMapping.fromJsonV3(cotMappingJ)      : null;
+            boolean freqEnabled    = freqJ != null && freqJ.optBoolean("enabled", false);
+            int    freqInterval    = freqEnabled ? freqJ.optInt("intervalValue", 0)       : 0;
+            String freqUnit        = freqEnabled ? freqJ.optString("intervalUnit", "min") : "min";
 
-            return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping);
+            return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
+                    freqInterval, freqUnit);
         } catch (Exception e) {
             return null;
         }

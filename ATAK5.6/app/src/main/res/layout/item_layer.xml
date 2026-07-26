@@ -58,7 +58,7 @@
 
     </LinearLayout>
 
-    <!-- Row 2 (private layers only): refresh interval -->
+    <!-- Row 2: refresh interval (private and public layers) -->
     <LinearLayout
         android:id="@+id/layer_interval_row"
         android:layout_width="match_parent"
