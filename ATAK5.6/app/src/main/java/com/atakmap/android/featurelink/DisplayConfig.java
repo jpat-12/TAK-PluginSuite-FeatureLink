@@ -188,6 +188,12 @@ final class DisplayConfig {
                     return resolvedOrLegacy(e.usericonPath, e.iconset, e.iconFile);
                 }
             }
+            for (RbRule r : sym.rbRules) {
+                String fval = attrs.getOrDefault(r.field, "");
+                if (matchesRule(fval, r.op, r.value) && r.isIcon) {
+                    return resolvedOrLegacy(r.usericonPath, r.iconset, r.iconFile);
+                }
+            }
         }
         return null;
     }
@@ -370,7 +376,9 @@ final class DisplayConfig {
             return list;
         }
 
-        // Handles both "rules" key (rb) and "r" key (adv)
+        // Handles both "rules" key (rb) and "r" key (adv). "adv" rule entries additionally
+        // carry icon fields (m/is/ic/up), same shape as "vs" per-value entries — see
+        // buildUrlConfigExport()'s "r" mapping in the web configurator.
         private static List<RbRule> parseRules(JSONArray rulesArr, JSONArray rArr) throws Exception {
             JSONArray arr = rulesArr != null ? rulesArr : rArr;
             List<RbRule> list = new ArrayList<>();
@@ -385,12 +393,14 @@ final class DisplayConfig {
                     // adv rule embeds color in the symbol object (same object, keyed "c")
                     ruleColor = Color.BLUE;
                 }
+                boolean isIcon = "icon".equals(r.optString("m", "shape"));
                 list.add(new RbRule(
                         r.optString("f",  ""),
                         r.optString("o",  "="),
                         r.optString("v",  ""),
                         ruleColor,
-                        r.optString("sh", "circle")));
+                        r.optString("sh", "circle"),
+                        isIcon, r.optString("is", ""), r.optString("ic", ""), r.optString("up", null)));
             }
             return list;
         }
@@ -473,13 +483,17 @@ final class DisplayConfig {
                         for (int i = 0; i < rulesArr.length(); i++) {
                             JSONObject rule = rulesArr.getJSONObject(i);
                             JSONObject symbol = rule.optJSONObject("symbol");
-                            String shape = symbol != null ? esriStyleToShape(symbol.optString("style", "")) : "circle";
+                            boolean isIcon = symbol != null && "esriPMS".equals(symbol.optString("type", ""));
+                            String shape = !isIcon && symbol != null
+                                    ? esriStyleToShape(symbol.optString("style", "")) : "circle";
+                            String usericonPath = isIcon ? symbol.optString("usericonPath", null) : null;
                             rules.add(new RbRule(
                                     rule.optString("field", ""),
                                     rule.optString("op", "="),
                                     rule.optString("value", ""),
-                                    esriSymbolColor(symbol),
-                                    shape));
+                                    isIcon ? Color.BLUE : esriSymbolColor(symbol),
+                                    shape,
+                                    isIcon, "", "", usericonPath));
                         }
                     }
                     int defaultColor = esriSymbolColor(r.optJSONObject("defaultSymbol"));
@@ -578,9 +592,25 @@ final class DisplayConfig {
     static final class RbRule {
         final String field, op, value, shape;
         final int    color;
+        /** True if this rule uses a custom icon rather than a colored shape. */
+        final boolean isIcon;
+        final String  iconset;
+        final String  iconFile;
+        /** Server-resolved "<iconset-uid>/<group>/<filename>" — see resolvedOrLegacy(). */
+        final String  usericonPath;
+
         RbRule(String field, String op, String value, int color, String shape) {
+            this(field, op, value, color, shape, false, "", "", null);
+        }
+
+        RbRule(String field, String op, String value, int color, String shape,
+                boolean isIcon, String iconset, String iconFile, String usericonPath) {
             this.field = field; this.op = op; this.value = value;
             this.color = color; this.shape = shape;
+            this.isIcon       = isIcon;
+            this.iconset      = iconset;
+            this.iconFile     = iconFile;
+            this.usericonPath = usericonPath;
         }
     }
 
