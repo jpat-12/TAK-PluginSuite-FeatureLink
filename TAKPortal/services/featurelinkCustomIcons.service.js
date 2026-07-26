@@ -6,26 +6,47 @@
  * Storage: data/featurelink-configs/custom-icons/<setName>/<file>, inside the
  * tak_portal_data volume so uploads survive rebuilds. manifest.json (in the
  * same directory) tracks {name, uid, defaultGroup, icons: [filenames],
- * created_by, created_at} per set — same shape the configurator's bundled
- * icons/manifest.json uses for an iconset entry, so the frontend can merge
- * both lists identically and resolveUsericonPath() (index.html) needs no
- * custom-set-specific logic.
+ * groups: {filename: atakGroup}, atakNames: {filename: atakRawFileName},
+ * created_by, created_at} per set. icons/groups/atakNames are keyed by the
+ * sanitized filename used for local storage/serving (see uniqueFileName());
+ * groups/atakNames carry the *real* values ATAK will use to look the icon up
+ * on-device, which can differ from the sanitized name — see below.
  *
- * uid/defaultGroup resolution: a .zip upload that includes an iconset.xml —
- * the standard ATAK custom-iconset package format (<iconset uid="..."
- * defaultGroup="..."> at the root, one <icon name="..."/> per image) — gets
- * its real ATAK-registered uid parsed out of that file (see
- * parseIconsetXmlMeta()) and stored on the set. That's what lets a marker
- * built from this set actually resolve to the same iconset already installed
- * on ATAK devices. A zip with no iconset.xml, or loose image files uploaded
- * directly (no zip at all), have no way to know their ATAK uid — those sets
- * still preview fine in the configurator but a selected icon falls back to
- * the plugin's default marker styling in the field, since ATAK has no way to
- * resolve an arbitrary bitmap it was never told a uid for.
+ * uid resolution mirrors com.atakmap.android.icons.IconsMapAdapter.addIconset()
+ * exactly (decompiled from the ATAK 5.6 SDK's main.jar to confirm this — see
+ * commit history): ATAK reads iconset.xml from the zip and, if it parses with
+ * a non-empty name AND uid (UserIconSet.isValid()), trusts its uid verbatim.
+ * Only when iconset.xml is missing/empty/invalid does ATAK fall back to
+ * HashingUtils.sha256sum(zipFile) — a SHA-256 hex digest of the *raw zip file
+ * bytes* — as a synthetic uid (see sha256sumFile()). We replicate both paths
+ * so a set's resolved uid always matches what ATAK would compute from the
+ * same zip bytes, whether or not it ships an iconset.xml.
+ *
+ * group/filename resolution (also decompiled from the same method): for
+ * *every* image entry in the zip, regardless of iconset.xml validity, ATAK
+ * derives:
+ *   - group = the entry's first path segment, in its original case, e.g.
+ *     "MyGroup/icon.png" -> "MyGroup" — or the literal string "Other" if the
+ *     entry has no folder (sits at the zip root).
+ *   - filename = the entry's last path segment, in its original case —
+ *     spaces and all, NOT sanitized.
+ * Neither value comes from iconset.xml's defaultGroup/per-icon attributes,
+ * and neither is lowercased (a lowercase pass exists in ATAK's import code,
+ * but only feeds an in-memory duplicate-filename check — the persisted
+ * UserIcon.group/fileName keep their original case). So resolveUsericonPath()
+ * in index.html must use each icon's *real* zip-derived group/filename, not
+ * a single defaultGroup for the whole set — that's what groups/atakNames
+ * carry per icon.
+ *
+ * Loose (non-.zip) image uploads have no zip path structure and no zip file
+ * for ATAK to have hashed, so they can never resolve to a real ATAK uid —
+ * those sets still preview fine in the configurator but fall back to the
+ * plugin's default marker styling in the field.
  */
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const unzipper = require("unzipper");
 
 const DATA_DIR = path.join(__dirname, "..", "data", "featurelink-configs");
@@ -39,14 +60,14 @@ const ICONSET_XML_RE = /^iconset\.xml$/i;
 const ZIP_ENTRY_LIMIT = 500; // guards against zip-bomb-style entry counts
 const ZIP_ENTRY_MAX_BYTES = 5 * 1024 * 1024; // per-icon uncompressed size cap
 const ICONSET_XML_MAX_BYTES = 1 * 1024 * 1024; // iconset.xml is just attribute/text data
+const OTHER_GROUP = "Other"; // exact literal ATAK uses for icons with no containing folder
 
 /**
  * Pulls {uid, defaultGroup} out of an ATAK iconset.xml's root <iconset ...> tag, e.g.
  * <iconset name="..." uid="db450cbe-..." defaultGroup="Incident Management" version="1">.
- * Plain attribute regex rather than a full XML parser — the root tag is all that's needed
- * and iconset.xml has no nested elements worth parsing (icon-level "group" overrides aren't
- * used by any iconset shipped with this tool; see resolveUsericonPath()'s defaultGroup
- * fallback in index.html). Returns null if the file isn't a recognizable iconset.xml.
+ * Plain attribute regex rather than a full XML parser — the root tag is all that's needed.
+ * Mirrors UserIconSet.isValid(): both name and uid must be present and non-empty, or ATAK
+ * treats the whole file as invalid (and falls back to hashing the zip — see sha256sumFile()).
  */
 function parseIconsetXmlMeta(xmlText) {
   const tagMatch = xmlText.match(/<iconset\b([^>]*)>/i);
@@ -55,8 +76,27 @@ function parseIconsetXmlMeta(xmlText) {
   const attrRe = /([\w:-]+)\s*=\s*"([^"]*)"/g;
   let m;
   while ((m = attrRe.exec(tagMatch[1]))) attrs[m[1]] = m[2];
-  if (!attrs.uid) return null;
+  if (!attrs.uid || !attrs.name) return null;
   return { uid: attrs.uid, defaultGroup: attrs.defaultGroup || null };
+}
+
+/**
+ * Mirrors ATAK's HashingUtils.sha256sum(File): MessageDigest("SHA-256") streamed over the
+ * whole file in 8192-byte chunks, each output byte formatted "%02x" — a plain whole-file hex
+ * digest, no salting/truncation. Must hash the exact same bytes ATAK hashed, so this only
+ * produces a matching uid when the zip uploaded here is byte-identical to the zip that was
+ * actually installed on-device.
+ */
+function sha256sumFile(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+/** {group, atakName} for a zip entry's path, per IconsMapAdapter.addIconset()'s exact rule. */
+function resolveAtakGroupAndName(entryPath) {
+  const parts = entryPath.replace(/\\/g, "/").split("/").filter(Boolean);
+  const atakName = parts[parts.length - 1];
+  const group = parts.length > 1 ? parts[0] : OTHER_GROUP;
+  return { group, atakName };
 }
 
 function ensureDir() {
@@ -83,7 +123,7 @@ function writeManifest(sets) {
   fs.writeFileSync(MANIFEST_PATH, JSON.stringify(sets, null, 2), "utf-8");
 }
 
-/** List of {name, icons, created_by, created_at} — same iconset shape the configurator expects. */
+/** List of {name, icons, ...} — same iconset shape the configurator expects. */
 function listCustomIconSets() {
   return readManifest();
 }
@@ -105,14 +145,16 @@ function uniqueFileName(dir, fileName) {
 }
 
 /**
- * Unpacks a .zip iconset (the common ATAK iconset packaging — a flat or nested folder
- * of icon images, sometimes alongside an iconset.xml the plugin doesn't need here) into
- * individual icon files. Non-image entries (manifests, __MACOSX junk, directories) are
- * skipped; nested folder structure is flattened since custom sets are stored flat.
+ * Unpacks a .zip iconset into individual icon files (stored flat locally, regardless of the
+ * zip's own folder structure — see class doc comment for why each icon's *real* ATAK group
+ * and filename, derived from that structure, are tracked separately in entry.groups/atakNames
+ * rather than being inferred from local storage layout). Non-image entries (iconset.xml,
+ * __MACOSX junk, directories) are skipped from icons/groups/atakNames.
  */
 async function extractZipIcons(zipPath, setDir, entry, skipped) {
   const directory = await unzipper.Open.file(zipPath);
   let extracted = 0;
+  let xmlMeta = null;
   for (const zipEntry of directory.files) {
     if (zipEntry.type !== "File") continue;
     const baseName = path.basename(zipEntry.path);
@@ -120,12 +162,8 @@ async function extractZipIcons(zipPath, setDir, entry, skipped) {
     if (ICONSET_XML_RE.test(baseName)) {
       if ((zipEntry.vars?.uncompressedSize || 0) <= ICONSET_XML_MAX_BYTES) {
         try {
-          const meta = parseIconsetXmlMeta((await zipEntry.buffer()).toString("utf-8"));
-          if (meta) {
-            entry.uid = meta.uid;
-            entry.defaultGroup = meta.defaultGroup;
-          }
-        } catch (_) { /* malformed iconset.xml — fall back to preview-only */ }
+          xmlMeta = parseIconsetXmlMeta((await zipEntry.buffer()).toString("utf-8"));
+        } catch (_) { /* malformed iconset.xml — treated as missing, same as ATAK */ }
       }
       continue;
     }
@@ -143,8 +181,23 @@ async function extractZipIcons(zipPath, setDir, entry, skipped) {
     const buffer = await zipEntry.buffer();
     fs.writeFileSync(path.join(setDir, safeName), buffer);
     entry.icons.push(safeName);
+    const { group, atakName } = resolveAtakGroupAndName(zipEntry.path);
+    entry.groups[safeName] = group;
+    entry.atakNames[safeName] = atakName;
     extracted++;
   }
+
+  // uid resolution: trust a valid iconset.xml's uid; otherwise hash the whole zip file, exactly
+  // like IconsMapAdapter.addIconset() does. Only overwrite an existing uid if this zip actually
+  // resolved one — appending more icons to an already-linked set shouldn't un-link it.
+  if (xmlMeta) {
+    entry.uid = xmlMeta.uid;
+    entry.defaultGroup = xmlMeta.defaultGroup;
+  } else if (extracted > 0) {
+    entry.uid = sha256sumFile(zipPath);
+    entry.defaultGroup = entry.defaultGroup || null;
+  }
+
   return extracted;
 }
 
@@ -166,11 +219,13 @@ async function addCustomIcons(setName, files, actorUsername) {
   let entry = sets.find((s) => s.name === name);
   if (!entry) {
     entry = {
-      name, icons: [], uid: null, defaultGroup: null,
+      name, icons: [], groups: {}, atakNames: {}, uid: null, defaultGroup: null,
       created_by: actorUsername || null, created_at: new Date().toISOString(),
     };
     sets.push(entry);
   }
+  if (!entry.groups) entry.groups = {};
+  if (!entry.atakNames) entry.atakNames = {};
 
   let totalExtracted = 0;
   const skipped = [];
