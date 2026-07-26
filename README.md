@@ -1,16 +1,16 @@
 <div align="center">
 
-# <img src="assets/featurelink-icon.svg" width="48" height="48" align="center" alt=""> TAK-PluginSuite-FeatureLink <img src="assets/try-harder-badge.png" width="48" height="48" align="center" alt="Try Harder">
+# <img src="assets/featurelink-icon.svg" width="72" height="72" align="center" alt=""> TAK-PluginSuite-FeatureLink <img src="assets/try-harder-badge.png" width="72" height="72" align="center" alt="Try Harder">
 
 </div>
 
-> FeatureLink bridges TAK (ATAK, WinTAK) and Esri ArcGIS Feature Services —
-> pushing map items to hosted feature layers, tracking PLI history, and
-> managing private/public feature layers — plus an infra-TAK console module
-> for configuring how those layers display. This repo collects every
-> FeatureLink component in one place.
+FeatureLink bridges TAK (ATAK, WinTAK) and Esri ArcGIS Feature Services —
+pushing map items to hosted feature layers, tracking PLI history, and
+managing private/public feature layers — plus an infra-TAK console module
+for configuring how those layers display. This repo collects every
+FeatureLink component in one place.
 
-[![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=jpat&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff)](https://buymeacoffee.com/jpat)
+<a href="https://buymeacoffee.com/jpat"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=jpat&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" width="150" alt="Buy Me A Coffee"></a>
 
 <!-- TODO: diagram/visual explaining how the FeatureLink pieces (config sources + plugins) fit together -->
 <p align="center"><em>(visual — how the whole FeatureLink suite fits together — coming soon)</em></p>
