@@ -12,7 +12,7 @@ FeatureLink component in one place.
 
 <div align="center">
 
-<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="40" alt="Buy Me A Coffee"></a>&nbsp;&nbsp;<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="40" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="40" alt="Configuration & Install"></a>
+<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="80" alt="Buy Me A Coffee"></a>&nbsp;&nbsp;<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="80" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="80" alt="Configuration & Install"></a>
 
 </div>
 
