@@ -4,30 +4,30 @@
 
 </div>
 
-FeatureLink bridges TAK (ATAK, WinTAK) and Esri ArcGIS Feature Services —
+FeatureLink bridges TAK (ATAK, WinTAK) and Esri ArcGIS Feature Services -
 pushing map items to hosted feature layers, tracking PLI history, and
-managing private/public feature layers — plus an infra-TAK console module
+managing private/public feature layers - plus an infra-TAK console module
 for configuring how those layers display. This repo collects every
 FeatureLink component in one place.
 
 <div align="center">
 
-<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=plastic&logoColor=000000" alt="Buy Me A Coffee"></a>&nbsp;&nbsp;<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=plastic&logoColor=000000" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=plastic&logoColor=000000" alt="Configuration & Install"></a>
+<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="40" alt="Buy Me A Coffee"></a>&nbsp;&nbsp;<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="40" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="40" alt="Configuration & Install"></a>
 
 </div>
 
 <!-- TODO: diagram/visual explaining how the FeatureLink pieces (config sources + plugins) fit together -->
-<p align="center"><em>(visual — how the whole FeatureLink suite fits together — coming soon)</em></p>
+<p align="center"><em>(visual - how the whole FeatureLink suite fits together - coming soon)</em></p>
 
 ## Supported Modules
 
 | Folder | What it is | Status |
 |---|---|---|
-| [`ATAK5.6/`](ATAK5.6/) | FeatureLink ATAK plugin, built against ATAK-CIV 5.6.0 | Available — see [`ATAK5.6/README.md`](ATAK5.6/README.md) |
+| [`ATAK5.6/`](ATAK5.6/) | FeatureLink ATAK plugin, built against ATAK-CIV 5.6.0 | Available - see [`ATAK5.6/README.md`](ATAK5.6/README.md) |
 | `ATAK5.7/` | FeatureLink ATAK plugin, ATAK-CIV 5.7.x port | Planned |
 | `CloudTAK/` | FeatureLink CloudTAK plugin | Planned |
-| [`Infra-TAK/`](Infra-TAK/) | Display Configurator — infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | **Deprecated & not supported** — see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
-| [`TAKPortal/`](TAKPortal/) | FeatureLink Configs — TAK Portal module: full Display Configurator (ported from Infra-TAK) for admins, any logged-in field user browses/downloads the results | Available — see [`TAKPortal/README.md`](TAKPortal/README.md) |
+| [`Infra-TAK/`](Infra-TAK/) | Display Configurator - infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | **Deprecated & not supported** - see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
+| [`TAKPortal/`](TAKPortal/) | FeatureLink Configs - TAK Portal module: full Display Configurator (ported from Infra-TAK) for admins, any logged-in field user browses/downloads the results | Available - see [`TAKPortal/README.md`](TAKPortal/README.md) |
 | `WinTAK5.6/` | FeatureLink WinTAK plugin, WinTAK 5.6.x port | Planned |
 | `WinTAK5.7/` | FeatureLink WinTAK plugin, WinTAK 5.7.x port | Planned |
 
@@ -41,16 +41,16 @@ your platform below.
 ### Choose Your Configuration Type
 
 > <details>
-> <summary><strong>TAK Portal vs. Infra-TAK — which config source should you use?</strong></summary>
+> <summary><strong>TAK Portal vs. Infra-TAK - which config source should you use?</strong></summary>
 >
 > | | [TAK Portal](https://github.com/AdventureSeeker423/TAK-Portal) | [infra-TAK](https://github.com/jpat-12/infra-TAK) |
 > |---|---|---|
 > | **Who builds configs** | Any admin | Console admin only |
 > | **Who can grab a config** | Any logged-in TAK Portal user, via their own session | Whoever has the console admin password |
-> | **Login needed by field users** | Just their existing TAK Portal account | None — configs are pulled via QR/link, no separate account |
-> | **Best for** | Teams already running TAK Portal — field users self-serve configs without bugging an admin | Teams running infra-TAK without TAK Portal, or who want config-building kept behind the console's admin gate |
+> | **Login needed by field users** | Just their existing TAK Portal account | None - configs are pulled via QR/link, no separate account |
+> | **Best for** | Teams already running TAK Portal - field users self-serve configs without bugging an admin | Teams running infra-TAK without TAK Portal, or who want config-building kept behind the console's admin gate |
 >
-> Both run the same Display Configurator under the hood — the only difference is
+> Both run the same Display Configurator under the hood - the only difference is
 > who can reach it and how a field user gets the result onto their device. See
 > [CONFIG-FORMAT.md](CONFIG-FORMAT.md) if you need the payload details.
 >
@@ -73,7 +73,7 @@ your platform below.
 > Patches TAK Portal's `server.js`, `permissions.registry.js`,
 > `portalAuth.middleware.js`, and sidebar idempotently (safe to re-run,
 > including after pulling a newer TAK Portal `main` from upstream) rather than
-> forking it — see [`TAKPortal/README.md`](TAKPortal/README.md) for details,
+> forking it - see [`TAKPortal/README.md`](TAKPortal/README.md) for details,
 > updating, and uninstalling.
 >
 > </details>
@@ -83,9 +83,9 @@ your platform below.
 >
 > Adds a **FeatureLink Display Config** link to an existing
 > [infra-TAK](https://github.com/jpat-12/infra-TAK) console. On the infra-TAK
-> console host, as root — this uses a sparse, partial clone so the console only
+> console host, as root - this uses a sparse, partial clone so the console only
 > pulls down `Infra-TAK/`, not the ATAK/WinTAK plugin folders (Android SDKs,
-> gradle caches, keystores — several hundred MB of stuff a console box has no
+> gradle caches, keystores - several hundred MB of stuff a console box has no
 > use for):
 >
 > ```bash
@@ -118,15 +118,15 @@ your platform below.
 
 1. Side-load the APK onto your Android device running ATAK-CIV 5.6.0.
 2. In ATAK, open **Settings > Manage Plugins** and enable **FeatureLink**.
-3. **Sign into ArcGIS** — tap the account button in the FeatureLink header, enter
+3. **Sign into ArcGIS** - tap the account button in the FeatureLink header, enter
    your ArcGIS Portal URL, username, and password, and tap **Sign in with ArcGIS**.
    Your hosted feature layers populate the Layers tab automatically.
-4. **Set up PLI** — on the PLI tab, use **Create New Layer** or **Join Existing
+4. **Set up PLI** - on the PLI tab, use **Create New Layer** or **Join Existing
    Layer** (via QR scan) to set up a shared position layer, then enable
    **Auto-Send PLI** to start streaming your position to it.
-5. **Import a config** — on the Layers tab, tap **Add Layer**, then either
+5. **Import a config** - on the Layers tab, tap **Add Layer**, then either
    **Scan Config QR** or paste a Feature Service URL directly.
-6. **Scan a QR code** — any scan entry point (Add Layer page, PLI layer URL
+6. **Scan a QR code** - any scan entry point (Add Layer page, PLI layer URL
    field, PLI's Scan Config QR button) accepts all FeatureLink QR types and
    routes automatically to the right tab.
 
@@ -149,16 +149,16 @@ In development.
 <details>
 <summary><h3 style="display:inline">WinTAK Plugin</h3></summary>
 
-In development — planned ports for WinTAK 5.6.x and 5.7.x.
+In development - planned ports for WinTAK 5.6.x and 5.7.x.
 
 </details>
 
 ## Related
 
-- [CONFIG-FORMAT.md](CONFIG-FORMAT.md) — the display-config/QR payload contract between the Display Configurator and the ATAK/WinTAK plugin
-- [ATAK-Plugin_FeatureLink](https://github.com/jpat-12/ATAK-Plugin_FeatureLink) — original standalone repo for the ATAK plugin, **deprecated**
-- [infra-TAK](https://github.com/jpat-12/infra-TAK) — the console the `Infra-TAK/` module installs into
-- [TAK-Portal](https://github.com/AdventureSeeker423/TAK-Portal) — the portal the `TAKPortal/` module installs into
+- [CONFIG-FORMAT.md](CONFIG-FORMAT.md) - the display-config/QR payload contract between the Display Configurator and the ATAK/WinTAK plugin
+- [ATAK-Plugin_FeatureLink](https://github.com/jpat-12/ATAK-Plugin_FeatureLink) - original standalone repo for the ATAK plugin, **deprecated**
+- [infra-TAK](https://github.com/jpat-12/infra-TAK) - the console the `Infra-TAK/` module installs into
+- [TAK-Portal](https://github.com/AdventureSeeker423/TAK-Portal) - the portal the `TAKPortal/` module installs into
 
 ## Support
 
