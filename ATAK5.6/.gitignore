@@ -44,3 +44,8 @@ desktop.ini
 !buildtools/
 !buildtools/atak-gradle-takdev.jar
 !app/featurelink.keystore
+
+# gradle.properties is ignored above (may carry machine-specific paths/secrets elsewhere),
+# except this one — it only sets a JVM heap size for R8, needed on any CI runner since a
+# civRelease build's minification pass has hit OutOfMemoryError on the default heap.
+!gradle.properties

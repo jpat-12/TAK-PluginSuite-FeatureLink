@@ -5,8 +5,8 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.EditText;
 import android.widget.ImageButton;
-import android.widget.Spinner;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -33,21 +33,34 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         void onIntervalChanged(ArcGISLayer layer);
     }
 
-    private static final int[]     INTERVAL_VALUES = {0, 1, 3, 5, 10, 20, 30, 45};
-    private static final String[]  INTERVAL_LABELS = {"Off", "1", "3", "5", "10", "20", "30", "45"};
-    private static final String[]  UNITS = {"s", "min", "hr"};
+    /** Fired by the Share button — public layers only. Opens a contact picker so the layer can
+     * be sent directly to another ATAK user (see FeatureLinkDropDownReceiver.onLayerShare()). */
+    public interface OnShareListener {
+        void onShare(ArcGISLayer layer);
+    }
+
+    /** Fired by the trash-can button — private (signed-in ArcGIS) layers only. Public layers
+     * already use their action button for this (see onAction's "public" branch). */
+    public interface OnDeleteListener {
+        void onDelete(ArcGISLayer layer);
+    }
 
     private final OnLayerActionListener listener;
     private final OnVisibilityToggleListener visibilityListener;
     private final OnIntervalChangeListener intervalChangeListener;
+    private final OnShareListener shareListener;
+    private final OnDeleteListener deleteListener;
 
     public LayerListAdapter(Context context, List<ArcGISLayer> layers,
             OnLayerActionListener listener, OnVisibilityToggleListener visibilityListener,
-            OnIntervalChangeListener intervalChangeListener) {
+            OnIntervalChangeListener intervalChangeListener, OnShareListener shareListener,
+            OnDeleteListener deleteListener) {
         super(context, 0, layers);
         this.listener               = listener;
         this.visibilityListener     = visibilityListener;
         this.intervalChangeListener = intervalChangeListener;
+        this.shareListener          = shareListener;
+        this.deleteListener         = deleteListener;
     }
 
     @NonNull
@@ -65,9 +78,10 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         TextView    nameText        = convertView.findViewById(R.id.layer_name_text);
         TextView    typeBadge       = convertView.findViewById(R.id.layer_type_badge);
         View        intervalRow     = convertView.findViewById(R.id.layer_interval_row);
-        Spinner     intervalSpinner = convertView.findViewById(R.id.layer_interval_spinner);
-        Spinner     unitSpinner     = convertView.findViewById(R.id.layer_unit_spinner);
+        EditText    intervalSecondsEdit = convertView.findViewById(R.id.layer_interval_seconds_edit);
         ImageButton actionBtn       = convertView.findViewById(R.id.layer_action_btn);
+        ImageButton shareBtn        = convertView.findViewById(R.id.layer_share_btn);
+        ImageButton deleteBtn       = convertView.findViewById(R.id.layer_delete_btn);
 
         nameText.setText(layer.name);
 
@@ -89,61 +103,30 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         // onAction there would pop the delete-confirmation dialog just from picking an interval.
         intervalRow.setVisibility(View.VISIBLE);
 
-        // --- Interval Spinner ---
-        ArrayAdapter<String> intervalAdapter = new ArrayAdapter<>(
-                getContext(), android.R.layout.simple_spinner_item, INTERVAL_LABELS);
-        intervalAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        intervalSpinner.setOnItemSelectedListener(null);
-        intervalSpinner.setAdapter(intervalAdapter);
-
-        int intervalIdx = 0;
-        for (int i = 0; i < INTERVAL_VALUES.length; i++) {
-            if (INTERVAL_VALUES[i] == layer.recurrenceInterval) { intervalIdx = i; break; }
-        }
-        intervalSpinner.setSelection(intervalIdx, false);
-        intervalSpinner.post(() -> intervalSpinner.setOnItemSelectedListener(
-                new android.widget.AdapterView.OnItemSelectedListener() {
-                    @Override
-                    public void onItemSelected(android.widget.AdapterView<?> p,
-                            View v, int pos, long id) {
-                        layer.recurrenceInterval = INTERVAL_VALUES[pos];
-                        if (isPrivate) {
-                            if (listener != null) listener.onAction(layer);
-                        } else if (intervalChangeListener != null) {
-                            intervalChangeListener.onIntervalChanged(layer);
-                        }
-                    }
-                    @Override
-                    public void onNothingSelected(android.widget.AdapterView<?> p) {}
-                }));
-
-        // --- Unit Spinner ---
-        ArrayAdapter<String> unitAdapter = new ArrayAdapter<>(
-                getContext(), android.R.layout.simple_spinner_item, UNITS);
-        unitAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        unitSpinner.setOnItemSelectedListener(null);
-        unitSpinner.setAdapter(unitAdapter);
-
-        int unitIdx = 1; // default "min"
-        for (int i = 0; i < UNITS.length; i++) {
-            if (UNITS[i].equals(layer.recurrenceUnit)) { unitIdx = i; break; }
-        }
-        unitSpinner.setSelection(unitIdx, false);
-        unitSpinner.post(() -> unitSpinner.setOnItemSelectedListener(
-                new android.widget.AdapterView.OnItemSelectedListener() {
-                    @Override
-                    public void onItemSelected(android.widget.AdapterView<?> p,
-                            View v, int pos, long id) {
-                        layer.recurrenceUnit = UNITS[pos];
-                        if (isPrivate) {
-                            if (listener != null) listener.onAction(layer);
-                        } else if (intervalChangeListener != null) {
-                            intervalChangeListener.onIntervalChanged(layer);
-                        }
-                    }
-                    @Override
-                    public void onNothingSelected(android.widget.AdapterView<?> p) {}
-                }));
+        // Editable purely in seconds now — recurrenceMillis() still handles a layer whose
+        // recurrenceUnit is "min"/"hr" from before this change; edited layers always land back
+        // on recurrenceUnit="s" via the commit below, showing the equivalent second count here.
+        long currentSeconds = layer.recurrenceMillis() / 1000L;
+        intervalSecondsEdit.setOnFocusChangeListener(null);
+        intervalSecondsEdit.setText(String.valueOf(currentSeconds));
+        intervalSecondsEdit.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) return;
+            int seconds;
+            try {
+                seconds = Integer.parseInt(intervalSecondsEdit.getText().toString().trim());
+            } catch (NumberFormatException e) {
+                seconds = 0;
+            }
+            if (seconds < 0) seconds = 0;
+            layer.recurrenceInterval = seconds;
+            layer.recurrenceUnit = "s";
+            intervalSecondsEdit.setText(String.valueOf(seconds));
+            if (isPrivate) {
+                if (listener != null) listener.onAction(layer);
+            } else if (intervalChangeListener != null) {
+                intervalChangeListener.onIntervalChanged(layer);
+            }
+        });
 
         if (isPrivate) {
             // --- Action button: down arrow until first sync, circular refresh after ---
@@ -152,11 +135,21 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
             actionBtn.setOnClickListener(v -> {
                 if (listener != null) listener.onAction(layer);
             });
+            shareBtn.setVisibility(View.GONE);
+            deleteBtn.setVisibility(View.VISIBLE);
+            deleteBtn.setOnClickListener(v -> {
+                if (deleteListener != null) deleteListener.onDelete(layer);
+            });
         } else {
             actionBtn.setImageResource(android.R.drawable.ic_menu_delete);
             actionBtn.setOnClickListener(v -> {
                 if (listener != null) listener.onAction(layer);
             });
+            shareBtn.setVisibility(View.VISIBLE);
+            shareBtn.setOnClickListener(v -> {
+                if (shareListener != null) shareListener.onShare(layer);
+            });
+            deleteBtn.setVisibility(View.GONE);
         }
 
         return convertView;

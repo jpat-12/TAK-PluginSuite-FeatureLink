@@ -7,8 +7,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 buildscript {
-
-    ext.PLUGIN_VERSION = "2.6.15"
+    ext.PLUGIN_VERSION = "2.6.22"
     ext.ATAK_VERSION = '5.6.0'
 
     def takdevVersion = '3.+'
@@ -183,6 +182,14 @@ android {
 
         debug.setRoot('build-types/debug')
         release.setRoot('build-types/release')
+
+        // Applies to the .aab bundle output too (Gradle appends its own flavor/buildType
+        // suffix), so e.g. app-civ-release.aab becomes
+        // ATAK-Plugin-FeatureLink-2.6.18-ATAK-5.6-civ-release.aab — matching the .apk naming
+        // below instead of the generic default.
+        main {
+            setProperty("archivesBaseName", "ATAK-Plugin-FeatureLink-" + PLUGIN_VERSION + "-ATAK-" + atakMajorMinor())
+        }
     }
 
     defaultConfig {
@@ -205,7 +212,9 @@ android {
 
     applicationVariants.all { variant ->
         variant.outputs.all {
-            outputFileName = "FeatureLink-${PLUGIN_VERSION}-${variant.buildType.name}.apk"
+            // e.g. ATAK-Plugin-FeatureLink-2.6.18-ATAK-5.6-release — to match the naming
+            // TAK Product Center's submission pipeline expects for release artifacts.
+            outputFileName = "ATAK-Plugin-FeatureLink-${PLUGIN_VERSION}-ATAK-${atakMajorMinor()}-${variant.buildType.name}.apk"
         }
     }
 
@@ -216,6 +225,16 @@ android {
 }
 
 afterEvaluate {
+    // Empty ProGuard mapping fallback so release ProGuard doesn't abort if the SDK mapping
+    // path was not provided by the takdev plugin — proguard-gradle.txt's -applymapping
+    // <atak.proguard.mapping> needs this system property set to *something* resolvable.
+    if (!System.properties.containsKey('atak.proguard.mapping')) {
+        def emptyMapping = new File("${buildDir}/takdev-mapping-fallback.txt")
+        emptyMapping.parentFile.mkdirs()
+        if (!emptyMapping.exists()) emptyMapping.text = ''
+        System.setProperty('atak.proguard.mapping', emptyMapping.absolutePath)
+    }
+
     project.file('proguard-gradle-repackage.txt').text = "-repackageclasses atakplugin.${rootProject.getName()}"
 
     try {
@@ -225,6 +244,11 @@ afterEvaluate {
             }
         }
     } catch (Exception ignored) { }
+}
+
+// ATAK_VERSION trimmed to major.minor, e.g. "5.6.0" -> "5.6".
+def atakMajorMinor() {
+    return ATAK_VERSION.tokenize('.').take(2).join('.')
 }
 
 def getCommandFlavor() {

@@ -1,6 +1,8 @@
 package com.atakmap.android.featurelink;
 
+import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -30,27 +32,38 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import android.view.LayoutInflater;
+import com.atakmap.android.contact.Contact;
+import com.atakmap.android.contact.Contacts;
+import com.atakmap.android.contact.IndividualContact;
 import com.atakmap.android.dropdown.DropDown;
 import com.atakmap.android.dropdown.DropDownReceiver;
 import com.atakmap.android.featurelink.arcgis.ArcGISAuthManager;
 import com.atakmap.android.featurelink.arcgis.ArcGISLayer;
 import com.atakmap.android.featurelink.arcgis.ArcGISRestClient;
 import com.atakmap.android.featurelink.plugin.R;
+import com.atakmap.android.ipc.AtakBroadcast;
 import com.atakmap.android.maps.MapGroup;
 import com.atakmap.android.maps.MapItem;
 import com.atakmap.android.maps.MapView;
 import com.atakmap.android.maps.Marker;
 import com.atakmap.android.maps.PointMapItem;
+import com.atakmap.android.missionpackage.api.MissionPackageApi;
+import com.atakmap.android.missionpackage.api.ToastSaveCallback;
+import com.atakmap.android.missionpackage.file.MissionPackageManifest;
 import android.util.Log;
 import com.atakmap.coremap.maps.coords.GeoPoint;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -68,10 +81,18 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private static final String PREFS_NAME              = "featurelink_prefs";
     private static final String PREF_PLI_LAYER_URL      = "pli_layer_url";
+    private static final String PREF_PLI_OBJECT_ID      = "pli_object_id";
     private static final String PREF_PLI_AUTO_SEND      = "pli_auto_send";
     private static final String PREF_PORTAL_URL         = "portal_url";
     private static final String PREF_LAYERS_JSON        = "layers_json";
+    private static final String PREF_EXCLUDED_PRIVATE_URLS = "excluded_private_layer_urls";
+    private static final String PREF_DISPLAY_CONFIGS_JSON = "display_configs_json";
     private static final String PREF_PUBLIC_LAYERS_JSON = "public_layers_json";
+
+    /** Request code for the "Upload Pref File" system file picker — matched against the
+     * "requestCode" extra on ATAK's "com.atakmap.android.ACTIVITY_FINISHED" broadcast, which is
+     * how a plugin gets an Activity result back (see prefFileResultReceiver). */
+    private static final int PREF_FILE_PICK_REQUEST_CODE = 41217;
 
     private final Context pluginContext;
     private final ArcGISAuthManager authManager;
@@ -80,6 +101,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private final ExecutorService executor = Executors.newFixedThreadPool(2);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private ScheduledExecutorService pliScheduler;
+    private BroadcastReceiver prefFileResultReceiver;
 
     // Main view and page navigation (0=HOME, 1=LAYERS, 2=PLI)
     private View mainView;
@@ -119,6 +141,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     // PLI page
     private TextView pliFeatureLayerTitle;
+    private LinearLayout pliLayerContent;
+    private android.widget.ImageButton collapsePliLayerBtn;
+    private boolean pliLayerExpanded = true;
+    private boolean pliAutoCollapseDone = false;
     private LinearLayout pliContent;
     private TextView pliSignInHint;
     private RadioGroup pliRadioGroup;
@@ -196,6 +222,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
         loadSavedData();
         navigatePage(0);
+
+        registerPrefFileResultReceiver();
     }
 
     // -------------------------------------------------------------------------
@@ -361,6 +389,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void wirePliPageViews() {
         pliFeatureLayerTitle = pliPageView.findViewById(R.id.pli_feature_layer_title);
+        pliLayerContent      = pliPageView.findViewById(R.id.pli_layer_content);
+        collapsePliLayerBtn  = pliPageView.findViewById(R.id.collapse_pli_layer_btn);
+        collapsePliLayerBtn.setOnClickListener(v -> togglePliLayerSection());
         pliSignInHint      = pliPageView.findViewById(R.id.pli_sign_in_hint);
         pliContent         = pliPageView.findViewById(R.id.pli_content);
         pliRadioGroup      = pliPageView.findViewById(R.id.pli_radio_group);
@@ -450,10 +481,32 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         refreshHomeStatusCard();
     }
 
+    private void togglePliLayerSection() {
+        pliLayerExpanded = !pliLayerExpanded;
+        applyPliLayerSectionVisibility();
+    }
+
+    private void applyPliLayerSectionVisibility() {
+        pliLayerContent.setVisibility(pliLayerExpanded ? View.VISIBLE : View.GONE);
+        collapsePliLayerBtn.setImageResource(pliLayerExpanded
+                ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+    }
+
+    /** Collapses the "PLI Feature Layer" section the first time it's found connected — once
+     * it's set up, there's nothing left to look at there, so this saves a scroll/tap on every
+     * later visit. Only fires once; a user who manually re-expands it isn't fought afterward. */
+    private void maybeAutoCollapsePliLayerSection() {
+        if (pliAutoCollapseDone || !isPliConnected()) return;
+        pliAutoCollapseDone = true;
+        pliLayerExpanded = false;
+        applyPliLayerSectionVisibility();
+    }
+
     /** Colors the "PLI Feature Layer" section header red/green based on connection status. */
     private void updatePliConnectionIndicator() {
         if (pliFeatureLayerTitle == null) return;
         pliFeatureLayerTitle.setTextColor(isPliConnected() ? 0xFF4CAF50 : 0xFFFF5722);
+        maybeAutoCollapsePliLayerSection();
     }
 
     // -------------------------------------------------------------------------
@@ -469,7 +522,6 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             String token = authManager.getToken();
 
             for (ArcGISLayer layer : privateSnap) {
-                if (!layer.downloadEnabled) continue;
                 long count = cachedCount(layer.url, token);
                 layer.featureCount = count;
                 total += count;
@@ -669,8 +721,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         executor.submit(() -> {
             List<ArcGISLayer> layers = restClient.searchUserLayers(portal, token, username);
             mainHandler.post(() -> {
+                Set<String> excluded = getExcludedPrivateUrls();
                 privateLayers.clear();
                 for (ArcGISLayer l : layers) {
+                    if (excluded.contains(l.url)) continue;
                     l.type = "private";
                     privateLayers.add(l);
                 }
@@ -750,7 +804,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         container.removeAllViews();
         LayerListAdapter adapter = new LayerListAdapter(
                 pluginContext, layers, this::onLayerAction, this::toggleLayerVisibility,
-                this::onLayerIntervalChanged);
+                this::onLayerIntervalChanged, this::onLayerShare, this::onLayerDelete);
         for (int i = 0; i < layers.size(); i++) {
             container.addView(adapter.getView(i, null, container));
             if (i < layers.size() - 1) {
@@ -799,6 +853,89 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         savePublicLayers();
     }
 
+    // -------------------------------------------------------------------------
+    // Share a public layer with a contact
+    // -------------------------------------------------------------------------
+
+    /** Share button tapped — pick a contact, then send them this layer as an ATAK Mission
+     * Package (data package). ATAK's own native "X wants to send you a file" accept/decline
+     * flow handles the rest; the recipient picks the received file up via the Add Layer page's
+     * "Upload Pref File" button once they accept it. */
+    private void onLayerShare(ArcGISLayer layer) {
+        List<String> uuids = Contacts.getInstance().getAllIndividualContactUuids();
+        IndividualContact[] contacts = Contacts.getInstance().getIndividualContactsByUuid(uuids);
+
+        List<Contact> targets = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        for (IndividualContact c : contacts) {
+            if (c == null) continue;
+            targets.add(c);
+            names.add(c.getName());
+        }
+        if (targets.isEmpty()) {
+            Toast.makeText(pluginContext, "No contacts available to share with", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Share \"" + layer.name + "\" with…")
+                .setItems(names.toArray(new String[0]), (d, which) ->
+                        sendLayerShare(layer, targets.get(which)))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void sendLayerShare(ArcGISLayer layer, Contact recipient) {
+        String configJson = LayerShareHelper.buildShareConfigJson(layer, layerDisplayConfigs.get(layer.url));
+        if (configJson == null) {
+            Toast.makeText(pluginContext, "Could not build share file", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        executor.submit(() -> {
+            try {
+                // pluginContext.getCacheDir() doesn't resolve to a real, writable directory —
+                // ATAK plugin Context objects are largely for resource resolution (assets/
+                // strings/themes), not a genuine backing filesystem the way a normally-installed
+                // app's Context is. The host ATAK app's context always has a real one, and
+                // MissionPackageApi.Send() below already runs against that same host context.
+                File dir = new File(getMapView().getContext().getCacheDir(), "featurelink_share");
+                dir.mkdirs();
+                String safeName = layer.name.replaceAll("[^a-zA-Z0-9 _-]", "_");
+                File file = new File(dir, safeName + ".featurelink.json");
+                try (FileWriter w = new FileWriter(file)) {
+                    w.write(configJson);
+                }
+
+                // ATAK derives the on-disk filename it writes the incoming package to (under
+                // .../atak/tools/datapackage/incoming/) from this manifest name — a colon (as in
+                // the earlier "FeatureLink: <name>") isn't valid there (external storage is
+                // FAT-based) and fails with EPERM. Reuse the already-filesystem-safe name.
+                MissionPackageManifest manifest = MissionPackageApi.CreateTempManifest(
+                        "FeatureLink - " + safeName, true, true, null);
+                manifest.addFile(file, "FeatureLink Layer Config");
+                // Tells ATAK to automatically run the received file through its normal import
+                // system (FeatureLinkMarshal/FeatureLinkImporter, registered in
+                // FeatureLinkMapComponent) once the recipient accepts the package, instead of
+                // just extracting it and leaving it for a manual "Upload Pref File" pick.
+                manifest.getConfiguration().setImportInstructions(true, false, null);
+
+                boolean started = MissionPackageApi.Send(
+                        getMapView().getContext(), manifest,
+                        ToastSaveCallback.class,
+                        new Contact[]{recipient});
+
+                mainHandler.post(() -> Toast.makeText(pluginContext,
+                        started ? "Sending \"" + layer.name + "\" to " + recipient.getName() + "…"
+                                : "Could not start send to " + recipient.getName(),
+                        Toast.LENGTH_SHORT).show());
+            } catch (Exception e) {
+                Log.e(TAG, "sendLayerShare failed", e);
+                mainHandler.post(() -> Toast.makeText(pluginContext,
+                        "Failed to share layer", Toast.LENGTH_SHORT).show());
+            }
+        });
+    }
+
     private void confirmRemovePublicLayer(ArcGISLayer layer) {
         new AlertDialog.Builder(getMapView().getContext())
                 .setTitle("Remove Layer?")
@@ -809,10 +946,50 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     savePublicLayers();
                     removeLayerMarkers(layer);
                     layerDisplayConfigs.remove(layer.url);
+                    saveDisplayConfigs();
                     refreshPublicLayers();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    /** Trash-can button on a private (signed-in ArcGIS) layer. Unlike a public layer, this
+     * layer still exists in the user's own ArcGIS account — there's nothing here to actually
+     * delete server-side, so this just hides it from this device's list and remembers that
+     * choice, so the next sign-in or "Refresh" doesn't silently bring it back. */
+    private void onLayerDelete(ArcGISLayer layer) {
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Remove Layer?")
+                .setMessage("Remove \"" + layer.name + "\" from your layer list here? "
+                        + "It stays in your ArcGIS account — this only hides it on this device. "
+                        + "Any markers it added to the map will also be removed.")
+                .setPositiveButton("Remove", (d, w) -> {
+                    privateLayers.remove(layer);
+                    savePrivateLayers();
+                    removeLayerMarkers(layer);
+                    layerDisplayConfigs.remove(layer.url);
+                    saveDisplayConfigs();
+                    addExcludedPrivateUrl(layer.url);
+                    refreshPrivateLayers();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private Set<String> getExcludedPrivateUrls() {
+        Set<String> out = new HashSet<>();
+        try {
+            JSONArray arr = new JSONArray(prefs.getString(PREF_EXCLUDED_PRIVATE_URLS, "[]"));
+            for (int i = 0; i < arr.length(); i++) out.add(arr.getString(i));
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private void addExcludedPrivateUrl(String url) {
+        if (url == null) return;
+        Set<String> excluded = getExcludedPrivateUrls();
+        excluded.add(url);
+        prefs.edit().putString(PREF_EXCLUDED_PRIVATE_URLS, new JSONArray(excluded).toString()).apply();
     }
 
     private void addPublicLayer() {
@@ -981,9 +1158,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             mainHandler.post(() -> {
                 pliActionBtn.setEnabled(true);
                 if (serviceUrl != null) {
-                    pliLayerUrl = serviceUrl;
+                    setPliLayerUrl(serviceUrl);
                     pliLayerUrlEdit.setText(serviceUrl);
-                    prefs.edit().putString(PREF_PLI_LAYER_URL, serviceUrl).apply();
                     pliStatusText.setText("Created: " + serviceUrl);
                     updateQrShareButton();
                     updateSetPliEndpointBtn();
@@ -1000,8 +1176,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             Toast.makeText(pluginContext, "Enter a Feature Layer URL", Toast.LENGTH_SHORT).show();
             return;
         }
-        pliLayerUrl = url;
-        prefs.edit().putString(PREF_PLI_LAYER_URL, url).apply();
+        setPliLayerUrl(url);
         pliStatusText.setText("Joined: " + url);
         Toast.makeText(pluginContext, "PLI layer configured", Toast.LENGTH_SHORT).show();
         updateQrShareButton();
@@ -1149,6 +1324,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             Log.d(TAG, "applyScannedDisplayConfig: url branch, url=" + config.url);
             // v:2 — store the config, load the layer, and download with styling applied
             layerDisplayConfigs.put(config.url, config);
+            saveDisplayConfigs();
             executor.submit(() -> {
                 ArcGISLayer layer = restClient.fetchLayerInfo(config.url);
                 Log.d(TAG, "applyScannedDisplayConfig: fetchLayerInfo -> " + (layer == null ? "null" : ("name=" + layer.name + " url=" + layer.url)));
@@ -1206,6 +1382,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     .setItems(names, (dlg, which) -> {
                         ArcGISLayer layer = all.get(which);
                         layerDisplayConfigs.put(layer.url, config);
+                        saveDisplayConfigs();
                         downloadLayer(layer);
                     })
                     .setNegativeButton("Cancel", null)
@@ -1240,8 +1417,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         String url = config.optString(QrHelper.URL, "");
         if (url.isEmpty()) return;
 
-        pliLayerUrl = url;
-        prefs.edit().putString(PREF_PLI_LAYER_URL, url).apply();
+        setPliLayerUrl(url);
         updateQrShareButton();
         updateSetPliEndpointBtn();
 
@@ -1258,8 +1434,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         navigatePage(0);
 
         if (!url.isEmpty()) {
-            pliLayerUrl = url;
-            prefs.edit().putString(PREF_PLI_LAYER_URL, url).apply();
+            setPliLayerUrl(url);
             joinLayerRb.setChecked(true);
         }
 
@@ -1306,23 +1481,109 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         });
     }
 
+    /** Opens a system file picker for a FeatureLink config JSON — either a manually-saved
+     * display config, or (see sendLayerShare()) a layer someone shared with you via ATAK
+     * Mission Package, once you've accepted the incoming file transfer. */
     private void showPrefFileDialog() {
         Intent fileBrowser = new Intent(Intent.ACTION_GET_CONTENT);
-        fileBrowser.setType("application/json");
+        fileBrowser.setType("*/*");
         fileBrowser.addCategory(Intent.CATEGORY_OPENABLE);
         try {
-            getMapView().getContext().startActivity(
-                    Intent.createChooser(fileBrowser, "Select display preferences JSON"));
+            Context ctx = getMapView().getContext();
+            if (ctx instanceof Activity) {
+                ((Activity) ctx).startActivityForResult(
+                        Intent.createChooser(fileBrowser, "Select FeatureLink config JSON"),
+                        PREF_FILE_PICK_REQUEST_CODE);
+            } else {
+                ctx.startActivity(Intent.createChooser(fileBrowser, "Select FeatureLink config JSON"));
+            }
         } catch (Exception e) {
-            Toast.makeText(pluginContext,
-                    "Place your display_prefs.json in /sdcard/atak/featurelink/ and tap Load",
-                    Toast.LENGTH_LONG).show();
+            Log.e(TAG, "showPrefFileDialog failed to launch picker", e);
+            Toast.makeText(pluginContext, "Could not open file picker", Toast.LENGTH_LONG).show();
         }
+    }
+
+    /** ATAK re-broadcasts any plugin-launched startActivityForResult() outcome via this action
+     * (extras: "requestCode", "resultCode", "data") rather than a normal onActivityResult()
+     * override — see the SDK's HelloWorldDropDownReceiver sample for the same pattern. */
+    private void registerPrefFileResultReceiver() {
+        prefFileResultReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent.getIntExtra("requestCode", -1) != PREF_FILE_PICK_REQUEST_CODE) return;
+                if (intent.getIntExtra("resultCode", Activity.RESULT_CANCELED) != Activity.RESULT_OK) return;
+                Intent data = intent.getParcelableExtra("data");
+                Uri uri = data != null ? data.getData() : null;
+                if (uri != null) handlePrefFileSelected(uri);
+            }
+        };
+        AtakBroadcast.getInstance().registerReceiver(prefFileResultReceiver,
+                new AtakBroadcast.DocumentedIntentFilter("com.atakmap.android.ACTIVITY_FINISHED"));
+    }
+
+    private void handlePrefFileSelected(Uri uri) {
+        executor.submit(() -> {
+            String content;
+            try {
+                content = readUriAsString(uri);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to read selected pref file: " + uri, e);
+                mainHandler.post(() -> Toast.makeText(pluginContext,
+                        "Could not read file", Toast.LENGTH_SHORT).show());
+                return;
+            }
+            mainHandler.post(() -> {
+                hideOverlay();
+                applyScannedPayload(content);
+            });
+        });
+    }
+
+    private String readUriAsString(Uri uri) throws java.io.IOException {
+        try (java.io.InputStream is = pluginContext.getContentResolver().openInputStream(uri)) {
+            if (is == null) throw new java.io.IOException("could not open " + uri);
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            byte[] chunk = new byte[8192];
+            int n;
+            while ((n = is.read(chunk)) != -1) buf.write(chunk, 0, n);
+            return buf.toString("UTF-8");
+        }
+    }
+
+    /** Called by FeatureLinkImporter.importData() — ATAK's import system invokes this off the
+     * main thread when an accepted Mission Package's contents matched FeatureLinkMarshal (see
+     * sendLayerShare()'s ImportInstructions). Reads the file synchronously (cheap, already off
+     * the main thread) and hands the actual apply — network calls, UI — to the main thread,
+     * same as the manual "Upload Pref File" path (handlePrefFileSelected) already does. Returns
+     * whether the file was at least readable; the apply itself is fire-and-forget from here,
+     * identical to how handlePrefFileSelected's caller never waits on the result either. */
+    boolean importFeatureLinkShareUri(Uri uri) {
+        String content;
+        try {
+            content = readUriAsString(uri);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to read incoming FeatureLink share: " + uri, e);
+            return false;
+        }
+        if (content.trim().isEmpty()) return false;
+        mainHandler.post(() -> {
+            hideOverlay();
+            applyScannedPayload(content);
+        });
+        return true;
     }
 
     // -------------------------------------------------------------------------
     // PLI auto-send
     // -------------------------------------------------------------------------
+
+    /** Points PLI sends at a (possibly new/different) layer — clears the remembered objectId
+     * so the first send after this goes back to add-then-remember-id instead of trying to
+     * update an id that belongs to whatever layer was previously joined. */
+    private void setPliLayerUrl(String url) {
+        pliLayerUrl = url;
+        prefs.edit().putString(PREF_PLI_LAYER_URL, url).remove(PREF_PLI_OBJECT_ID).apply();
+    }
 
     private void startPliScheduler() {
         stopPliScheduler();
@@ -1353,26 +1614,47 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
             GeoPoint pt  = self.getPoint();
             long     now = System.currentTimeMillis();
+            String   icon    = self.getMetaString("icon",    "");
+            String   remarks = self.getMetaString("remarks", "");
+            String   how     = self.getMetaString("how",     "m-g");
+            String   groupName = self.getMetaString("team",         "");
+            String   groupRole = self.getMetaString("atakRoleType", "");
+            String   username  = authManager.getUsername();
 
-            restClient.addPliFeature(
-                    pliLayerUrl, token,
-                    self.getUID(),
-                    self.getType(),
-                    mv.getDeviceCallsign(),
-                    self.getMetaString("icon",    ""),
-                    self.getMetaString("remarks", ""),
-                    self.getMetaString("how",     "m-g"),
-                    authManager.getUsername(),
-                    pt.getLatitude(),
-                    pt.getLongitude(),
-                    pt.getAltitude(),
-                    pt.getCE(),
-                    pt.getLE(),
-                    now,
-                    now,
-                    now + 30_000L,
-                    "");
-            Log.d(TAG, "PLI sent to feature layer");
+            // First send for this PLI layer creates the feature and remembers its objectId;
+            // every send after that updates the same row in place instead of adding a new one.
+            long objectId = prefs.getLong(PREF_PLI_OBJECT_ID, -1L);
+            if (objectId < 0) {
+                objectId = restClient.addPliFeature(
+                        pliLayerUrl, token,
+                        self.getUID(), self.getType(), mv.getDeviceCallsign(),
+                        icon, remarks, how, username, groupName, groupRole,
+                        pt.getLatitude(), pt.getLongitude(), pt.getAltitude(),
+                        pt.getCE(), pt.getLE(),
+                        now, now, now + 30_000L, "");
+                if (objectId >= 0) {
+                    prefs.edit().putLong(PREF_PLI_OBJECT_ID, objectId).apply();
+                    Log.d(TAG, "PLI feature created, objectId=" + objectId);
+                } else {
+                    Log.w(TAG, "PLI add did not return an objectId — will retry as an add next tick");
+                }
+            } else {
+                boolean updated = restClient.updatePliFeature(
+                        pliLayerUrl, token, objectId,
+                        self.getUID(), self.getType(), mv.getDeviceCallsign(),
+                        icon, remarks, how, username, groupName, groupRole,
+                        pt.getLatitude(), pt.getLongitude(), pt.getAltitude(),
+                        pt.getCE(), pt.getLE(),
+                        now, now, now + 30_000L, "");
+                if (updated) {
+                    Log.d(TAG, "PLI feature updated, objectId=" + objectId);
+                } else {
+                    // Feature's likely gone server-side — forget the id so the next tick adds
+                    // a fresh one instead of updating a row that no longer exists.
+                    prefs.edit().remove(PREF_PLI_OBJECT_ID).apply();
+                    Log.w(TAG, "PLI update failed for objectId=" + objectId + " — will re-add next tick");
+                }
+            }
 
             if (pliHistoryOverlay != null) pliHistoryOverlay.addPoint(pt);
         } catch (Exception e) {
@@ -1413,6 +1695,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         item.getMetaString("remarks", ""),
                         item.getMetaString("how",     "h-g-i-g-o"),
                         authManager.getUsername(),
+                        item.getMetaString("team",         ""),
+                        item.getMetaString("atakRoleType", ""),
                         pt.getLatitude(),
                         pt.getLongitude(),
                         pt.getAltitude(),
@@ -1456,7 +1740,43 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         } catch (Exception e) {
             Log.e(TAG, "Failed to load saved layer data", e);
         }
+        loadDisplayConfigs();
         checkLayerRecurrence();
+    }
+
+    /** layerDisplayConfigs was purely in-memory until this — a plugin reload (device reboot,
+     * ATAK force-stop/crash, or just closing the app) silently threw away every layer's
+     * styling, so re-downloading it fell back to plain markers with no explanation. Persisted
+     * the same way privateLayers/publicLayers already are. */
+    private void saveDisplayConfigs() {
+        try {
+            JSONObject all = new JSONObject();
+            for (Map.Entry<String, DisplayConfig> e : layerDisplayConfigs.entrySet()) {
+                JSONObject compact = e.getValue().toCompactJson();
+                compact.put("v", 2);
+                compact.put("url", e.getKey());
+                all.put(e.getKey(), compact);
+            }
+            prefs.edit().putString(PREF_DISPLAY_CONFIGS_JSON, all.toString()).apply();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to save display configs", e);
+        }
+    }
+
+    private void loadDisplayConfigs() {
+        try {
+            String json = prefs.getString(PREF_DISPLAY_CONFIGS_JSON, null);
+            if (json == null) return;
+            JSONObject all = new JSONObject(json);
+            java.util.Iterator<String> keys = all.keys();
+            while (keys.hasNext()) {
+                String url = keys.next();
+                DisplayConfig cfg = DisplayConfig.fromJson(all.getJSONObject(url));
+                if (cfg != null) layerDisplayConfigs.put(url, cfg);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to load display configs", e);
+        }
     }
 
     private void savePrivateLayers() {
@@ -1566,6 +1886,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     public void disposeImpl() {
         stopPliScheduler();
         executor.shutdownNow();
+        if (prefFileResultReceiver != null) {
+            AtakBroadcast.getInstance().unregisterReceiver(prefFileResultReceiver);
+        }
         // Remove all injected markers from the ATAK map
         MapGroup root = getMapView().getRootGroup();
         for (List<Marker> markers : layerMarkers.values()) {

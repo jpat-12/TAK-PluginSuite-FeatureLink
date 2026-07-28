@@ -81,7 +81,7 @@ final class DisplayConfig {
             PopupConfig popup      = popupJ != null ? PopupConfig.fromJson(popupJ) : null;
             CotMapping  cotMapping = cmJ    != null ? CotMapping.fromJson(cmJ)     : null;
             int    freqInterval    = freqJ  != null ? freqJ.optInt("iv", 0)        : 0;
-            String freqUnit        = freqJ  != null ? freqJ.optString("u", "min")  : "min";
+            String freqUnit        = freqJ  != null ? freqJ.optString("u", "s")  : "s";
 
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
                     freqInterval, freqUnit);
@@ -117,13 +117,35 @@ final class DisplayConfig {
             CotMapping  cotMapping = cotMappingJ != null ? CotMapping.fromJsonV3(cotMappingJ)      : null;
             boolean freqEnabled    = freqJ != null && freqJ.optBoolean("enabled", false);
             int    freqInterval    = freqEnabled ? freqJ.optInt("intervalValue", 0)       : 0;
-            String freqUnit        = freqEnabled ? freqJ.optString("intervalUnit", "min") : "min";
+            String freqUnit        = freqEnabled ? freqJ.optString("intervalUnit", "s") : "s";
 
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
                     freqInterval, freqUnit);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * Serializes back to the same compact "sym"/"lbl"/"popup"/"cm" shape {@link #fromJson}
+     * parses — the plugin only ever needed to read this schema before (produced by the web
+     * configurator), but sharing an already-styled layer with another device (see
+     * FeatureLinkDropDownReceiver.sendLayerShare()) means writing it back out too.
+     */
+    JSONObject toCompactJson() throws Exception {
+        JSONObject o = new JSONObject();
+        if (sym != null) o.put("sym", sym.toJson());
+        if (lbl != null) o.put("lbl", lbl.toJson());
+        if (popup != null) o.put("popup", popup.toJson());
+        if (cotMapping != null) {
+            JSONObject cm = cotMapping.toJson();
+            if (cm.length() > 0) o.put("cm", cm);
+        }
+        return o;
+    }
+
+    static String toHexColor(int argb) {
+        return String.format("#%06x", argb & 0xFFFFFF);
     }
 
     // -------------------------------------------------------------------------
@@ -362,6 +384,49 @@ final class DisplayConfig {
             this.iconset      = iconset;
             this.iconFile     = iconFile;
             this.usericonPath = usericonPath;
+        }
+
+        /** Reverse of {@link #fromJson} — see {@link DisplayConfig#toCompactJson()}. */
+        JSONObject toJson() throws Exception {
+            JSONObject j = new JSONObject();
+            j.put("t", type);
+            j.put("c", toHexColor(color));
+            j.put("oc", toHexColor(outlineColor));
+            j.put("sz", sizePx);
+            j.put("sh", shape);
+            j.put("op", opacity);
+            if (fieldName != null && !fieldName.isEmpty()) j.put("f", fieldName);
+            if (iconset != null && !iconset.isEmpty()) j.put("is", iconset);
+            if (iconFile != null && !iconFile.isEmpty()) j.put("ic", iconFile);
+            if (usericonPath != null) j.put("up", usericonPath);
+            j.put("dc", toHexColor(defaultColor));
+
+            if (!uvEntries.isEmpty()) {
+                JSONArray uv = new JSONArray();
+                for (UvEntry e : uvEntries) {
+                    uv.put(new JSONObject().put("v", e.value).put("c", toHexColor(e.color)));
+                }
+                j.put("uv", uv);
+            }
+            if (!advValues.isEmpty()) {
+                JSONArray vs = new JSONArray();
+                for (UvEntry e : advValues) vs.put(e.toJson());
+                j.put("vs", vs);
+            }
+            if (!rbRules.isEmpty()) {
+                JSONArray rules = new JSONArray();
+                for (RbRule r : rbRules) rules.put(r.toJson());
+                // Compact schema: "rb" type uses the "rules" key, "adv" uses "r" — see fromJson().
+                j.put("adv".equals(type) ? "r" : "rules", rules);
+            }
+            if (!cbBreaks.isEmpty()) {
+                JSONArray cb = new JSONArray();
+                for (CbBreak b : cbBreaks) {
+                    cb.put(new JSONObject().put("mn", b.min).put("mx", b.max).put("c", toHexColor(b.color)));
+                }
+                j.put("cb", cb);
+            }
+            return j;
         }
 
         static SymConfig fromJson(JSONObject j) throws Exception {
@@ -623,6 +688,22 @@ final class DisplayConfig {
             this.iconFile     = iconFile;
             this.usericonPath = usericonPath;
         }
+
+        /** Reverse of {@link SymConfig#parseAdvVs} — a "vs" per-value entry. No stored shape
+         * (parseAdvVs never reads "sh" — the plugin doesn't use it, only the web configurator's
+         * own preview does), so this always writes "circle"; harmless since nothing on the
+         * plugin side reads it back either. */
+        JSONObject toJson() throws Exception {
+            JSONObject j = new JSONObject()
+                    .put("v", value)
+                    .put("c", DisplayConfig.toHexColor(color))
+                    .put("sh", "circle")
+                    .put("m", isIcon ? "icon" : "shape");
+            if (iconset != null && !iconset.isEmpty()) j.put("is", iconset);
+            if (iconFile != null && !iconFile.isEmpty()) j.put("ic", iconFile);
+            if (usericonPath != null) j.put("up", usericonPath);
+            return j;
+        }
     }
 
     static final class RbRule {
@@ -648,6 +729,21 @@ final class DisplayConfig {
             this.iconFile     = iconFile;
             this.usericonPath = usericonPath;
         }
+
+        /** Reverse of {@link SymConfig#parseRules} — one "rules"/"r" entry. */
+        JSONObject toJson() throws Exception {
+            JSONObject j = new JSONObject()
+                    .put("f", field)
+                    .put("o", op)
+                    .put("v", value)
+                    .put("c", DisplayConfig.toHexColor(color))
+                    .put("sh", shape)
+                    .put("m", isIcon ? "icon" : "shape");
+            if (iconset != null && !iconset.isEmpty()) j.put("is", iconset);
+            if (iconFile != null && !iconFile.isEmpty()) j.put("ic", iconFile);
+            if (usericonPath != null) j.put("up", usericonPath);
+            return j;
+        }
     }
 
     static final class CbBreak {
@@ -671,6 +767,16 @@ final class DisplayConfig {
             this.color  = color;
             this.bold   = bold;
             this.italic = italic;
+        }
+
+        /** Reverse of {@link #fromJson}. */
+        JSONObject toJson() throws Exception {
+            return new JSONObject()
+                    .put("f", field)
+                    .put("sz", sizeSp)
+                    .put("c", DisplayConfig.toHexColor(color))
+                    .put("b", bold)
+                    .put("i", italic);
         }
 
         static LabelConfig fromJson(JSONObject j) {
@@ -702,6 +808,18 @@ final class DisplayConfig {
         PopupConfig(String titleField, List<String[]> fields) {
             this.titleField = titleField;
             this.fields     = fields;
+        }
+
+        /** Reverse of {@link #fromJson}. */
+        JSONObject toJson() throws Exception {
+            JSONObject j = new JSONObject().put("t", titleField);
+            JSONArray flds = new JSONArray();
+            for (String[] f : fields) {
+                if (f[0].equals(f[1])) flds.put(f[0]);
+                else flds.put(new JSONArray().put(f[0]).put(f[1]));
+            }
+            j.put("flds", flds);
+            return j;
         }
 
         static PopupConfig fromJson(JSONObject j) throws Exception {
@@ -770,6 +888,16 @@ final class DisplayConfig {
             this.typeFields     = typeFields     != null ? typeFields     : Collections.emptyList();
             this.callsignFields = callsignFields != null ? callsignFields : Collections.emptyList();
             this.remarksFields  = remarksFields  != null ? remarksFields  : Collections.emptyList();
+        }
+
+        /** Reverse of {@link #fromJson} — the compact "cm" shape (empty if nothing's mapped). */
+        JSONObject toJson() throws Exception {
+            JSONObject j = new JSONObject();
+            if (!uidFields.isEmpty())      j.put("uf", new JSONArray(uidFields));
+            if (!typeFields.isEmpty())     j.put("tf", new JSONArray(typeFields));
+            if (!callsignFields.isEmpty()) j.put("cf", new JSONArray(callsignFields));
+            if (!remarksFields.isEmpty())  j.put("rf", new JSONArray(remarksFields));
+            return j;
         }
 
         private static List<String> stringList(JSONArray arr) {

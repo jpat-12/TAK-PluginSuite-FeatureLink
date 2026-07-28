@@ -278,7 +278,10 @@ public class ArcGISRestClient {
     // -------------------------------------------------------------------------
 
     /**
-     * Adds a feature to the target layer using the full CoT-aligned schema.
+     * PLI feature attributes, aligned to the CoT + team schema every consumer of this "TEST_NC"-
+     * style PLI layer already expects (group_name/group_role match ATAK's own CoT &lt;__group
+     * name="..." role="..."/&gt; detail — see MapView.getSelfMarker().getMetaString("team", ...)
+     * / .getMetaString("atakRoleType", ...)).
      *
      * @param uid          CoT UID of the originating event
      * @param cotType      CoT type string (e.g. "a-f-G-U-C")
@@ -287,6 +290,8 @@ public class ArcGISRestClient {
      * @param remarks      Free-text remarks (may be empty)
      * @param how          CoT "how" attribute (e.g. "m-g")
      * @param sentByUser   Username of the operator sending the feature
+     * @param groupName    ATAK team/group color (e.g. "Cyan") — self marker meta "team"
+     * @param groupRole    ATAK team role (e.g. "Team Member") — self marker meta "atakRoleType"
      * @param lat          WGS84 latitude
      * @param lon          WGS84 longitude
      * @param hae          Height above ellipsoid in metres
@@ -297,22 +302,14 @@ public class ArcGISRestClient {
      * @param staleMs      CoT "stale" as Unix epoch ms
      * @param rawCotXml    Raw CoT XML string (may be empty)
      */
-    public void addPliFeature(String serviceUrl, String token,
+    private static JSONObject buildPliAttributes(
             String uid, String cotType, String callsign, String iconPath,
             String remarks, String how, String sentByUser,
+            String groupName, String groupRole,
             double lat, double lon, double hae, double ce, double le,
             long timeMs, long startMs, long staleMs,
             String rawCotXml) throws Exception {
-
-        String layerUrl = ensureLayerIndex(serviceUrl);
         long now = System.currentTimeMillis();
-
-        JSONObject sr = new JSONObject();
-        sr.put("wkid", 4326);
-        JSONObject geometry = new JSONObject();
-        geometry.put("x", lon);
-        geometry.put("y", lat);
-        geometry.put("spatialReference", sr);
 
         JSONObject attributes = new JSONObject();
         attributes.put("uid",            uid            != null ? uid            : "");
@@ -323,6 +320,8 @@ public class ArcGISRestClient {
         attributes.put("tak_callsign",   callsign       != null ? callsign       : "");
         attributes.put("tak_icon",       iconPath       != null ? iconPath       : "");
         attributes.put("tak_remarks",    remarks        != null ? remarks        : "");
+        attributes.put("group_name",     groupName      != null ? groupName      : "");
+        attributes.put("group_role",     groupRole      != null ? groupRole      : "");
         attributes.put("latitude",       safeDouble(lat));
         attributes.put("longitude",      safeDouble(lon));
         attributes.put("hae",            safeDouble(hae));
@@ -337,10 +336,40 @@ public class ArcGISRestClient {
         attributes.put("sync_status",    "synced");
         attributes.put("last_synced",    now);
         attributes.put("raw_cot_xml",    rawCotXml      != null ? rawCotXml      : "");
+        return attributes;
+    }
+
+    private static JSONObject buildPliGeometry(double lat, double lon) throws Exception {
+        JSONObject sr = new JSONObject();
+        sr.put("wkid", 4326);
+        JSONObject geometry = new JSONObject();
+        geometry.put("x", lon);
+        geometry.put("y", lat);
+        geometry.put("spatialReference", sr);
+        return geometry;
+    }
+
+    /**
+     * Adds a new PLI feature to the target layer. Returns the new feature's objectId (from
+     * applyEdits' addResults), or -1 if the server didn't report one — callers should store
+     * this and switch to {@link #updatePliFeature} for every subsequent send, rather than
+     * calling this again and creating a duplicate row per send.
+     */
+    public long addPliFeature(String serviceUrl, String token,
+            String uid, String cotType, String callsign, String iconPath,
+            String remarks, String how, String sentByUser,
+            String groupName, String groupRole,
+            double lat, double lon, double hae, double ce, double le,
+            long timeMs, long startMs, long staleMs,
+            String rawCotXml) throws Exception {
+
+        String layerUrl = ensureLayerIndex(serviceUrl);
 
         JSONObject feature = new JSONObject();
-        feature.put("geometry",   geometry);
-        feature.put("attributes", attributes);
+        feature.put("geometry", buildPliGeometry(lat, lon));
+        feature.put("attributes", buildPliAttributes(uid, cotType, callsign, iconPath, remarks,
+                how, sentByUser, groupName, groupRole, lat, lon, hae, ce, le,
+                timeMs, startMs, staleMs, rawCotXml));
 
         JSONArray adds = new JSONArray();
         adds.put(feature);
@@ -350,8 +379,71 @@ public class ArcGISRestClient {
                 + (token != null ? "&token=" + enc(token) : "");
 
         String response = httpPost(layerUrl + "/applyEdits", body, null);
-        if (response != null) {
-            Log.d(TAG, "applyEdits response: " + new JSONObject(response).optString("addResults", "ok"));
+        if (response == null) return -1;
+
+        JSONObject json = new JSONObject(response);
+        Log.d(TAG, "applyEdits (add) response: " + json.optString("addResults", "ok"));
+        JSONArray addResults = json.optJSONArray("addResults");
+        if (addResults == null || addResults.length() == 0) return -1;
+        JSONObject result = addResults.getJSONObject(0);
+        if (!result.optBoolean("success", false)) return -1;
+        return result.optLong("objectId", -1);
+    }
+
+    /**
+     * Updates an existing PLI feature (by objectId, from a prior {@link #addPliFeature} call)
+     * in place instead of adding a new row every send. Returns false if the server reports the
+     * update didn't succeed (e.g. the feature no longer exists) — callers should treat that as
+     * "start over": clear the remembered objectId and add a fresh feature next time.
+     */
+    public boolean updatePliFeature(String serviceUrl, String token, long objectId,
+            String uid, String cotType, String callsign, String iconPath,
+            String remarks, String how, String sentByUser,
+            String groupName, String groupRole,
+            double lat, double lon, double hae, double ce, double le,
+            long timeMs, long startMs, long staleMs,
+            String rawCotXml) throws Exception {
+
+        String layerUrl = ensureLayerIndex(serviceUrl);
+        String objectIdField = fetchObjectIdField(layerUrl);
+
+        JSONObject attributes = buildPliAttributes(uid, cotType, callsign, iconPath, remarks,
+                how, sentByUser, groupName, groupRole, lat, lon, hae, ce, le,
+                timeMs, startMs, staleMs, rawCotXml);
+        attributes.put(objectIdField, objectId);
+
+        JSONObject feature = new JSONObject();
+        feature.put("geometry", buildPliGeometry(lat, lon));
+        feature.put("attributes", attributes);
+
+        JSONArray updates = new JSONArray();
+        updates.put(feature);
+
+        String body = "updates=" + enc(updates.toString())
+                + "&f=json"
+                + (token != null ? "&token=" + enc(token) : "");
+
+        String response = httpPost(layerUrl + "/applyEdits", body, null);
+        if (response == null) return false;
+
+        JSONObject json = new JSONObject(response);
+        Log.d(TAG, "applyEdits (update) response: " + json.optString("updateResults", "ok"));
+        JSONArray updateResults = json.optJSONArray("updateResults");
+        if (updateResults == null || updateResults.length() == 0) return false;
+        return updateResults.getJSONObject(0).optBoolean("success", false);
+    }
+
+    /** Layer's actual ObjectID field name (usually "OBJECTID", but not guaranteed) — needed to
+     * key an applyEdits "updates" entry correctly. Cached per layer would be nicer, but PLI
+     * sends are already throttled to once per scheduler tick, so a cheap metadata GET here
+     * isn't worth the extra state to avoid. Falls back to "OBJECTID" if the server omits it. */
+    private String fetchObjectIdField(String layerUrl) {
+        try {
+            String response = httpGet(layerUrl + "?f=json", null);
+            if (response == null) return "OBJECTID";
+            return new JSONObject(response).optString("objectIdField", "OBJECTID");
+        } catch (Exception e) {
+            return "OBJECTID";
         }
     }
 

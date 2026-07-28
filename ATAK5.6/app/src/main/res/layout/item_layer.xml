@@ -6,7 +6,7 @@
     android:paddingTop="@dimen/fl_space_sm"
     android:paddingBottom="@dimen/fl_space_sm">
 
-    <!-- Row 1: visibility toggle, name + type badge, action -->
+    <!-- Row 1: visibility toggle, name + type badge, share -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -47,18 +47,19 @@
 
         </LinearLayout>
 
-        <!-- Action button: ic_download → ic_refresh_circle for private; ic_menu_delete for public -->
+        <!-- Share button: public layers only — opens a contact picker to send the layer -->
         <ImageButton
-            android:id="@+id/layer_action_btn"
+            android:id="@+id/layer_share_btn"
             android:layout_width="32dp"
             android:layout_height="32dp"
             android:padding="4dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Layer action" />
+            android:src="@drawable/ic_share"
+            android:contentDescription="Share layer with a contact" />
 
     </LinearLayout>
 
-    <!-- Row 2: refresh interval (private and public layers) -->
+    <!-- Row 2: refresh interval + action button, same line (private and public layers) -->
     <LinearLayout
         android:id="@+id/layer_interval_row"
         android:layout_width="match_parent"
@@ -74,18 +75,46 @@
             android:layout_marginEnd="@dimen/fl_space_sm"
             style="@style/FL.Text.Hint" />
 
-        <Spinner
-            android:id="@+id/layer_interval_spinner"
-            android:layout_width="wrap_content"
+        <EditText
+            android:id="@+id/layer_interval_seconds_edit"
+            android:layout_width="56dp"
             android:layout_height="wrap_content"
-            android:minWidth="56dp"
+            android:minHeight="0dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:gravity="end"
+            android:inputType="number"
+            android:maxLength="5"
+            android:singleLine="true"
             android:layout_marginEnd="4dp" />
 
-        <Spinner
-            android:id="@+id/layer_unit_spinner"
+        <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minWidth="56dp" />
+            android:text="seconds"
+            style="@style/FL.Text.Hint" />
+
+        <!-- Action button: ic_download → ic_refresh_circle for private; ic_menu_delete for public -->
+        <ImageButton
+            android:id="@+id/layer_action_btn"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:padding="4dp"
+            android:layout_marginStart="@dimen/fl_space_sm"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Layer action" />
+
+        <!-- Delete button: private layers only — public layers already use the action button
+             above for delete. Removes the layer from this device's list; it stays in ArcGIS. -->
+        <ImageButton
+            android:id="@+id/layer_delete_btn"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:padding="4dp"
+            android:layout_marginStart="4dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_delete"
+            android:contentDescription="Remove layer from this list" />
 
     </LinearLayout>
 

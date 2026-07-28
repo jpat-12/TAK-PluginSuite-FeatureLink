@@ -65,10 +65,11 @@ also what TAK Portal's `featurelinkDatasets.service.js` stores as
   // "cm" (CoT field mapping) is entirely optional — omitted whenever every
   // mapping is left on "(default)" in the CoT Mapping tab. Each key is a
   // candidate-column array, not a single field — see below.
-  "freq": { "iv": 15, "u": "min" }
+  "freq": { "iv": 180, "u": "s" }
   // "freq" (auto-refresh interval) is entirely optional — omitted when the
-  // Update Frequency tab is left "Off". "iv" is one of 0/1/3/5/10/20/30/45,
-  // "u" is "s"/"min"/"hr" — see "Update frequency" below.
+  // Update Frequency tab is set to 0. "iv" is a plain seconds count (default
+  // 180), "u" is always "s" from the configurator now — see "Update
+  // frequency" below for why the field still exists.
 }
 ```
 
@@ -134,24 +135,28 @@ compatibility with configs saved before multi-select existed. Mode 1 has no
 
 ### Update frequency (`freq` / `updateFrequency`)
 
-Set in the configurator's **4. Update Frequency** tab. This is only the
-**initial** auto-refresh interval for a device adding the layer for the
-first time — see `ArcGISLayer.recurrenceInterval`/`recurrenceUnit` and
+Set in the configurator's **4. Update Frequency** tab, and defaults to 180
+seconds for a new config rather than off. This is only the **initial**
+auto-refresh interval for a device adding the layer for the first time —
+see `ArcGISLayer.recurrenceInterval`/`recurrenceUnit` (which likewise
+default to 180/`"s"` for any brand-new layer, portal-sourced or not) and
 `FeatureLinkDropDownReceiver.applyScannedDisplayConfig()`'s url branch,
 which sets it on the freshly-created `ArcGISLayer` only inside the
 `!alreadyAdded` guard. Once a layer exists on a device, the end user can
-change the interval themselves via the interval/unit spinners next to that
-layer in the plugin's Layers tab (`LayerListAdapter`) — that's a per-device
-preference persisted to this device's own SharedPreferences, and re-scanning
-or re-opening this same config on that device never overwrites it again.
+change the interval themselves via the "Refresh every ___ seconds" field
+next to that layer in the plugin's Layers tab (`LayerListAdapter`) — that's
+a per-device preference persisted to this device's own SharedPreferences,
+and re-scanning or re-opening this same config on that device never
+overwrites it again.
 
-Compact key names (Mode 2, `freq`): `iv` (interval value, one of
-`0`/`1`/`3`/`5`/`10`/`20`/`30`/`45`; `0` = off) and `u` (interval unit,
-`s`/`min`/`hr`) — matching `INTERVAL_VALUES`/`UNITS` in
-`LayerListAdapter.java` exactly, so a value set here means the same thing
-on-device. Omitted entirely when off. Mode 3 (`updateFrequency`) spells it
-out as `{"enabled":bool, "intervalValue":n, "intervalUnit":"..."}`. Both are
-parsed in `DisplayConfig.fromJson()`/`fromJsonV3()` into the same
+Compact key names (Mode 2, `freq`): `iv` (interval value in seconds; `0` =
+off) and `u` (interval unit — always `"s"` from the configurator and the
+plugin's own UI now, though `"min"`/`"hr"` still parse correctly for a layer
+or config saved before this changed to seconds-only — see
+`ArcGISLayer.recurrenceMillis()`). Omitted entirely when off. Mode 3
+(`updateFrequency`) spells it out as `{"enabled":bool, "intervalValue":n,
+"intervalUnit":"..."}`. Both are parsed in
+`DisplayConfig.fromJson()`/`fromJsonV3()` into the same
 `freqInterval`/`freqUnit` fields. Mode 1 has no `url` to apply a default to
 (same reasoning as `cm`), so it doesn't carry `freq`.
 
@@ -205,7 +210,7 @@ expect genuine Esri renderer objects.
   "labels": { "enabled": true, "field": "...", "fontSize": 12, "color": "#fff", "haloColor": "#000", "haloSize": 1, "bold": false, "italic": false },
   "popup": { "enabled": true, "titleField": "...", "fields": [{"field":"...","alias":"..."}], "customHtml": false, "htmlTemplate": null },
   "cotMapping": { "uidFields": [], "typeFields": [], "callsignFields": [], "remarksFields": [] },
-  "updateFrequency": { "enabled": false, "intervalValue": 0, "intervalUnit": "min" }
+  "updateFrequency": { "enabled": true, "intervalValue": 180, "intervalUnit": "s" }
 }
 ```
 

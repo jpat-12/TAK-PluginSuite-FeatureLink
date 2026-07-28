@@ -7,6 +7,11 @@ import android.os.Build;
 
 import com.atakmap.android.dropdown.DropDownMapComponent;
 import com.atakmap.android.featurelink.radial.FeatureLinkMenuFactory;
+import com.atakmap.android.importexport.ImportExportMapComponent;
+import com.atakmap.android.importexport.ImporterManager;
+import com.atakmap.android.importexport.MarshalManager;
+import com.atakmap.android.importfiles.sort.ImportInPlaceResolver;
+import com.atakmap.android.importfiles.task.ImportFilesTask;
 import com.atakmap.android.ipc.AtakBroadcast.DocumentedIntentFilter;
 import com.atakmap.android.maps.MapView;
 import com.atakmap.android.menu.MapMenuReceiver;
@@ -55,12 +60,26 @@ public class FeatureLinkMapComponent extends DropDownMapComponent {
         menuFactory = new FeatureLinkMenuFactory(view, context);
         MapMenuReceiver.getInstance().registerMapMenuFactory(menuFactory);
 
+        // Lets an incoming Mission Package containing a shared layer config (see
+        // FeatureLinkDropDownReceiver.sendLayerShare()) get automatically applied once accepted,
+        // instead of requiring a manual "Upload Pref File" pick — same pattern as the SDK's
+        // importexportexample sample (ExFmtMarshal/ExFmtImporter/ImportInPlaceResolver).
+        FeatureLinkImporter.receiver = dropDown;
+        ImporterManager.registerImporter(FeatureLinkImporter.INSTANCE);
+        MarshalManager.registerMarshal(FeatureLinkMarshal.INSTANCE);
+        ImportExportMapComponent.getInstance().addImporterClass(
+                ImportInPlaceResolver.fromMarshal(FeatureLinkMarshal.INSTANCE));
+        ImportFilesTask.registerExtension(".featurelink.json");
+
         Log.d(TAG, "FeatureLink component created");
     }
 
     @Override
     protected void onDestroyImpl(Context context, MapView view) {
         Log.d(TAG, "FeatureLink component destroying");
+        ImporterManager.unregisterImporter(FeatureLinkImporter.INSTANCE);
+        MarshalManager.unregisterMarshal(FeatureLinkMarshal.INSTANCE);
+        FeatureLinkImporter.receiver = null;
         MapMenuReceiver.getInstance().unregisterMapMenuFactory(menuFactory);
         try {
             context.unregisterReceiver(dropDown);

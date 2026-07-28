@@ -1059,11 +1059,12 @@ let state = {
     // Recommended auto-refresh interval — only the *initial* value for a device adding this
     // layer for the first time; the plugin lets the end user change it per-device afterward and
     // never re-applies this over their choice on a rescan (see CONFIG-FORMAT.md). 0 = off.
-    // Defaults to 10 min rather than off, since most layers benefit from at least some
-    // auto-refresh out of the box; an admin can still turn it off per dataset.
+    // Defaults to 180s rather than off, since most layers benefit from at least some
+    // auto-refresh out of the box; an admin can still turn it off per dataset. Seconds-only —
+    // matches the plugin's Layers-tab field, which also only edits in seconds now.
     updateFrequency: {
-      intervalValue: 10,
-      intervalUnit: 'min',
+      intervalValue: 180,
+      intervalUnit: 's',
     },
   }
 };
@@ -1591,19 +1592,10 @@ function renderStage3() {
 // ══════════════════════════════════════════
 //  Stage 4 — Update Frequency
 // ══════════════════════════════════════════
-// Same interval/unit vocabulary as the plugin's LayerListAdapter (INTERVAL_VALUES/UNITS in
-// LayerListAdapter.java) so a value picked here means exactly the same thing on-device.
-const FREQ_INTERVAL_VALUES = [0, 1, 3, 5, 10, 20, 30, 45];
-const FREQ_INTERVAL_LABELS = ['Off', '1', '3', '5', '10', '20', '30', '45'];
-const FREQ_UNITS = [['s','Seconds'], ['min','Minutes'], ['hr','Hours']];
-
+// Seconds-only, matching the plugin's Layers-tab "Refresh every ___ seconds" field
+// (LayerListAdapter.java) exactly — a value picked here means exactly the same thing on-device.
 function renderUpdateFrequencyTab() {
   const f = state.cfg.updateFrequency;
-  const intervalOpts = FREQ_INTERVAL_VALUES.map((v,i) =>
-    `<option value="${v}" ${v===f.intervalValue?'selected':''}>${FREQ_INTERVAL_LABELS[i]}</option>`).join('');
-  const unitOpts = FREQ_UNITS.map(([u,label]) =>
-    `<option value="${u}" ${u===f.intervalUnit?'selected':''}>${label}</option>`).join('');
-
   document.getElementById('stage-content').innerHTML = `
     <p style="font-size:12px;color:var(--text-muted);margin:4px 0 12px">
       How often ATAK should automatically re-download this layer. This only sets the
@@ -1615,25 +1607,25 @@ function renderUpdateFrequencyTab() {
     <div class="cfg-section" style="margin-top:0">
       <div class="cfg-label">Auto-Refresh Interval</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <select id="freq-interval-select" onchange="setFreqIntervalValue(this.value)" style="min-width:90px">${intervalOpts}</select>
-        <select id="freq-unit-select" onchange="setFreqIntervalUnit(this.value)" style="min-width:110px" ${f.intervalValue===0?'disabled':''}>${unitOpts}</select>
+        <span>Refresh every</span>
+        <input type="number" id="freq-seconds-input" min="0" step="1" value="${f.intervalValue}"
+               style="width:80px" oninput="setFreqIntervalValue(this.value)"
+               onchange="renderUpdateFrequencyTab()" />
+        <span>seconds</span>
       </div>
       <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
-        ${f.intervalValue===0
+        ${f.intervalValue <= 0
           ? 'Off — the layer only refreshes when the end user manually taps refresh, or turns this on themselves in the plugin.'
-          : `Recommended default: every ${f.intervalValue} ${FREQ_UNITS.find(u=>u[0]===f.intervalUnit)[1].toLowerCase()}.`}
+          : `Recommended default: every ${f.intervalValue} seconds.`}
       </div>
     </div>`;
 }
 
 function setFreqIntervalValue(v) {
-  state.cfg.updateFrequency.intervalValue = parseInt(v, 10) || 0;
-  scheduleQRRefresh();
-  renderUpdateFrequencyTab();
-}
-
-function setFreqIntervalUnit(u) {
-  state.cfg.updateFrequency.intervalUnit = u;
+  let n = parseInt(v, 10);
+  if (isNaN(n) || n < 0) n = 0;
+  state.cfg.updateFrequency.intervalValue = n;
+  state.cfg.updateFrequency.intervalUnit = 's';
   scheduleQRRefresh();
 }
 
@@ -3229,7 +3221,7 @@ function applyConfigPayload(p) {
     if (popup?.t) state.cfg.popup.title = popup.t;
 
     const freq = p.freq || p.cfg?.freq;
-    if (freq) Object.assign(state.cfg.updateFrequency, { intervalValue: freq.iv ?? 0, intervalUnit: freq.u ?? 'min' });
+    if (freq) Object.assign(state.cfg.updateFrequency, { intervalValue: freq.iv ?? 0, intervalUnit: freq.u ?? 's' });
     return;
   }
 
@@ -3269,7 +3261,7 @@ function applyConfigPayload(p) {
     }
     if (p.updateFrequency) Object.assign(state.cfg.updateFrequency, {
       intervalValue: p.updateFrequency.enabled ? (p.updateFrequency.intervalValue ?? 0) : 0,
-      intervalUnit: p.updateFrequency.intervalUnit ?? 'min',
+      intervalUnit: p.updateFrequency.intervalUnit ?? 's',
     });
     return;
   }

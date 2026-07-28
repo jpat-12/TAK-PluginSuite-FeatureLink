@@ -10,8 +10,11 @@ public class ArcGISLayer {
     public long featureCount = 0;
     public long lastSync = 0;
     public boolean downloadEnabled = false;
-    public int recurrenceInterval = 0;    // 0 = disabled; >0 = auto-refresh every N units
-    public String recurrenceUnit = "min"; // "s", "min", "hr"
+    public int recurrenceInterval = 180;  // 0 = disabled; >0 = auto-refresh every N units
+    public String recurrenceUnit = "s";   // "s", "min", "hr" — UI only edits in seconds now,
+                                           // "min"/"hr" only still occur on layers carried over
+                                           // from before that change (recurrenceMillis() still
+                                           // handles all three correctly either way)
     public boolean isPliLayer = false;
     public boolean visible = true;        // whether this layer's markers show on the map
 

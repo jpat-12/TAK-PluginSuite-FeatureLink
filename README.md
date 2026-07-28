@@ -12,7 +12,7 @@ FeatureLink component in one place.
 
 <div align="center">
 
-<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="80" alt="Buy Me A Coffee"></a>&nbsp;&nbsp;<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="80" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="80" alt="Configuration & Install"></a>
+<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="80" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="80" alt="Configuration & Install"></a>&nbsp;&nbsp;<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="80" alt="Buy Me A Coffee"></a>
 
 </div>
 
@@ -39,6 +39,17 @@ with whichever config source your team already runs, then set up the plugin for
 your platform below.
 
 ### Choose Your Configuration Type
+
+There are several ways to get a feature layer onto your EUD:
+Personal recommendation - TAK Portal Link & Map-Based Config are the easiest, especially for orgs that use Esri a lot.
+
+| # | Method | How it works | Notes |
+|---|---|---|---|
+| 1 | **Sign into ArcGIS** | Sign into your ArcGIS Portal account in the plugin - every layer you own, public or private, shows up automatically on the **Layers** page. | Simplest option - no config building required. |
+| 2 | **QR Code Config** | Build a styled config in TAK Portal or an Infra-TAK module, then scan the QR from **Layers > + Add Layer**. | Doesn't work for layers needing a large styling palette - the QR payload has a size limit. |
+| 3 | **TAK Portal Link** | From TAK Portal's sidebar: **Onboarding > FeatureLink > Open in ATAK**. | Needs an admin to set up the FeatureLayer config once - after that it's the same for every field user. |
+| 4 | **Map-Based Config** | Styling is read directly from a saved Web Map. | |
+| 5 | **Single FeatureLayer Import** | Styling is read directly from the feature layer, or the user is prompted for it. | |
 
 > <details>
 > <summary><strong>TAK Portal vs. Infra-TAK - which config source should you use?</strong></summary>

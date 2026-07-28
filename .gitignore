@@ -12,6 +12,7 @@ local.properties
 *.aab
 *.dex
 *.class
+*.zip
 out/
 gen/
 captures/
@@ -82,3 +83,9 @@ desktop.ini
 !ATAK5.7/buildtools/
 !ATAK5.7/buildtools/atak-gradle-takdev.jar
 !ATAK5.7/app/featurelink.keystore
+
+# gradle.properties is ignored everywhere above (may carry machine-specific paths/secrets
+# elsewhere), except here — this one only sets a JVM heap size for R8, needed on any CI
+# runner (GitHub Actions, TAK Product Center's submission pipeline) since a release build's
+# R8 minification pass has hit OutOfMemoryError on the default heap.
+!ATAK5.6/gradle.properties
