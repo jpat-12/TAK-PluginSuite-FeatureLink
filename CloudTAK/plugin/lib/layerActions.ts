@@ -108,6 +108,11 @@ export async function toggleLayerVisibility(layer: ArcGISLayer): Promise<void> {
     }
 }
 
+export function setLayerRecurrence(layer: ArcGISLayer, seconds: number): void {
+    layer.recurrenceInterval = seconds;
+    layer.recurrenceUnit = 's';
+}
+
 export function findLayer(url: string): ArcGISLayer | undefined {
     return store.privateLayers.find(l => l.url === url) ?? store.publicLayers.find(l => l.url === url);
 }

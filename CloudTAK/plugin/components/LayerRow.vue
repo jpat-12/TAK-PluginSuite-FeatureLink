@@ -15,7 +15,7 @@
         </div>
         <div class='fl-row-controls'>
             <label class='fl-interval' title='Auto-refresh interval in seconds (0 = off)'>
-                <input type='number' min='0' v-model.number='layer.recurrenceInterval' @change='onIntervalChange' />s
+                <input type='number' min='0' :value='layer.recurrenceInterval' @change='onIntervalChange' />s
             </label>
             <button v-if='layer.type === "private"' class='fl-icon-btn' title='Download / refresh now' @click='$emit("action")'>⟳</button>
             <button v-if='layer.type === "public"' class='fl-icon-btn' title='Share config' @click='$emit("share")'>📤</button>
@@ -29,12 +29,12 @@ import { computed } from 'vue';
 import type { ArcGISLayer } from '../lib/types.ts';
 
 const props = defineProps<{ layer: ArcGISLayer }>();
-defineEmits<{ toggleVisible: []; intervalChange: []; action: []; share: []; delete: [] }>();
+const emit = defineEmits<{ toggleVisible: []; intervalChange: [seconds: number]; action: []; share: []; delete: [] }>();
 
 const lastSyncLabel = computed(() => (props.layer.lastSync ? new Date(props.layer.lastSync).toLocaleTimeString() : 'never synced'));
 
-function onIntervalChange(): void {
-    props.layer.recurrenceUnit = 's';
+function onIntervalChange(e: Event): void {
+    emit('intervalChange', Number((e.target as HTMLInputElement).value));
 }
 </script>
 

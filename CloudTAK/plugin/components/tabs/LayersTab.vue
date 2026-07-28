@@ -12,7 +12,7 @@
                 <LayerRow
                     v-for='l in store.publicLayers' :key='l.url' :layer='l'
                     @toggle-visible='toggleLayerVisibility(l)'
-                    @interval-change='savedNoop'
+                    @interval-change='seconds => setLayerRecurrence(l, seconds)'
                     @action='downloadLayer(l).catch(() => {})'
                     @share='shareLayer(l)'
                     @delete='removePublicLayer(l)'
@@ -34,7 +34,7 @@
                     <LayerRow
                         v-for='l in store.privateLayers' :key='l.url' :layer='l'
                         @toggle-visible='toggleLayerVisibility(l)'
-                        @interval-change='savedNoop'
+                        @interval-change='seconds => setLayerRecurrence(l, seconds)'
                         @action='downloadLayer(l).catch(() => {})'
                         @delete='removePrivateLayer(l)'
                     />
@@ -51,7 +51,7 @@ import { ref, computed } from 'vue';
 import { store } from '../../lib/store.ts';
 import { authState, isAuthenticated } from '../../lib/arcgisAuth.ts';
 import {
-    downloadLayer, fetchUserLayers, removePublicLayer, removePrivateLayer, toggleLayerVisibility,
+    downloadLayer, fetchUserLayers, removePublicLayer, removePrivateLayer, toggleLayerVisibility, setLayerRecurrence,
 } from '../../lib/layerActions.ts';
 import { buildShareConfigJson, copyToClipboard } from '../../lib/layerShare.ts';
 import type { ArcGISLayer } from '../../lib/types.ts';
@@ -70,8 +70,6 @@ async function doRefreshPrivate(): Promise<void> {
     refreshing.value = true;
     try { await fetchUserLayers(); } finally { refreshing.value = false; }
 }
-
-function savedNoop(): void { /* interval edits are saved via the reactive store watcher */ }
 
 async function shareLayer(layer: ArcGISLayer): Promise<void> {
     const json = buildShareConfigJson(layer);

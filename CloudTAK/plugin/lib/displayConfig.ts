@@ -5,7 +5,7 @@
 // still paste/upload correctly.
 
 import type {
-    DisplayConfig, SymConfig, SymValueEntry, SymRuleEntry, SymOp, CotMapping, CotFieldMapping,
+    DisplayConfig, SymConfig, SymValueEntry, SymOp, CotMapping, CotFieldMapping,
 } from './types.ts';
 
 // ── Parsing ──────────────────────────────────────────────────────────────────
