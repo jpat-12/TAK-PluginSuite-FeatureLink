@@ -70,6 +70,9 @@ venv/
 Thumbs.db
 desktop.ini
 
+# ── Backup files ─────────────────────────────────────────────────────────────
+README.md.bak
+
 # ── Keep these SDK support files — required by the ATAK builds ─────────────
 !ATAK5.6/.takdev/
 !ATAK5.6/.takdev/aars/
