@@ -20,7 +20,7 @@ several ATAK-specific mechanisms don't have a direct equivalent and were adapted
 | QR code scan/generate (ZXing camera) | Dropped. Layer/PLI-endpoint sharing is copy-to-clipboard / paste-JSON / upload-`.json` instead |
 | ATAK Mission Package send-to-contact | Copy-to-clipboard / download-as-file (no CloudTAK contact-send API used here) |
 | `featurelink://import` deep link, native OAuth WebView | Dropped |
-| OAuth PKCE sign-in | Username/password token auth against ArcGIS's `generateToken` endpoint (see **Authentication** below) |
+| OAuth PKCE sign-in, `featurelink://auth` custom-scheme redirect | Same OAuth2 PKCE flow, redirecting to ArcGIS's hosted login page — but the redirect_uri is this deployment's own origin instead of a custom URI scheme (see **Authentication** below) |
 
 ## Known limitation — PLI auto-send
 
@@ -33,22 +33,28 @@ version, or replace it with a confirmed API once CloudTAK exposes one.
 
 ## Authentication
 
-Sign-in uses ArcGIS's legacy but still-supported **username/password token auth**
-(`POST /sharing/rest/generateToken`) instead of OAuth — no app registration, no redirect URI,
-works immediately from any origin. Trade-offs, by design:
+Sign-in redirects the browser to ArcGIS's own hosted OAuth2 login page (PKCE flow, ported from
+the ATAK plugin's `ArcGISAuthManager`/`OAuthHelper`) — clicking **Sign in with ArcGIS** leaves
+CloudTAK entirely, and the user is sent back once they've authenticated with ArcGIS (including
+SSO/enterprise/social logins, unlike the old username/password approach). CloudTAK never sees
+the password.
 
-- The password is sent directly to the ArcGIS portal to obtain a token and is never stored —
-  only the resulting token (and its expiry) persists in `localStorage`, in
-  `lib/arcgisAuth.ts`/`lib/tokenAuth.ts`.
-- Only works for ArcGIS **"built-in"** accounts — not SSO, enterprise logins, or social logins.
-- There is no refresh token with this flow. The plugin requests the longest-lived token the
-  org's token-expiration policy allows (`REQUESTED_EXPIRATION_MINUTES` in `tokenAuth.ts`), but
-  once it expires the user must re-enter their password — `getToken()` clears the session
-  automatically when that happens rather than failing silently.
+**Each CloudTAK deployment needs its own registered ArcGIS OAuth application**, because ArcGIS
+only accepts a pre-registered, exact `redirect_uri` per app — there's no wildcard, and a web
+deployment's redirect_uri is necessarily its own origin (`https://your-cloudtak-host/`), unlike
+ATAK's custom `featurelink://auth` URI scheme which works unmodified on every device. To set
+this up:
 
-If your organization requires SSO/enterprise login, or you'd rather not have the plugin handle
-passwords at all, this is the piece to swap out — `lib/tokenAuth.ts` and the `signIn`/`getToken`
-surface in `lib/arcgisAuth.ts` are the only places that would need to change.
+1. In ArcGIS Online/Enterprise: **Content → New Item → Application**, then in that item's
+   **Settings → OAuth 2.0 Credentials**, add your CloudTAK deployment's origin (e.g.
+   `https://map.example.com/`) as a **Redirect URI**.
+2. Copy that app's **Client ID** into `plugin/lib/config.ts`'s `ARCGIS_OAUTH_CLIENT_ID`.
+3. Rebuild/reinstall (`./install.sh`).
+
+Until `ARCGIS_OAUTH_CLIENT_ID` is set, **Sign in with ArcGIS** shows an error instead of
+redirecting. The OAuth exchange itself lives in `lib/oauth.ts`; session/token persistence and
+the redirect-return handling (`completeSignInIfPresent()`, called once at plugin startup) are
+in `lib/arcgisAuth.ts`.
 
 ## UI parity with the ATAK version
 
@@ -66,7 +72,8 @@ keep new UI in that spirit rather than introducing a different pattern.
 ## Requirements
 
 - A CloudTAK checkout (for `install.sh`) or `@tak-ps/cloudtak` types (for dev typecheck).
-- ArcGIS "built-in" account credentials (see **Authentication** above).
+- An ArcGIS OAuth application registered for this deployment's origin (see **Authentication**
+  above) — sign-in won't work without it.
 
 ## Develop
 
@@ -101,7 +108,7 @@ plugin/
   components/
     FeatureLinkMain.vue         shell: header (title, account button), Home/Layers/PLI tabs
     PluginIcon.vue               menu icon
-    AccountView.vue             pushed view: sign in (username/password) / sign out
+    AccountView.vue             pushed view: sign in with ArcGIS (OAuth redirect) / sign out
     AddLayerView.vue            pushed view: add public layer by URL, paste/upload config JSON
     SendToLayerPicker.vue       pushed view: pick a map item + layer, send (radial-menu replacement)
     LayerRow.vue                shared layer-list row (visibility, interval, actions)
@@ -111,11 +118,11 @@ plugin/
       PliTab.vue                   create/join PLI layer, auto-send toggle, share endpoint
   lib/
     types.ts                    ArcGISLayer, DisplayConfig, PLI payload types (ported schema)
-    config.ts                   deployment constants (default portal URL)
+    config.ts                   deployment constants (default portal URL, ArcGIS OAuth client ID)
     plugin-api.ts                holds the PluginAPI reference
     store.ts                     reactive state + localStorage persistence
-    tokenAuth.ts                  generateToken (username/password) REST call
-    arcgisAuth.ts                session manager: sign in/out, token persistence + expiry handling
+    oauth.ts                     ArcGIS OAuth2 PKCE flow: auth URL, code exchange, refresh
+    arcgisAuth.ts                session manager: sign in/out, token persistence + refresh, redirect handling
     arcgisRest.ts                fetch-based ArcGIS REST client (search, download, applyEdits, publish)
     displayConfig.ts             styling-rule JSON parse + per-feature color/icon/label resolution
     layerActions.ts              shared layer CRUD/download logic

@@ -21,7 +21,7 @@ import PluginIcon from './components/PluginIcon.vue';
 import { initPluginApi } from './lib/plugin-api.ts';
 import { initCot } from './lib/cot.ts';
 import { startRecurrenceScheduler, watchPliAutoSend } from './lib/scheduler.ts';
-import { isAuthenticated } from './lib/arcgisAuth.ts';
+import { isAuthenticated, completeSignInIfPresent } from './lib/arcgisAuth.ts';
 import { fetchUserLayers } from './lib/layerActions.ts';
 
 const MENU_KEY   = 'plugin-featurelink';
@@ -50,6 +50,9 @@ export default class FeatureLinkPlugin implements PluginInstance {
         // persisted toggle (lib/store.ts's pliAutoSend), same as the Java plugin's behavior.
         startRecurrenceScheduler();
         watchPliAutoSend();
+
+        // Completes the ArcGIS OAuth redirect if we just landed back from it (?code=/?error=).
+        await completeSignInIfPresent();
 
         // If a previous session left us signed in, refresh the owned-layer list on startup.
         if (isAuthenticated()) void fetchUserLayers();

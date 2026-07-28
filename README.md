@@ -129,8 +129,8 @@ Personal recommendation - TAK Portal Link & Map-Based Config are the easiest, es
 
 1. Side-load the APK onto your Android device running ATAK-CIV 5.6.0.
 2. In ATAK, open **Settings > Manage Plugins** and enable **FeatureLink**.
-3. **Sign into ArcGIS** - tap the account button in the FeatureLink header, enter
-   your ArcGIS Portal URL, username, and password, and tap **Sign in with ArcGIS**.
+3. **Sign into ArcGIS** - tap the account button in the FeatureLink header, then tap
+   **Sign in with ArcGIS** to sign in via ArcGIS's own hosted login page (OAuth).
    Your hosted feature layers populate the Layers tab automatically.
 4. **Set up PLI** - on the PLI tab, use **Create New Layer** or **Join Existing
    Layer** (via QR scan) to set up a shared position layer, then enable
@@ -154,10 +154,13 @@ reference and building from source.
 In development. A browser-based Vue3/TypeScript port that runs inside the CloudTAK web UI
 itself rather than as a native app - install/enable/disable lifecycle, layer browse/download
 with display-config styling, PLI create/join/auto-send, and a "Send to Feature Layer" picker
-(replacing ATAK's radial menu) are implemented. Sign-in uses ArcGIS username/password token
-auth instead of OAuth (no app registration required), and QR scanning is replaced by
-paste/upload config JSON, since a desktop browser has no camera-scan equivalent. UI mirrors
-the ATAK plugin's tabs, section layout, and collapse behavior rather than being redesigned.
+(replacing ATAK's radial menu) are implemented. Sign-in is the same ArcGIS OAuth2 PKCE flow as
+the ATAK plugin, redirecting to ArcGIS's hosted login page - the redirect_uri is this
+deployment's own origin instead of ATAK's custom URI scheme, so each CloudTAK deployment needs
+its own registered ArcGIS OAuth app (see [`CloudTAK/README.md`](CloudTAK/README.md)). QR
+scanning is replaced by paste/upload config JSON, since a desktop browser has no camera-scan
+equivalent. UI mirrors the ATAK plugin's tabs, section layout, and collapse behavior rather
+than being redesigned.
 
 Install into an existing CloudTAK checkout (default `~/CloudTAK`):
 
