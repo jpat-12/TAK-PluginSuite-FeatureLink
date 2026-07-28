@@ -54,6 +54,37 @@ plugin under your own ArcGIS OAuth app, update both.
 The OAuth exchange itself lives in `lib/oauth.ts`; the popup lifecycle, `postMessage` handshake,
 and session/token persistence + silent refresh are in `lib/arcgisAuth.ts`'s `beginSignIn()`.
 
+## Required server config — Content-Security-Policy
+
+CloudTAK's nginx config sends a `Content-Security-Policy` header whose `connect-src` directive,
+by default, only allows the browser to `fetch()` the CloudTAK server itself — which blocks
+**every** ArcGIS REST call this plugin makes (OAuth token exchange, layer search/download, PLI
+publish, all of it) with a generic `TypeError: Failed to fetch`. This isn't a plugin bug or
+something `install.sh` can fix — it's CloudTAK's own server-side CSP header, controlled by an
+env var CloudTAK already supports (`api/nginx.conf.js`). Add this to CloudTAK's
+`docker-compose.yml` (the `api` service's `environment:`), or its `.env` file:
+
+```
+NGINX_CSP_CONNECT_SRC=https://www.arcgis.com,https://*.arcgis.com
+```
+
+Then recreate the container so nginx regenerates its config (a plain `restart` won't pick up a
+changed env var):
+
+```sh
+docker compose up -d api
+```
+
+Verify it took effect:
+
+```sh
+curl -sI https://<your-cloudtak-host>/ | grep -i content-security-policy
+# should include: connect-src ... https://www.arcgis.com https://*.arcgis.com
+```
+
+If you're pointing this at an ArcGIS **Enterprise** portal instead of ArcGIS Online, add that
+portal's own domain to the same comma-separated list too.
+
 ## UI parity with the ATAK version
 
 Outside of the platform-forced adaptations in the table above, this plugin intentionally
@@ -70,7 +101,9 @@ keep new UI in that spirit rather than introducing a different pattern.
 ## Requirements
 
 - A CloudTAK checkout (for `install.sh`) or `@tak-ps/cloudtak` types (for dev typecheck).
-- Nothing else — sign-in works out of the box (see **Authentication** above).
+- `NGINX_CSP_CONNECT_SRC` set on CloudTAK's `api` service to allow ArcGIS domains (see
+  **Required server config** below) — without it, every ArcGIS REST call fails with
+  `Failed to fetch`.
 
 ## Develop
 
@@ -96,6 +129,9 @@ npm run check   # vue-tsc --noEmit
 
 After install: **CloudTAK → Settings → Refresh App** (a hard refresh won't work — the service
 worker intercepts requests). Appears in the right-side menu as **FeatureLink**.
+
+Before first use, set `NGINX_CSP_CONNECT_SRC` per **Required server config** below — otherwise
+sign-in and every ArcGIS REST call will fail with `Failed to fetch`.
 
 ## Architecture
 
