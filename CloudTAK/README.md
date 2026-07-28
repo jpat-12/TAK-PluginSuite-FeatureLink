@@ -20,7 +20,7 @@ several ATAK-specific mechanisms don't have a direct equivalent and were adapted
 | QR code scan/generate (ZXing camera) | Dropped. Layer/PLI-endpoint sharing is copy-to-clipboard / paste-JSON / upload-`.json` instead |
 | ATAK Mission Package send-to-contact | Copy-to-clipboard / download-as-file (no CloudTAK contact-send API used here) |
 | `featurelink://import` deep link, native OAuth WebView | Dropped |
-| OAuth PKCE sign-in, `featurelink://auth` custom-scheme redirect | Same OAuth2 PKCE flow, redirecting to ArcGIS's hosted login page — but the redirect_uri is this deployment's own origin instead of a custom URI scheme (see **Authentication** below) |
+| OAuth PKCE sign-in, `featurelink://auth` custom-scheme redirect | Same OAuth2 PKCE flow and same ArcGIS OAuth app/client ID, redirecting to ArcGIS's hosted login page in a popup — but the redirect_uri is a fixed relay page instead of a custom URI scheme, so it works unmodified on every CloudTAK deployment (see **Authentication** below) |
 
 ## Known limitation — PLI auto-send
 
@@ -33,28 +33,26 @@ version, or replace it with a confirmed API once CloudTAK exposes one.
 
 ## Authentication
 
-Sign-in redirects the browser to ArcGIS's own hosted OAuth2 login page (PKCE flow, ported from
-the ATAK plugin's `ArcGISAuthManager`/`OAuthHelper`) — clicking **Sign in with ArcGIS** leaves
-CloudTAK entirely, and the user is sent back once they've authenticated with ArcGIS (including
-SSO/enterprise/social logins, unlike the old username/password approach). CloudTAK never sees
-the password.
+Sign-in opens ArcGIS's own hosted OAuth2 login page (PKCE flow, ported from the ATAK plugin's
+`ArcGISAuthManager`/`OAuthHelper`) in a popup — clicking **Sign in with ArcGIS** never navigates
+CloudTAK itself away, and the panel resolves once the user has authenticated with ArcGIS
+(including SSO/enterprise/social logins, unlike the old username/password approach). CloudTAK
+never sees the password.
 
-**Each CloudTAK deployment needs its own registered ArcGIS OAuth application**, because ArcGIS
-only accepts a pre-registered, exact `redirect_uri` per app — there's no wildcard, and a web
-deployment's redirect_uri is necessarily its own origin (`https://your-cloudtak-host/`), unlike
-ATAK's custom `featurelink://auth` URI scheme which works unmodified on every device. To set
-this up:
+**Works out of the box on any CloudTAK deployment — no per-install ArcGIS setup needed.** The
+tricky part of web OAuth is normally that ArcGIS only accepts a pre-registered, exact
+`redirect_uri` per app (no wildcards), so a naive port would need every CloudTAK hostname
+individually registered. Instead, the OAuth app's one and only registered `redirect_uri` is a
+small static relay page — [`docs/featurelink-oauth-relay.html`](../docs/featurelink-oauth-relay.html)
+in this repo, published via GitHub Pages — that the popup lands on after ArcGIS auth completes.
+The relay forwards the result back to whichever CloudTAK origin actually opened the popup (via
+`window.opener.postMessage`, targeted using the origin embedded in the OAuth `state` param), so
+the plugin's own origin is never involved in ArcGIS's redirect_uri allowlist at all. See
+`ARCGIS_OAUTH_CLIENT_ID` / `ARCGIS_OAUTH_RELAY_URL` in `plugin/lib/config.ts` — if you fork this
+plugin under your own ArcGIS OAuth app, update both.
 
-1. In ArcGIS Online/Enterprise: **Content → New Item → Application**, then in that item's
-   **Settings → OAuth 2.0 Credentials**, add your CloudTAK deployment's origin (e.g.
-   `https://map.example.com/`) as a **Redirect URI**.
-2. Copy that app's **Client ID** into `plugin/lib/config.ts`'s `ARCGIS_OAUTH_CLIENT_ID`.
-3. Rebuild/reinstall (`./install.sh`).
-
-Until `ARCGIS_OAUTH_CLIENT_ID` is set, **Sign in with ArcGIS** shows an error instead of
-redirecting. The OAuth exchange itself lives in `lib/oauth.ts`; session/token persistence and
-the redirect-return handling (`completeSignInIfPresent()`, called once at plugin startup) are
-in `lib/arcgisAuth.ts`.
+The OAuth exchange itself lives in `lib/oauth.ts`; the popup lifecycle, `postMessage` handshake,
+and session/token persistence + silent refresh are in `lib/arcgisAuth.ts`'s `beginSignIn()`.
 
 ## UI parity with the ATAK version
 
@@ -72,8 +70,7 @@ keep new UI in that spirit rather than introducing a different pattern.
 ## Requirements
 
 - A CloudTAK checkout (for `install.sh`) or `@tak-ps/cloudtak` types (for dev typecheck).
-- An ArcGIS OAuth application registered for this deployment's origin (see **Authentication**
-  above) — sign-in won't work without it.
+- Nothing else — sign-in works out of the box (see **Authentication** above).
 
 ## Develop
 
@@ -122,7 +119,7 @@ plugin/
     plugin-api.ts                holds the PluginAPI reference
     store.ts                     reactive state + localStorage persistence
     oauth.ts                     ArcGIS OAuth2 PKCE flow: auth URL, code exchange, refresh
-    arcgisAuth.ts                session manager: sign in/out, token persistence + refresh, redirect handling
+    arcgisAuth.ts                session manager: sign in/out via OAuth popup, token persistence + refresh
     arcgisRest.ts                fetch-based ArcGIS REST client (search, download, applyEdits, publish)
     displayConfig.ts             styling-rule JSON parse + per-feature color/icon/label resolution
     layerActions.ts              shared layer CRUD/download logic

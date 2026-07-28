@@ -1,15 +1,15 @@
 // ArcGIS session manager — port of the ATAK plugin's arcgis/ArcGISAuthManager.java. Uses the
-// same OAuth2 PKCE flow (lib/oauth.ts) redirecting to ArcGIS's own hosted sign-in page, rather
-// than an in-app username/password form. See config.ts for the redirect_uri/client_id caveat
-// that's specific to the web port.
+// same OAuth2 PKCE flow (lib/oauth.ts) redirecting to ArcGIS's own hosted sign-in page, but in
+// a popup window rather than navigating this tab away — this page's own origin never has to be
+// a registered ArcGIS redirect_uri (see oauth.ts / config.ts's ARCGIS_OAUTH_RELAY_URL for how
+// the popup's result gets back here).
 
 import { reactive } from 'vue';
 import * as oauth from './oauth.ts';
-import { DEFAULT_PORTAL_URL, ARCGIS_OAUTH_CLIENT_ID } from './config.ts';
+import { DEFAULT_PORTAL_URL, ARCGIS_OAUTH_CLIENT_ID, ARCGIS_OAUTH_RELAY_URL } from './config.ts';
 
 const KEY = 'cloudtak-featurelink:auth';
-const PENDING_KEY = 'cloudtak-featurelink:oauth-pending';
-const ERROR_KEY = 'cloudtak-featurelink:oauth-error';
+const RELAY_ORIGIN = new URL(ARCGIS_OAUTH_RELAY_URL).origin;
 
 interface Persisted {
     username: string | null;
@@ -19,10 +19,12 @@ interface Persisted {
     tokenExpiry: number;
 }
 
-interface PendingOAuth {
-    codeVerifier: string;
-    portalUrl: string;
-    state: string;
+interface RelayMessage {
+    source: string;
+    code?: string | null;
+    error?: string | null;
+    errorDescription?: string | null;
+    state?: string | null;
 }
 
 function loadPersisted(): Persisted {
@@ -90,71 +92,67 @@ export async function getToken(): Promise<string | null> {
     return null;
 }
 
-// Redirects the browser to ArcGIS's hosted OAuth sign-in page. Never returns — call this from
-// a click handler and nothing after it.
+// Waits for the relay page (running in `popup`) to post back its result, matching it to
+// `expectedState` so a stray/late message from a previous attempt can't be mistaken for this
+// one. Rejects if the user closes the popup before completing sign-in.
+function waitForRelayMessage(popup: Window, expectedState: string): Promise<RelayMessage> {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        function cleanup(): void {
+            window.removeEventListener('message', onMessage);
+            window.clearInterval(closedCheck);
+        }
+        function onMessage(event: MessageEvent): void {
+            if (event.origin !== RELAY_ORIGIN) return;
+            const data = event.data as RelayMessage | undefined;
+            if (!data || data.source !== 'featurelink-oauth-relay' || data.state !== expectedState) return;
+            settled = true;
+            cleanup();
+            resolve(data);
+        }
+        window.addEventListener('message', onMessage);
+        const closedCheck = window.setInterval(() => {
+            if (popup.closed && !settled) {
+                cleanup();
+                reject(new Error('Sign-in window was closed before completing'));
+            }
+        }, 500);
+    });
+}
+
+// Opens ArcGIS's hosted OAuth sign-in page in a popup and resolves once the user has signed in
+// (or rejects on cancel/error). Must be called directly from a click handler — the popup is
+// opened synchronously, before any awaits, so browsers don't treat it as a blocked pop-up.
 export async function beginSignIn(portalUrl: string = DEFAULT_PORTAL_URL): Promise<void> {
     if (!ARCGIS_OAUTH_CLIENT_ID) {
         throw new Error('This CloudTAK deployment has no ArcGIS OAuth client ID configured (see plugin/lib/config.ts)');
     }
-    const { codeVerifier, codeChallenge } = await oauth.generatePkce();
-    const state = crypto.randomUUID();
-    const pending: PendingOAuth = { codeVerifier, portalUrl, state };
-    sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
-    window.location.assign(oauth.buildAuthUrl(portalUrl, ARCGIS_OAUTH_CLIENT_ID, codeChallenge, state));
-}
 
-// Call once at plugin startup. If the current URL carries an ArcGIS OAuth redirect (?code=
-// or ?error=), completes the flow and strips those params from the URL bar. No-op otherwise.
-export async function completeSignInIfPresent(): Promise<void> {
-    const url = new URL(window.location.href);
-    const code = url.searchParams.get('code');
-    const error = url.searchParams.get('error');
-    const state = url.searchParams.get('state');
-    if (!code && !error) return;
-
-    url.searchParams.delete('code');
-    url.searchParams.delete('state');
-    url.searchParams.delete('error');
-    url.searchParams.delete('error_description');
-    window.history.replaceState(null, '', url.toString());
-
-    const pendingRaw = sessionStorage.getItem(PENDING_KEY);
-    sessionStorage.removeItem(PENDING_KEY);
-
-    if (error) {
-        sessionStorage.setItem(ERROR_KEY, `Sign-in failed: ${error}`);
-        return;
-    }
-    if (!pendingRaw) {
-        sessionStorage.setItem(ERROR_KEY, 'Sign-in session expired — please try again');
-        return;
-    }
-    const pending = JSON.parse(pendingRaw) as PendingOAuth;
-    if (pending.state !== state) {
-        sessionStorage.setItem(ERROR_KEY, 'Sign-in failed: state mismatch');
-        return;
+    const popup = window.open('about:blank', 'featurelink-oauth', 'width=480,height=720');
+    if (!popup) {
+        throw new Error('Sign-in popup was blocked — please allow popups for this site and try again');
     }
 
     try {
-        const tokens = await oauth.exchangeCode(pending.portalUrl, ARCGIS_OAUTH_CLIENT_ID, code as string, pending.codeVerifier);
+        const { codeVerifier, codeChallenge } = await oauth.generatePkce();
+        const state = `${window.location.origin}::${crypto.randomUUID()}`;
+        popup.location.href = oauth.buildAuthUrl(portalUrl, ARCGIS_OAUTH_CLIENT_ID, codeChallenge, state);
+
+        const relayResult = await waitForRelayMessage(popup, state);
+        if (relayResult.error) throw new Error(relayResult.errorDescription ?? relayResult.error);
+        if (!relayResult.code) throw new Error('ArcGIS sign-in returned no authorization code');
+
+        const tokens = await oauth.exchangeCode(portalUrl, ARCGIS_OAUTH_CLIENT_ID, relayResult.code, codeVerifier);
         persisted.username = tokens.username;
         persisted.token = tokens.accessToken;
         persisted.refreshToken = tokens.refreshToken;
         persisted.tokenExpiry = Date.now() + tokens.expiresInSeconds * 1000;
-        persisted.portalUrl = pending.portalUrl;
+        persisted.portalUrl = portalUrl;
         savePersisted(persisted);
         authState.username = tokens.username;
-    } catch (e) {
-        sessionStorage.setItem(ERROR_KEY, e instanceof Error ? e.message : 'Sign-in failed');
+    } finally {
+        if (!popup.closed) popup.close();
     }
-}
-
-// One-shot read of an error left behind by completeSignInIfPresent() (e.g. denied consent) —
-// AccountView displays it once, then it's gone.
-export function takePendingError(): string | null {
-    const msg = sessionStorage.getItem(ERROR_KEY);
-    if (msg) sessionStorage.removeItem(ERROR_KEY);
-    return msg;
 }
 
 export function signOut(): void {

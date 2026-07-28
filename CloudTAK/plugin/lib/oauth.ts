@@ -1,8 +1,10 @@
 // ArcGIS OAuth2 PKCE flow — port of the ATAK plugin's OAuthHelper.java. The web version's
-// redirect_uri is this deployment's own origin (ArcGIS requires an exact pre-registered
-// redirect URI per app; a custom URI scheme like ATAK's `featurelink://auth` isn't reachable
-// from a browser redirect), so each CloudTAK deployment must register its own ArcGIS OAuth
-// application with that origin as the redirect URI (see config.ts).
+// redirect_uri is a fixed relay page (see ARCGIS_OAUTH_RELAY_URL in config.ts) rather than
+// this deployment's own origin, so it works on every CloudTAK hostname with zero per-deployment
+// ArcGIS app registration — see arcgisAuth.ts's beginSignIn() for how the popup + relay page
+// gets the result back to this origin.
+
+import { ARCGIS_OAUTH_RELAY_URL } from './config.ts';
 
 export interface OAuthTokens {
     accessToken: string;
@@ -18,7 +20,7 @@ function base64UrlEncode(bytes: Uint8Array): string {
 }
 
 export function redirectUri(): string {
-    return `${window.location.origin}/`;
+    return ARCGIS_OAUTH_RELAY_URL;
 }
 
 export async function generatePkce(): Promise<{ codeVerifier: string; codeChallenge: string }> {

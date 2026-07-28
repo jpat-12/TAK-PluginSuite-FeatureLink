@@ -23,8 +23,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { authState, isAuthenticated, getUsername, beginSignIn, signOut, takePendingError } from '../lib/arcgisAuth.ts';
+import { ref, computed } from 'vue';
+import { authState, isAuthenticated, getUsername, beginSignIn, signOut } from '../lib/arcgisAuth.ts';
+import { fetchUserLayers } from '../lib/layerActions.ts';
 
 defineEmits<{ close: [] }>();
 
@@ -35,18 +36,15 @@ const errorMsg = ref('');
 
 const statusText = computed(() => errorMsg.value || 'Not signed in');
 
-onMounted(() => {
-    const pending = takePendingError();
-    if (pending) errorMsg.value = pending;
-});
-
 async function doSignIn(): Promise<void> {
     errorMsg.value = '';
     signingIn.value = true;
     try {
-        await beginSignIn(); // navigates away to ArcGIS's hosted login page
+        await beginSignIn(); // opens ArcGIS's hosted login page in a popup and awaits the result
+        await fetchUserLayers();
     } catch (e) {
         errorMsg.value = e instanceof Error ? e.message : 'Sign-in failed';
+    } finally {
         signingIn.value = false;
     }
 }

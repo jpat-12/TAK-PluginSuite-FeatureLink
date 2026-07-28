@@ -155,12 +155,12 @@ In development. A browser-based Vue3/TypeScript port that runs inside the CloudT
 itself rather than as a native app - install/enable/disable lifecycle, layer browse/download
 with display-config styling, PLI create/join/auto-send, and a "Send to Feature Layer" picker
 (replacing ATAK's radial menu) are implemented. Sign-in is the same ArcGIS OAuth2 PKCE flow as
-the ATAK plugin, redirecting to ArcGIS's hosted login page - the redirect_uri is this
-deployment's own origin instead of ATAK's custom URI scheme, so each CloudTAK deployment needs
-its own registered ArcGIS OAuth app (see [`CloudTAK/README.md`](CloudTAK/README.md)). QR
-scanning is replaced by paste/upload config JSON, since a desktop browser has no camera-scan
-equivalent. UI mirrors the ATAK plugin's tabs, section layout, and collapse behavior rather
-than being redesigned.
+the ATAK plugin, opening ArcGIS's hosted login page in a popup - it redirects to a single fixed
+relay page rather than this deployment's own origin, so it works unmodified on any CloudTAK
+install with no per-deployment ArcGIS app setup (see [`CloudTAK/README.md`](CloudTAK/README.md)
+for how). QR scanning is replaced by paste/upload config JSON, since a desktop browser has no
+camera-scan equivalent. UI mirrors the ATAK plugin's tabs, section layout, and collapse behavior
+rather than being redesigned.
 
 Install into an existing CloudTAK checkout (default `~/CloudTAK`):
 
