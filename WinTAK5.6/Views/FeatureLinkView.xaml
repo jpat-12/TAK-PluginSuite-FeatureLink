@@ -319,7 +319,7 @@
                                 Command="{Binding DataContext.DownloadLayerCommand,
                                           RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                 CommandParameter="{Binding}" ToolTip="Sync now" Margin="0,0,2,0">
-                            <TextBlock Text="&#8635;" FontSize="14"/>
+                            <TextBlock Text="{Binding ActionGlyph}" FontSize="14"/>
                         </Button>
                         <Button Grid.Column="5" Style="{StaticResource IconGlyphButton}"
                                 Command="{Binding DataContext.RemoveLayerCommand,

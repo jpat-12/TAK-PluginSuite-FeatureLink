@@ -44,8 +44,18 @@ namespace FeatureLink.Models
         private long _featureCount;
         public long FeatureCount { get => _featureCount; set { _featureCount = value; RaisePropertyChanged(); } }
 
+        private long _lastSyncTicks;
         /// <summary>Last successful download time (UTC ticks), 0 = never synced.</summary>
-        public long LastSyncTicks { get; set; }
+        public long LastSyncTicks
+        {
+            get => _lastSyncTicks;
+            set { _lastSyncTicks = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(ActionGlyph)); }
+        }
+
+        /// <summary>Text-glyph stand-in for item_layer.xml's ic_download / ic_refresh_circle
+        /// drawable (down-arrow until first sync, then a refresh glyph) — private ("My ArcGIS
+        /// Layers") rows only; public layers keep the static refresh glyph they always had.</summary>
+        public string ActionGlyph => IsPrivate && LastSyncTicks <= 0 ? "⬇" : "↻"; // ⬇ / ↻
 
         private bool _downloadEnabled;
         public bool DownloadEnabled { get => _downloadEnabled; set { _downloadEnabled = value; RaisePropertyChanged(); } }

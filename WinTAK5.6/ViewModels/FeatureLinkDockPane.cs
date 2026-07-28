@@ -506,10 +506,20 @@ namespace FeatureLink.ViewModels
             await DownloadLayerAsync(layer).ConfigureAwait(false);
         }
 
+        /// <summary>Mirrors confirmRemovePublicLayer()/onLayerDelete()'s AlertDialog confirmation —
+        /// this previously removed the layer immediately on click with no confirmation at all.</summary>
         private void OnRemoveLayer(ArcGisLayer layer)
         {
             if (layer == null) return;
-            if (layer.Type == "private")
+
+            bool isPrivate = layer.Type == "private";
+            string message = isPrivate
+                ? $"Remove \"{layer.Name}\" from your layer list here? It stays in your ArcGIS account — this only hides it on this device. Any markers it added to the map will also be removed."
+                : $"Remove \"{layer.Name}\" from your layer list? Any markers it added to the map will also be removed.";
+            var result = MessageBox.Show(message, "Remove Layer?", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes) return;
+
+            if (isPrivate)
             {
                 PrivateLayers.Remove(layer);
                 _excludedPrivateLayerUrls.Add(layer.Url);
