@@ -18,7 +18,14 @@
                 <span>Layers</span>
                 <b>{{ store.privateLayers.length }} private, {{ store.publicLayers.length }} public</b>
             </div>
+            <div v-if='ingestState.status !== "idle"' class='fl-status-row'>
+                <span>Auto-Import</span>
+                <b :class='ingestState.status === "ok" ? "ok" : "err"' :title='ingestState.message'>
+                    {{ ingestState.status === 'ok' ? 'OK' : 'Error' }}
+                </b>
+            </div>
         </div>
+        <p v-if='ingestState.status !== "idle"' class='fl-ingest-msg'>{{ ingestState.message }}</p>
 
         <button v-if='!store.pliLayerUrl' class='fl-btn primary' @click='$emit("goPli")'>Set PLI Endpoint</button>
         <button class='fl-btn' @click='$emit("openSend")'>Send Item to Feature Layer</button>
@@ -48,6 +55,7 @@ import { ref, computed, onMounted } from 'vue';
 import { store, isPliConnected } from '../../lib/store.ts';
 import { authState, isAuthenticated } from '../../lib/arcgisAuth.ts';
 import { refreshFeatureCounts } from '../../lib/layerActions.ts';
+import { ingestState } from '../../lib/importIngest.ts';
 
 defineEmits<{ openAccount: []; goPli: []; openSend: [] }>();
 
@@ -75,6 +83,7 @@ onMounted(refresh);
 .fl-status-row .ok { color: #4caf50; }
 .fl-status-row .err { color: #ff5722; }
 .fl-status-row .muted { color: #7a7a7a; }
+.fl-ingest-msg { font-size: 11px; opacity: .7; margin: -4px 0 0; }
 .fl-btn { padding: 8px 12px; border-radius: 4px; border: 1px solid #555; background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
 .fl-btn.primary { border-color: #4caf50; color: #4caf50; }
 .fl-btn.small { font-size: 11px; padding: 4px 8px; margin: 6px 0; }
