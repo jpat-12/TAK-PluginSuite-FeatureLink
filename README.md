@@ -28,7 +28,7 @@ FeatureLink component in one place.
 | `CloudTAK/` | FeatureLink CloudTAK plugin | Planned |
 | [`Infra-TAK/`](Infra-TAK/) | Display Configurator - infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | **Deprecated & not supported** - see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
 | [`TAKPortal/`](TAKPortal/) | FeatureLink Configs - TAK Portal module: full Display Configurator (ported from Infra-TAK) for admins, any logged-in field user browses/downloads the results | Available - see [`TAKPortal/README.md`](TAKPortal/README.md) |
-| `WinTAK5.6/` | FeatureLink WinTAK plugin, WinTAK 5.6.x port | Planned |
+| [`WinTAK5.6/FeatureLink/`](WinTAK5.6/FeatureLink/) | FeatureLink WinTAK plugin, WinTAK 5.6.x port | In development - see [`WinTAK5.6/FeatureLink/README.md`](WinTAK5.6/FeatureLink/README.md) |
 | `WinTAK5.7/` | FeatureLink WinTAK plugin, WinTAK 5.7.x port | Planned |
 
 ## Configuration & Install
@@ -160,7 +160,12 @@ In development.
 <details>
 <summary><h3 style="display:inline">WinTAK Plugin</h3></summary>
 
-In development - planned ports for WinTAK 5.6.x and 5.7.x.
+In development. The WinTAK 5.6.x port (C#/.NET/WPF/MEF, `.wpk` package) is a scaffold + core
+sync pass - ArcGIS OAuth2 PKCE sign-in, layer browse/download-as-CoT, and PLI auto-send are
+implemented, with the 3-tab UI laid out to match the ATAK plugin. QR sharing, radial-menu
+"send to layer", deep-link import, and display-config symbology mapping are deferred - see
+[`WinTAK5.6/FeatureLink/README.md`](WinTAK5.6/FeatureLink/README.md) for what's included, what's
+deferred, and build/deploy instructions. WinTAK 5.7.x port planned after 5.6.x stabilizes.
 
 </details>
 

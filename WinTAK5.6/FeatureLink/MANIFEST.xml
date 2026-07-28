@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wintakPluginPackage>
+  <metadata>
+    <id>FeatureLink</id>
+    <version>1.0.0.0</version>
+    <sdkVersion>5.6.0.151</sdkVersion>
+    <takVariants>
+    </takVariants>
+    <description>FeatureLink: browse and sync ArcGIS Feature Layers to the map, and send this device's Position Location Information (PLI) to an ArcGIS Feature Layer via OAuth2 sign-in. Ported from the ATAK FeatureLink plugin.</description>
+    <dependencies>
+    </dependencies>
+  </metadata>
+</wintakPluginPackage>
