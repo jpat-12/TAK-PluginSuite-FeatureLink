@@ -25,7 +25,7 @@ FeatureLink component in one place.
 |---|---|---|
 | [`ATAK5.6/`](ATAK5.6/) | FeatureLink ATAK plugin, built against ATAK-CIV 5.6.0 | Available - see [`ATAK5.6/README.md`](ATAK5.6/README.md) |
 | `ATAK5.7/` | FeatureLink ATAK plugin, ATAK-CIV 5.7.x port | Planned |
-| `CloudTAK/` | FeatureLink CloudTAK plugin | Planned |
+| [`CloudTAK/`](CloudTAK/) | FeatureLink CloudTAK plugin | In development - see [`CloudTAK/README.md`](CloudTAK/README.md) |
 | [`Infra-TAK/`](Infra-TAK/) | Display Configurator - infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | **Deprecated & not supported** - see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
 | [`TAKPortal/`](TAKPortal/) | FeatureLink Configs - TAK Portal module: full Display Configurator (ported from Infra-TAK) for admins, any logged-in field user browses/downloads the results | Available - see [`TAKPortal/README.md`](TAKPortal/README.md) |
 | [`WinTAK5.6/FeatureLink/`](WinTAK5.6/FeatureLink/) | FeatureLink WinTAK plugin, WinTAK 5.6.x port | In development - see [`WinTAK5.6/FeatureLink/README.md`](WinTAK5.6/FeatureLink/README.md) |
@@ -151,7 +151,15 @@ reference and building from source.
 <details>
 <summary><h3 style="display:inline">CloudTAK Plugin</h3></summary>
 
-In development.
+In development. A browser-based Vue3/TypeScript port that runs inside the CloudTAK web UI
+itself rather than as a native app - install/enable/disable lifecycle, layer browse/download
+with display-config styling, PLI create/join/auto-send, and a "Send to Feature Layer" picker
+(replacing ATAK's radial menu) are implemented. Sign-in uses ArcGIS username/password token
+auth instead of OAuth (no app registration required), and QR scanning is replaced by
+paste/upload config JSON, since a desktop browser has no camera-scan equivalent. UI mirrors
+the ATAK plugin's tabs, section layout, and collapse behavior rather than being redesigned.
+See [`CloudTAK/README.md`](CloudTAK/README.md) for the full architecture, known limitations,
+and install instructions.
 
 </details>
 
