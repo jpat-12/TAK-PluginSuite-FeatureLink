@@ -37,7 +37,8 @@ final class LayerShareHelper {
             JSONObject o = new JSONObject()
                     .put("v", 2)
                     .put("url", layer.url)
-                    .put("layer", layerJ);
+                    .put("layer", layerJ)
+                    .put("private", "private".equals(layer.type));
             if (layer.recurrenceInterval > 0) {
                 o.put("freq", new JSONObject()
                         .put("iv", layer.recurrenceInterval)

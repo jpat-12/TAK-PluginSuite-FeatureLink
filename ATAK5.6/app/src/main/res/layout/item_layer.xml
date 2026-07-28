@@ -37,17 +37,36 @@
                 android:maxLines="1"
                 android:ellipsize="end" />
 
-            <TextView
-                android:id="@+id/layer_type_badge"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="10sp"
-                android:textStyle="bold"
-                android:layout_marginTop="1dp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="1dp">
+
+                <TextView
+                    android:id="@+id/layer_type_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <!-- Shown when this layer has a display config (icons/colors/labels/popups)
+                     applied — see FeatureLinkDropDownReceiver's layerDisplayConfigs. -->
+                <ImageView
+                    android:id="@+id/layer_styling_icon"
+                    android:layout_width="14dp"
+                    android:layout_height="14dp"
+                    android:layout_marginStart="4dp"
+                    android:src="@drawable/ic_palette"
+                    android:contentDescription="Custom styling applied"
+                    android:visibility="gone" />
+
+            </LinearLayout>
 
         </LinearLayout>
 
-        <!-- Share button: public layers only — opens a contact picker to send the layer -->
+        <!-- Share button: opens a contact picker to send the layer (public or private) -->
         <ImageButton
             android:id="@+id/layer_share_btn"
             android:layout_width="32dp"

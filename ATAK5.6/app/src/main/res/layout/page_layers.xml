@@ -44,7 +44,7 @@
                     android:id="@+id/collapse_private_btn"
                     android:layout_width="32dp"
                     android:layout_height="32dp"
-                    android:src="@drawable/ic_chevron_up"
+                    android:src="@drawable/ic_chevron_down"
                     android:background="?android:attr/selectableItemBackgroundBorderless"
                     android:contentDescription="Toggle My ArcGIS Layers section"
                     android:padding="4dp" />
@@ -55,7 +55,8 @@
                 android:id="@+id/private_layers_content"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical">
+                android:orientation="vertical"
+                android:visibility="gone">
 
                 <!-- Shown when not signed in -->
                 <TextView
@@ -74,6 +75,67 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
                     android:layout_marginTop="@dimen/fl_space_sm" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- ── PRIVATE LAYERS (shared to you — e.g. via a group, or another user's Share
+             button — distinct from "My ArcGIS Layers" above, which is only what your own
+             account's search turns up and gets wiped/rebuilt on every Refresh/re-sign-in) ── -->
+        <LinearLayout
+            style="@style/FL.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="@dimen/fl_space_md">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Private Layers"
+                    style="@style/FL.Text.SectionHeader" />
+
+                <ImageButton
+                    android:id="@+id/collapse_shared_private_btn"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:src="@drawable/ic_chevron_down"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Toggle Private Layers section"
+                    android:padding="4dp" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/shared_private_layers_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="@dimen/fl_space_sm"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/shared_private_layers_empty_hint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Layers someone shares with you privately (e.g. through a group) show up here."
+                    style="@style/FL.Text.Hint"
+                    android:gravity="center"
+                    android:paddingTop="@dimen/fl_space_lg" />
+
+                <LinearLayout
+                    android:id="@+id/shared_private_layers_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
             </LinearLayout>
 
@@ -113,7 +175,7 @@
                     android:id="@+id/collapse_public_btn"
                     android:layout_width="32dp"
                     android:layout_height="32dp"
-                    android:src="@drawable/ic_chevron_up"
+                    android:src="@drawable/ic_chevron_down"
                     android:background="?android:attr/selectableItemBackgroundBorderless"
                     android:contentDescription="Toggle Public Layers section"
                     android:padding="4dp" />
@@ -125,7 +187,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:layout_marginTop="@dimen/fl_space_sm">
+                android:layout_marginTop="@dimen/fl_space_sm"
+                android:visibility="gone">
 
                 <LinearLayout
                     android:id="@+id/public_layers_list"

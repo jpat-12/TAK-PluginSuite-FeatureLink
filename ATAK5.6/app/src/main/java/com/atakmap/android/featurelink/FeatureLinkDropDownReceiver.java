@@ -88,6 +88,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private static final String PREF_EXCLUDED_PRIVATE_URLS = "excluded_private_layer_urls";
     private static final String PREF_DISPLAY_CONFIGS_JSON = "display_configs_json";
     private static final String PREF_PUBLIC_LAYERS_JSON = "public_layers_json";
+    private static final String PREF_SHARED_PRIVATE_LAYERS_JSON = "shared_private_layers_json";
+    private static final String PREF_SECTION_PRIVATE_EXPANDED = "section_private_expanded";
+    private static final String PREF_SECTION_SHARED_PRIVATE_EXPANDED = "section_shared_private_expanded";
+    private static final String PREF_SECTION_PUBLIC_EXPANDED = "section_public_expanded";
 
     /** Request code for the "Upload Pref File" system file picker — matched against the
      * "requestCode" extra on ATAK's "com.atakmap.android.ACTIVITY_FINISHED" broadcast, which is
@@ -165,15 +169,25 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private LinearLayout privateLayersList;
     private TextView layersSignInHint;
 
+    // Layers page — shared-private layers section (layers someone shared with you privately,
+    // e.g. through a group — distinct from "My ArcGIS Layers", which only ever holds what your
+    // own account's search turns up and gets wiped/rebuilt on every Refresh/re-sign-in)
+    private LinearLayout sharedPrivateLayersList;
+    private TextView sharedPrivateLayersEmptyHint;
+    private LinearLayout sharedPrivateLayersContent;
+    private android.widget.ImageButton collapseSharedPrivateBtn;
+    private boolean sharedPrivateLayersExpanded = false;
+
     // Layers page — collapsible section state
     private LinearLayout privateLayersContent, publicLayersContent;
     private android.widget.ImageButton collapsePrivateBtn, collapsePublicBtn;
-    private boolean privateLayersExpanded = true;
-    private boolean publicLayersExpanded  = true;
+    private boolean privateLayersExpanded = false;
+    private boolean publicLayersExpanded  = false;
 
     // Data
     private final List<ArcGISLayer> privateLayers = new ArrayList<>();
     private final List<ArcGISLayer> publicLayers  = new ArrayList<>();
+    private final List<ArcGISLayer> sharedPrivateLayers = new ArrayList<>();
     private String pliLayerUrl = null;
 
     /** Tracks ATAK Markers added per layer URL so they can be refreshed or removed. */
@@ -340,7 +354,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         statusAutoSendText.setText(autoSend ? "On" : "Off");
         statusAutoSendText.setTextColor(autoSend ? 0xFF4CAF50 : 0xFF7A7A7A);
 
-        statusLayersText.setText(privateLayers.size() + " private, " + publicLayers.size() + " public");
+        int totalPrivate = privateLayers.size() + sharedPrivateLayers.size();
+        statusLayersText.setText(totalPrivate + " private, " + publicLayers.size() + " public");
     }
 
     /** A PLI destination is "connected" when it's configured and the session can actually send to it. */
@@ -515,6 +530,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void refreshHomeStats() {
         final List<ArcGISLayer> privateSnap = new ArrayList<>(privateLayers);
+        final List<ArcGISLayer> sharedPrivateSnap = new ArrayList<>(sharedPrivateLayers);
         final List<ArcGISLayer> publicSnap  = new ArrayList<>(publicLayers);
         executor.submit(() -> {
             final List<String[]> stats = new ArrayList<>();
@@ -522,6 +538,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             String token = authManager.getToken();
 
             for (ArcGISLayer layer : privateSnap) {
+                long count = cachedCount(layer.url, token);
+                layer.featureCount = count;
+                total += count;
+                stats.add(new String[]{layer.name, String.valueOf(count), "private"});
+            }
+            for (ArcGISLayer layer : sharedPrivateSnap) {
                 long count = cachedCount(layer.url, token);
                 layer.featureCount = count;
                 total += count;
@@ -752,7 +774,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         openAddLayerBtn.setOnClickListener(v -> showAddLayerPage());
         collapsePublicBtn.setOnClickListener(v -> togglePublicLayersSection());
 
-        // Private layers section
+        // Private layers section ("My ArcGIS Layers")
         privateLayersList    = layersPageView.findViewById(R.id.private_layers_list);
         privateLayersContent = layersPageView.findViewById(R.id.private_layers_content);
         collapsePrivateBtn   = layersPageView.findViewById(R.id.collapse_private_btn);
@@ -763,6 +785,29 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             else refreshPrivateLayers();
         });
         collapsePrivateBtn.setOnClickListener(v -> togglePrivateLayersSection());
+
+        // Shared-private layers section ("Private Layers" — shared to you by another user)
+        sharedPrivateLayersList      = layersPageView.findViewById(R.id.shared_private_layers_list);
+        sharedPrivateLayersContent   = layersPageView.findViewById(R.id.shared_private_layers_content);
+        sharedPrivateLayersEmptyHint = layersPageView.findViewById(R.id.shared_private_layers_empty_hint);
+        collapseSharedPrivateBtn     = layersPageView.findViewById(R.id.collapse_shared_private_btn);
+        collapseSharedPrivateBtn.setOnClickListener(v -> toggleSharedPrivateLayersSection());
+
+        // Apply persisted collapse/expand state (all three default collapsed) now that the
+        // views exist — loadSavedData() (called right after this) sets the booleans from prefs.
+        applyLayersSectionVisibility();
+    }
+
+    private void applyLayersSectionVisibility() {
+        privateLayersContent.setVisibility(privateLayersExpanded ? View.VISIBLE : View.GONE);
+        collapsePrivateBtn.setImageResource(privateLayersExpanded
+                ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+        sharedPrivateLayersContent.setVisibility(sharedPrivateLayersExpanded ? View.VISIBLE : View.GONE);
+        collapseSharedPrivateBtn.setImageResource(sharedPrivateLayersExpanded
+                ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+        publicLayersContent.setVisibility(publicLayersExpanded ? View.VISIBLE : View.GONE);
+        collapsePublicBtn.setImageResource(publicLayersExpanded
+                ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
     }
 
     private void togglePrivateLayersSection() {
@@ -770,6 +815,15 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         privateLayersContent.setVisibility(privateLayersExpanded ? View.VISIBLE : View.GONE);
         collapsePrivateBtn.setImageResource(privateLayersExpanded
                 ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+        prefs.edit().putBoolean(PREF_SECTION_PRIVATE_EXPANDED, privateLayersExpanded).apply();
+    }
+
+    private void toggleSharedPrivateLayersSection() {
+        sharedPrivateLayersExpanded = !sharedPrivateLayersExpanded;
+        sharedPrivateLayersContent.setVisibility(sharedPrivateLayersExpanded ? View.VISIBLE : View.GONE);
+        collapseSharedPrivateBtn.setImageResource(sharedPrivateLayersExpanded
+                ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+        prefs.edit().putBoolean(PREF_SECTION_SHARED_PRIVATE_EXPANDED, sharedPrivateLayersExpanded).apply();
     }
 
     private void togglePublicLayersSection() {
@@ -777,11 +831,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         publicLayersContent.setVisibility(publicLayersExpanded ? View.VISIBLE : View.GONE);
         collapsePublicBtn.setImageResource(publicLayersExpanded
                 ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down);
+        prefs.edit().putBoolean(PREF_SECTION_PUBLIC_EXPANDED, publicLayersExpanded).apply();
     }
 
     private void refreshLayersList() {
         refreshPublicLayers();
         refreshPrivateLayers();
+        refreshSharedPrivateLayers();
         refreshHomeStatusCard();
     }
 
@@ -796,15 +852,23 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         populateLayerList(privateLayersList, privateLayers);
     }
 
+    private void refreshSharedPrivateLayers() {
+        sharedPrivateLayersEmptyHint.setVisibility(
+                sharedPrivateLayers.isEmpty() ? View.VISIBLE : View.GONE);
+        populateLayerList(sharedPrivateLayersList, sharedPrivateLayers);
+    }
+
     /**
      * Populates a plain vertical container (rather than a ListView) so each list can grow to
      * its natural height and the whole Layers page scrolls as one unit.
      */
     private void populateLayerList(LinearLayout container, List<ArcGISLayer> layers) {
         container.removeAllViews();
+        Set<String> styledLayerUrls = layerDisplayConfigs.keySet();
         LayerListAdapter adapter = new LayerListAdapter(
                 pluginContext, layers, this::onLayerAction, this::toggleLayerVisibility,
-                this::onLayerIntervalChanged, this::onLayerShare, this::onLayerDelete);
+                this::onLayerIntervalChanged, this::onLayerShare, this::onLayerDelete,
+                styledLayerUrls);
         for (int i = 0; i < layers.size(); i++) {
             container.addView(adapter.getView(i, null, container));
             if (i < layers.size() - 1) {
@@ -817,19 +881,31 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         }
     }
 
+    /** Which of the three Layers-page sections a given layer instance currently lives in.
+     * Distinct from ArcGISLayer.type (which only tracks "private" vs "public" for auth-token
+     * purposes — a shared-private layer still needs the recipient's own ArcGIS token to
+     * download, so it keeps type="private" — list membership is what actually tells the three
+     * sections apart). */
+    private void saveLayerOfSection(ArcGISLayer layer) {
+        if (sharedPrivateLayers.contains(layer)) saveSharedPrivateLayers();
+        else if (privateLayers.contains(layer)) savePrivateLayers();
+        else savePublicLayers();
+    }
+
+    private void refreshLayerOfSection(ArcGISLayer layer) {
+        if (sharedPrivateLayers.contains(layer)) refreshSharedPrivateLayers();
+        else if (privateLayers.contains(layer)) refreshPrivateLayers();
+        else refreshPublicLayers();
+    }
+
     private void toggleLayerVisibility(ArcGISLayer layer) {
         layer.visible = !layer.visible;
         List<Marker> markers = layerMarkers.get(layer.url);
         if (markers != null) {
             for (Marker m : markers) m.setVisible(layer.visible);
         }
-        if ("private".equals(layer.type)) {
-            savePrivateLayers();
-            refreshPrivateLayers();
-        } else {
-            savePublicLayers();
-            refreshPublicLayers();
-        }
+        saveLayerOfSection(layer);
+        refreshLayerOfSection(layer);
     }
 
     private void onLayerAction(ArcGISLayer layer) {
@@ -840,8 +916,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 confirmRemovePublicLayer(layer);
             }
         } else {
-            // Action button or interval change on a private layer — save and sync
-            savePrivateLayers();
+            // Action button or interval change on a private/shared-private layer — save and sync
+            saveLayerOfSection(layer);
             downloadLayer(layer);
         }
     }
@@ -953,24 +1029,33 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 .show();
     }
 
-    /** Trash-can button on a private (signed-in ArcGIS) layer. Unlike a public layer, this
-     * layer still exists in the user's own ArcGIS account — there's nothing here to actually
-     * delete server-side, so this just hides it from this device's list and remembers that
-     * choice, so the next sign-in or "Refresh" doesn't silently bring it back. */
+    /** Trash-can button on a private (signed-in ArcGIS) or shared-private layer. Unlike a
+     * public layer, this layer still exists in someone's ArcGIS account — there's nothing here
+     * to actually delete server-side, so this just hides it from this device's list. "My
+     * ArcGIS Layers" additionally remembers the exclusion so the next sign-in/"Refresh" doesn't
+     * silently bring it back — a shared-private layer only ever gets (re)added by another share,
+     * so it doesn't need that same tracking. */
     private void onLayerDelete(ArcGISLayer layer) {
+        boolean isMyArcGis = privateLayers.contains(layer);
         new AlertDialog.Builder(getMapView().getContext())
                 .setTitle("Remove Layer?")
                 .setMessage("Remove \"" + layer.name + "\" from your layer list here? "
-                        + "It stays in your ArcGIS account — this only hides it on this device. "
+                        + (isMyArcGis ? "It stays in your ArcGIS account — this only hides it on this device. "
+                                      : "")
                         + "Any markers it added to the map will also be removed.")
                 .setPositiveButton("Remove", (d, w) -> {
-                    privateLayers.remove(layer);
-                    savePrivateLayers();
+                    if (isMyArcGis) {
+                        privateLayers.remove(layer);
+                        savePrivateLayers();
+                        addExcludedPrivateUrl(layer.url);
+                    } else {
+                        sharedPrivateLayers.remove(layer);
+                        saveSharedPrivateLayers();
+                    }
                     removeLayerMarkers(layer);
                     layerDisplayConfigs.remove(layer.url);
                     saveDisplayConfigs();
-                    addExcludedPrivateUrl(layer.url);
-                    refreshPrivateLayers();
+                    if (isMyArcGis) refreshPrivateLayers(); else refreshSharedPrivateLayers();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1319,7 +1404,41 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 "Not a valid FeatureLink QR code", Toast.LENGTH_SHORT).show();
     }
 
+    /** Iconset UIDs this config references that this device's UserIconDatabase doesn't have —
+     * checked before actually applying a display config so a missing custom iconset doesn't
+     * silently fall back to default markers with no explanation. */
+    private Set<String> getMissingIconsetUids(DisplayConfig config) {
+        Set<String> referenced = config.referencedIconsetUids();
+        if (referenced.isEmpty()) return referenced;
+        Set<String> missing = new HashSet<>();
+        com.atakmap.android.icons.UserIconDatabase db =
+                com.atakmap.android.icons.UserIconDatabase.instance(getMapView().getContext());
+        for (String uid : referenced) {
+            if (db.getIconSet(uid, false, false) == null) missing.add(uid);
+        }
+        return missing;
+    }
+
     private void applyScannedDisplayConfig(DisplayConfig config) {
+        Set<String> missing = getMissingIconsetUids(config);
+        if (!missing.isEmpty()) {
+            new AlertDialog.Builder(getMapView().getContext())
+                    .setTitle("Missing Icon Set" + (missing.size() > 1 ? "s" : ""))
+                    .setMessage("This layer's styling uses " + missing.size()
+                            + " custom icon set" + (missing.size() > 1 ? "s" : "")
+                            + " not installed on this device:\n\n" + String.join("\n", missing)
+                            + "\n\nUnmatched features will fall back to a default marker until "
+                            + "those icon sets are imported (Settings > Import Content). "
+                            + "Continue anyway, or stop and get the icon sets first?")
+                    .setPositiveButton("Continue", (d, w) -> applyDisplayConfigNow(config))
+                    .setNegativeButton("Stop", null)
+                    .show();
+            return;
+        }
+        applyDisplayConfigNow(config);
+    }
+
+    private void applyDisplayConfigNow(DisplayConfig config) {
         if (config.url != null && !config.url.isEmpty()) {
             Log.d(TAG, "applyScannedDisplayConfig: url branch, url=" + config.url);
             // v:2 — store the config, load the layer, and download with styling applied
@@ -1335,13 +1454,20 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         return;
                     }
                     if (!config.name.isEmpty()) layer.name = config.name;
-                    layer.type = "public";
+                    // config.isPrivate means this came from sharing a "My ArcGIS Layers" layer —
+                    // it needs the recipient's own ArcGIS access (e.g. group membership) to
+                    // actually download, so it lands in "Private Layers" rather than "Public
+                    // Layers". Sharing it doesn't grant that access, just the layer reference.
+                    layer.type = config.isPrivate ? "private" : "public";
                     // Avoid duplicate entries by URL
                     boolean alreadyAdded = false;
                     for (ArcGISLayer l : publicLayers) {
                         if (l.url.equals(config.url)) { alreadyAdded = true; break; }
                     }
                     for (ArcGISLayer l : privateLayers) {
+                        if (l.url.equals(config.url)) { alreadyAdded = true; break; }
+                    }
+                    for (ArcGISLayer l : sharedPrivateLayers) {
                         if (l.url.equals(config.url)) { alreadyAdded = true; break; }
                     }
                     Log.d(TAG, "applyScannedDisplayConfig: alreadyAdded=" + alreadyAdded
@@ -1353,8 +1479,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         // interval row) and re-scanning this same config never touches it again.
                         layer.recurrenceInterval = config.freqInterval;
                         layer.recurrenceUnit     = config.freqUnit;
-                        publicLayers.add(layer);
-                        savePublicLayers();
+                        if (config.isPrivate) {
+                            sharedPrivateLayers.add(layer);
+                            saveSharedPrivateLayers();
+                        } else {
+                            publicLayers.add(layer);
+                            savePublicLayers();
+                        }
                     }
                     navigatePage(1);
                     refreshLayersList();
@@ -1369,6 +1500,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             List<ArcGISLayer> all = new ArrayList<>();
             all.addAll(publicLayers);
             all.addAll(privateLayers);
+            all.addAll(sharedPrivateLayers);
             if (all.isEmpty()) {
                 Toast.makeText(pluginContext,
                         "Add a layer first, then scan the display config again",
@@ -1734,6 +1866,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 for (int i = 0; i < arr.length(); i++)
                     publicLayers.add(ArcGISLayer.fromJson(arr.getJSONObject(i)));
             }
+            String sharedPrivateJson = prefs.getString(PREF_SHARED_PRIVATE_LAYERS_JSON, null);
+            if (sharedPrivateJson != null) {
+                JSONArray arr = new JSONArray(sharedPrivateJson);
+                for (int i = 0; i < arr.length(); i++)
+                    sharedPrivateLayers.add(ArcGISLayer.fromJson(arr.getJSONObject(i)));
+            }
             pliLayerUrl = prefs.getString(PREF_PLI_LAYER_URL, null);
             if (prefs.getBoolean(PREF_PLI_AUTO_SEND, false)) startPliScheduler();
             updateSetPliEndpointBtn();
@@ -1741,6 +1879,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             Log.e(TAG, "Failed to load saved layer data", e);
         }
         loadDisplayConfigs();
+        privateLayersExpanded       = prefs.getBoolean(PREF_SECTION_PRIVATE_EXPANDED, false);
+        sharedPrivateLayersExpanded = prefs.getBoolean(PREF_SECTION_SHARED_PRIVATE_EXPANDED, false);
+        publicLayersExpanded        = prefs.getBoolean(PREF_SECTION_PUBLIC_EXPANDED, false);
+        applyLayersSectionVisibility();
         checkLayerRecurrence();
     }
 
@@ -1799,6 +1941,16 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         }
     }
 
+    private void saveSharedPrivateLayers() {
+        try {
+            JSONArray arr = new JSONArray();
+            for (ArcGISLayer l : sharedPrivateLayers) arr.put(l.toJson());
+            prefs.edit().putString(PREF_SHARED_PRIVATE_LAYERS_JSON, arr.toString()).apply();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to save shared-private layers", e);
+        }
+    }
+
     private void restoreLayerPreferences(List<ArcGISLayer> layers) {
         try {
             String savedJson = prefs.getString(PREF_LAYERS_JSON, null);
@@ -1823,10 +1975,15 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void checkLayerRecurrence() {
         final List<ArcGISLayer> privateSnap = new ArrayList<>(privateLayers);
+        final List<ArcGISLayer> sharedPrivateSnap = new ArrayList<>(sharedPrivateLayers);
         final List<ArcGISLayer> publicSnap  = new ArrayList<>(publicLayers);
         executor.submit(() -> {
             long now = System.currentTimeMillis();
             for (ArcGISLayer layer : privateSnap) {
+                long threshold = layer.recurrenceMillis();
+                if (threshold > 0 && (now - layer.lastSync) >= threshold) downloadLayer(layer);
+            }
+            for (ArcGISLayer layer : sharedPrivateSnap) {
                 long threshold = layer.recurrenceMillis();
                 if (threshold > 0 && (now - layer.lastSync) >= threshold) downloadLayer(layer);
             }

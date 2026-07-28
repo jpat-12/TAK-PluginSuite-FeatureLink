@@ -7,8 +7,10 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Parsed display configuration from a v:2 (or v:1 display-only) FeatureLink QR code.
@@ -45,9 +47,15 @@ final class DisplayConfig {
     final int    freqInterval;
     final String freqUnit;
 
+    /** True when this config came from sharing a "My ArcGIS Layers"/private layer (see
+     * LayerShareHelper.buildShareConfigJson()) — the recipient needs their own ArcGIS access
+     * (e.g. group membership) to actually download it, so it's routed into the "Private Layers"
+     * section instead of "Public Layers" on their end. */
+    final boolean isPrivate;
+
     private DisplayConfig(String url, String name, float opacity, boolean visible,
             SymConfig sym, LabelConfig lbl, PopupConfig popup, CotMapping cotMapping,
-            int freqInterval, String freqUnit) {
+            int freqInterval, String freqUnit, boolean isPrivate) {
         this.url          = url;
         this.name         = name;
         this.opacity      = opacity;
@@ -58,6 +66,7 @@ final class DisplayConfig {
         this.cotMapping   = cotMapping;
         this.freqInterval = freqInterval;
         this.freqUnit     = freqUnit;
+        this.isPrivate    = isPrivate;
     }
 
     /** Parses a v:2 or v:1-display JSONObject. Returns null if the object is not a display config. */
@@ -82,9 +91,10 @@ final class DisplayConfig {
             CotMapping  cotMapping = cmJ    != null ? CotMapping.fromJson(cmJ)     : null;
             int    freqInterval    = freqJ  != null ? freqJ.optInt("iv", 0)        : 0;
             String freqUnit        = freqJ  != null ? freqJ.optString("u", "s")  : "s";
+            boolean isPrivate      = o.optBoolean("private", false);
 
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
-                    freqInterval, freqUnit);
+                    freqInterval, freqUnit, isPrivate);
         } catch (Exception e) {
             return null;
         }
@@ -120,7 +130,7 @@ final class DisplayConfig {
             String freqUnit        = freqEnabled ? freqJ.optString("intervalUnit", "s") : "s";
 
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
-                    freqInterval, freqUnit);
+                    freqInterval, freqUnit, false);
         } catch (Exception e) {
             return null;
         }
@@ -146,6 +156,29 @@ final class DisplayConfig {
 
     static String toHexColor(int argb) {
         return String.format("#%06x", argb & 0xFFFFFF);
+    }
+
+    /**
+     * Every custom iconset UID this config's symbology references, across the top-level "ic"
+     * symbol and any per-value/per-rule icon entries ("adv"/"uv"/"rb"). Derived directly from
+     * the already-parsed sym rather than trusting a separately-provided list, so it can't drift
+     * out of sync with what actually gets applied and works for every source (QR scan, TAK
+     * Portal link, or a layer shared from another device) rather than only ones a config
+     * source bothered to compute. Used to warn the user before applying if their device is
+     * missing one of these iconsets — see FeatureLinkDropDownReceiver.getMissingIconsetUids().
+     */
+    Set<String> referencedIconsetUids() {
+        Set<String> uids = new HashSet<>();
+        if (sym == null) return uids;
+        addIconsetUid(uids, sym.iconset);
+        for (UvEntry e : sym.uvEntries) addIconsetUid(uids, e.iconset);
+        for (UvEntry e : sym.advValues) addIconsetUid(uids, e.iconset);
+        for (RbRule r : sym.rbRules) addIconsetUid(uids, r.iconset);
+        return uids;
+    }
+
+    private static void addIconsetUid(Set<String> uids, String iconset) {
+        if (iconset != null && !iconset.isEmpty()) uids.add(iconset);
     }
 
     // -------------------------------------------------------------------------

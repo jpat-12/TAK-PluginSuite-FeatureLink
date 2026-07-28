@@ -7,6 +7,7 @@ import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -15,6 +16,7 @@ import com.atakmap.android.featurelink.arcgis.ArcGISLayer;
 import com.atakmap.android.featurelink.plugin.R;
 
 import java.util.List;
+import java.util.Set;
 
 public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
 
@@ -33,14 +35,18 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         void onIntervalChanged(ArcGISLayer layer);
     }
 
-    /** Fired by the Share button — public layers only. Opens a contact picker so the layer can
-     * be sent directly to another ATAK user (see FeatureLinkDropDownReceiver.onLayerShare()). */
+    /** Fired by the Share button — sends this layer (public or private) to a picked ATAK
+     * contact as a Mission Package; see FeatureLinkDropDownReceiver.onLayerShare(). A shared
+     * private layer needs the recipient's own ArcGIS access (e.g. group membership) to
+     * actually download — sharing it doesn't grant access, just the layer reference. */
     public interface OnShareListener {
         void onShare(ArcGISLayer layer);
     }
 
-    /** Fired by the trash-can button — private (signed-in ArcGIS) layers only. Public layers
-     * already use their action button for this (see onAction's "public" branch). */
+    /** Fired by the trash-can button. Public layers use their action button for this instead
+     * (see onAction's "public" branch) — this is only wired for private-type layers (both "My
+     * ArcGIS Layers" and "Private Layers"/shared sections use this same adapter class, just
+     * with different callback instances per section). */
     public interface OnDeleteListener {
         void onDelete(ArcGISLayer layer);
     }
@@ -50,17 +56,19 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
     private final OnIntervalChangeListener intervalChangeListener;
     private final OnShareListener shareListener;
     private final OnDeleteListener deleteListener;
+    private final Set<String> styledLayerUrls;
 
     public LayerListAdapter(Context context, List<ArcGISLayer> layers,
             OnLayerActionListener listener, OnVisibilityToggleListener visibilityListener,
             OnIntervalChangeListener intervalChangeListener, OnShareListener shareListener,
-            OnDeleteListener deleteListener) {
+            OnDeleteListener deleteListener, Set<String> styledLayerUrls) {
         super(context, 0, layers);
         this.listener               = listener;
         this.visibilityListener     = visibilityListener;
         this.intervalChangeListener = intervalChangeListener;
         this.shareListener          = shareListener;
         this.deleteListener         = deleteListener;
+        this.styledLayerUrls        = styledLayerUrls;
     }
 
     @NonNull
@@ -77,6 +85,7 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         ImageButton eyeIcon         = convertView.findViewById(R.id.layer_eye_icon);
         TextView    nameText        = convertView.findViewById(R.id.layer_name_text);
         TextView    typeBadge       = convertView.findViewById(R.id.layer_type_badge);
+        ImageView   stylingIcon     = convertView.findViewById(R.id.layer_styling_icon);
         View        intervalRow     = convertView.findViewById(R.id.layer_interval_row);
         EditText    intervalSecondsEdit = convertView.findViewById(R.id.layer_interval_seconds_edit);
         ImageButton actionBtn       = convertView.findViewById(R.id.layer_action_btn);
@@ -89,6 +98,14 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         typeBadge.setText(isPrivate ? "[Private]" : "[Public]");
         typeBadge.setTextColor(getContext().getResources().getColor(
                 isPrivate ? R.color.fl_badge_private : R.color.fl_badge_public));
+
+        stylingIcon.setVisibility(styledLayerUrls != null && styledLayerUrls.contains(layer.url)
+                ? View.VISIBLE : View.GONE);
+
+        shareBtn.setVisibility(View.VISIBLE);
+        shareBtn.setOnClickListener(v -> {
+            if (shareListener != null) shareListener.onShare(layer);
+        });
 
         eyeIcon.setImageResource(layer.visible ? R.drawable.ic_eye_open : R.drawable.ic_eye_closed);
         eyeIcon.setAlpha(layer.visible ? 1.0f : 0.4f);
@@ -135,7 +152,6 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
             actionBtn.setOnClickListener(v -> {
                 if (listener != null) listener.onAction(layer);
             });
-            shareBtn.setVisibility(View.GONE);
             deleteBtn.setVisibility(View.VISIBLE);
             deleteBtn.setOnClickListener(v -> {
                 if (deleteListener != null) deleteListener.onDelete(layer);
@@ -144,10 +160,6 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
             actionBtn.setImageResource(android.R.drawable.ic_menu_delete);
             actionBtn.setOnClickListener(v -> {
                 if (listener != null) listener.onAction(layer);
-            });
-            shareBtn.setVisibility(View.VISIBLE);
-            shareBtn.setOnClickListener(v -> {
-                if (shareListener != null) shareListener.onShare(layer);
             });
             deleteBtn.setVisibility(View.GONE);
         }
