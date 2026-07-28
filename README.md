@@ -158,8 +158,15 @@ with display-config styling, PLI create/join/auto-send, and a "Send to Feature L
 auth instead of OAuth (no app registration required), and QR scanning is replaced by
 paste/upload config JSON, since a desktop browser has no camera-scan equivalent. UI mirrors
 the ATAK plugin's tabs, section layout, and collapse behavior rather than being redesigned.
+
+Install into an existing CloudTAK checkout (default `~/CloudTAK`):
+
+```bash
+git clone https://github.com/jpat-12/TAK-PluginSuite-FeatureLink.git && cd TAK-PluginSuite-FeatureLink/CloudTAK && ./install.sh
+```
+
 See [`CloudTAK/README.md`](CloudTAK/README.md) for the full architecture, known limitations,
-and install instructions.
+and more install options (`--pull`, `--remove`, a non-default CloudTAK path).
 
 </details>
 
