@@ -17,9 +17,9 @@
             <label class='fl-interval' title='Auto-refresh interval in seconds (0 = off)'>
                 <input type='number' min='0' :value='layer.recurrenceInterval' @change='onIntervalChange' />s
             </label>
-            <button v-if='layer.type === "private"' class='fl-icon-btn' title='Download / refresh now' @click='$emit("action")'>⟳</button>
+            <button v-if='layer.type === "private"' class='fl-icon-btn' :title='layer.lastSync ? "Refresh now" : "Download now"' @click='$emit("action")'>{{ layer.lastSync ? '↻' : '⬇' }}</button>
             <button v-if='layer.type === "public"' class='fl-icon-btn' title='Share config' @click='$emit("share")'>📤</button>
-            <button class='fl-icon-btn danger' title='Remove' @click='$emit("delete")'>🗑</button>
+            <button class='fl-icon-btn danger' title='Remove' @click='onDeleteClick'>🗑</button>
         </div>
     </div>
 </template>
@@ -35,6 +35,15 @@ const lastSyncLabel = computed(() => (props.layer.lastSync ? new Date(props.laye
 
 function onIntervalChange(e: Event): void {
     emit('intervalChange', Number((e.target as HTMLInputElement).value));
+}
+
+// Port of confirmRemovePublicLayer()/onLayerDelete()'s AlertDialog confirmation — the CloudTAK
+// port originally deleted straight away with no confirmation at all, unlike ATAK.
+function onDeleteClick(): void {
+    const message = props.layer.type === 'private'
+        ? `Remove "${props.layer.name}" from your layer list here? It stays in your ArcGIS account — this only hides it on this device. Any markers it added to the map will also be removed.`
+        : `Remove "${props.layer.name}" from your layer list? Any markers it added to the map will also be removed.`;
+    if (window.confirm(message)) emit('delete');
 }
 </script>
 

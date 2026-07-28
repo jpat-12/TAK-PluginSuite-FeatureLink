@@ -21,6 +21,12 @@ let recurrenceTimer: ReturnType<typeof setInterval> | null = null;
 async function checkLayerRecurrence(): Promise<void> {
     const now = Date.now();
     for (const layer of [...store.privateLayers, ...store.publicLayers]) {
+        // lastSync === 0 means never manually downloaded yet — skip it here rather than treating
+        // "never synced" as "infinitely overdue" and auto-downloading every newly-listed layer
+        // (e.g. right after sign-in fetches the user's whole owned-layer list) before the user
+        // has asked for any of them. Auto-refresh only kicks in once a layer's had its first
+        // manual download (the ⬇→↻ action button, see LayerRow.vue).
+        if (layer.lastSync <= 0) continue;
         const period = recurrenceMillis(layer);
         if (period > 0 && now - layer.lastSync >= period) {
             try { await downloadLayer(layer); }
