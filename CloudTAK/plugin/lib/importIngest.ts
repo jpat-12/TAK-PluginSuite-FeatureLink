@@ -5,8 +5,11 @@
 // when the recipient is a CloudTAK session, the package lands in CloudTAK's built-in Import
 // Manager, which tries to build a map tileset from it and fails (it's a small JSON config, not
 // spatial data). The original uploaded .zip survives that failure and stays downloadable, and
-// inside it is a `<name>.featurelink.json` file (see LayerShareHelper.java) — this polls for
+// inside it is a `<name>.featurelinkshare` file (see LayerShareHelper.java) — this polls for
 // exactly that and, when found, applies it the same way Add Layer → Import Config does.
+// (Was ".featurelink.json" — renamed because WinTAK's own Mission-Package auto-import chain
+// throws an unhandled exception trying to MGRS-decode any unrecognized ".json" attachment as a
+// GRG. The file's contents are still plain JSON regardless of the extension.)
 //
 // This has to reach past PluginAPI's documented surface to call CloudTAK's own /api/import
 // endpoints directly (see cloudtakInternals.ts for the token access, which is the fragile part).
@@ -27,7 +30,7 @@ const HANDLED_KEY = 'cloudtak-featurelink:handled-imports';
 // client-side instead, which is robust regardless of the filter param's exact server semantics.
 // Matches LayerShareHelper.java's "FeatureLink - <layer>.zip" package naming.
 const NAME_PREFIX = 'FeatureLink';
-const ENTRY_SUFFIX = '.featurelink.json';
+const ENTRY_SUFFIX = '.featurelinkshare';
 
 export const ingestState = reactive<{ status: 'idle' | 'ok' | 'error'; message: string }>({
     status: 'idle',
@@ -88,16 +91,20 @@ async function checkOnce(): Promise<void> {
 
     for (const item of list.items ?? []) {
         if (!item.name?.startsWith(NAME_PREFIX)) continue;
+        // `handled` only ever contains *failed* imports (see catch below) — a successful apply
+        // is safe to recheck every poll instead of being permanently skipped, since
+        // applyConfigText() is itself idempotent (findLayer()/publicLayers.some() no-ops if the
+        // layer's already present). That matters because CloudTAK appears to derive an import's
+        // id from the package's content: re-sharing the exact same (unchanged) layer from ATAK
+        // can land on the same id as before, so a permanent "seen this id" skip would silently
+        // block re-ingesting a layer the user deliberately deleted and shared again.
         if (handled.has(item.id)) continue;
-        // Marked handled before processing, even though this deliberately means a package that
-        // errors out never gets retried automatically — better than a bad package looping every
-        // 60s forever. The error is still surfaced via ingestState below.
-        handled.add(item.id);
-        saveHandled(handled);
 
         try {
             await processPackage(item, token);
         } catch (e) {
+            handled.add(item.id);
+            saveHandled(handled);
             ingestState.status = 'error';
             ingestState.message = `Auto-import failed for "${item.name}": ${e instanceof Error ? e.message : String(e)}`;
             console.error('[featurelink] import ingest failed for', item.name, e);

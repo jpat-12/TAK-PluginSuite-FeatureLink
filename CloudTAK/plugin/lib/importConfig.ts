@@ -54,7 +54,16 @@ export async function applyConfigText(text: string): Promise<ImportResult> {
             layer.recurrenceInterval = displayConfig.freq.iv;
             layer.recurrenceUnit = displayConfig.freq.u;
         }
-        store.publicLayers.push(layer);
+        // LayerShareHelper.java's Mode-2 share JSON parses through here (parseDisplayConfig's
+        // passthrough branch) and carries a "private" flag this DisplayConfig type doesn't
+        // declare but the raw JSON still has — route to the matching on-device section rather
+        // than always landing in Public Layers regardless of the source layer's actual type.
+        if ((displayConfig as { private?: boolean }).private === true) {
+            layer.type = 'private';
+            store.privateLayers.push(layer);
+        } else {
+            store.publicLayers.push(layer);
+        }
         void downloadLayer(layer);
         return { ok: true, message: `Added: ${layer.name}` };
     }
@@ -67,6 +76,11 @@ export async function applyConfigText(text: string): Promise<ImportResult> {
         }
         if (payload.type === 'layer_config') {
             if (payload.private) {
+                const existing = findLayer(payload.url);
+                if (existing) {
+                    void downloadLayer(existing);
+                    return { ok: true, message: `Styling applied to existing layer: ${existing.name}` };
+                }
                 const layer = await rest.fetchLayerInfo(payload.url);
                 if (!layer) return { ok: false, message: 'Could not load private layer from URL' };
                 layer.type = 'private';
