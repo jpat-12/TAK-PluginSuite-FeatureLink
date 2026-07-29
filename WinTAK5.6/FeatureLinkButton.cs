@@ -19,7 +19,7 @@ namespace FeatureLink
         SmallImage = "pack://application:,,,/FeatureLink;component/Assets/Small.png",
         ToolTip    = "Sync ArcGIS Feature Layers and send Position Location Information (PLI)",
         Tab        = "Home",
-        TabGroup   = "VISTA Tools")]
+        TabGroup   = "Tools")]
     [Export(typeof(Button))]
     public class FeatureLinkButton : Button
     {

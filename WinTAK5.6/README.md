@@ -194,10 +194,10 @@ before shipping a build that expects sign-in to work; alternatively, register a 
 
 ### Releasing a new version
 
-1. Bump `<WpkVersion>` in `FeatureLink.csproj` (this port starts its own WinTAK-side version line
-   at `1.0.0.0` — it does not continue the Android side's `2.6.22` numbering)
+1. Bump `<WpkVersion>` in `FeatureLink.csproj` (now tracking the Android side's version numbering,
+   starting from `2.6.1`, rather than its own independent line)
 2. Build in Release configuration
-3. Create a GitHub release, tag it (e.g. `v1.0.0`), and attach the `.wpk` from `bin\Release\`
+3. Create a GitHub release, tag it (e.g. `v2.6.1`), and attach the `.wpk` from `bin\Release\`
 
 ---
 

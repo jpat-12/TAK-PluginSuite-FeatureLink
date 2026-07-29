@@ -143,11 +143,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- NOTE: these two PNGs are NOT included in this port — see README "Assets". Add real
-         64x64 (Small) / 256x256 (Large) PNGs at these paths before building; MSBuild will fail
-         a WPF Resource-item build with a missing-file error otherwise. -->
     <Resource Include="Assets\Large.png" />
     <Resource Include="Assets\Small.png" />
+    <Resource Include="Assets\Account.png" />
   </ItemGroup>
 
   <!--
@@ -177,7 +175,7 @@
     Bump WpkVersion in the PropertyGroup below when releasing a new version.
   -->
   <PropertyGroup>
-    <WpkVersion>1.0.0.0</WpkVersion>
+    <WpkVersion>2.6.1</WpkVersion>
     <WpkName>FeatureLink-$(WpkVersion)-5.6.0.151</WpkName>
     <WpkOut>$(OutputPath)$(WpkName).wpk</WpkOut>
   </PropertyGroup>

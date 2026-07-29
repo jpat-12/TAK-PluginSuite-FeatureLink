@@ -48,7 +48,16 @@ namespace FeatureLink.Services
                     string name = (string)item["title"] ?? "Unnamed";
                     string url = (string)item["url"] ?? string.Empty;
                     if (!string.IsNullOrEmpty(url))
-                        layers.Add(new ArcGisLayer(name, url, "private"));
+                    {
+                        var layer = new ArcGisLayer(name, url, "private")
+                        {
+                            // Portal item "access": "public" (shared to Everyone), "org", or
+                            // "private" — decides which on-device section this layer lands in
+                            // once downloaded (see FeatureLinkDockPane.MoveMyArcGisLayerOnDownload).
+                            Access = (string)item["access"] ?? "private",
+                        };
+                        layers.Add(layer);
+                    }
                 }
             }
             catch

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.ComponentModel.Composition;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -55,11 +56,13 @@ namespace FeatureLink.ViewModels
 
         private readonly ICotMessageSender _cotSender;
         private readonly ILocationService _locationService;
+        private readonly ICommunicationService _communicationService;
         private readonly ArcGisAuthService _authService = new ArcGisAuthService();
         private readonly ArcGisFeatureService _restClient = new ArcGisFeatureService();
 
         private Timer _pliTimer;
         private Timer _recurrenceTimer;
+        private FileSystemWatcher _shareFileWatcher;
 
         /// <summary>UIDs of markers this pane has injected onto the map for a given layer URL,
         /// so a re-download can be tracked. WinTAK's CoT pipeline treats a repeated Process()
@@ -136,7 +139,9 @@ namespace FeatureLink.ViewModels
         public bool IsPliConnected => IsPliConfigured && IsAuthenticated;
         public string StatusPliText => IsPliConnected ? "Connected" : "Not Configured";
         public string StatusAutoSendText => PliAutoSendEnabled ? "On" : "Off";
-        public string StatusLayersText => $"{PrivateLayers.Count} private, {PublicLayers.Count} public";
+        /// <summary>On-device counts only — PrivateLayers is now a pure "My ArcGIS Layers"
+        /// browse list (see MoveMyArcGisLayerOnDownload), not itself on-device content.</summary>
+        public string StatusLayersText => $"{SharedPrivateLayers.Count} private, {PublicLayers.Count} public";
 
         /// <summary>page_home.xml's set_pli_endpoint_btn — visible only until a PLI layer is configured.</summary>
         public bool ShowSetPliEndpointButton => !IsPliConfigured;
@@ -171,8 +176,15 @@ namespace FeatureLink.ViewModels
         // Layers tab — page_layers.xml
         // -------------------------------------------------------------------------
 
+        /// <summary>"My ArcGIS Layers" — a pure browse list of the signed-in user's own ArcGIS
+        /// content. Items here are NOT on-device; downloading one moves it into SharedPrivateLayers
+        /// or PublicLayers via MoveMyArcGisLayerOnDownload() and removes it from this list.</summary>
         public ObservableCollection<ArcGisLayer> PrivateLayers { get; } = new ObservableCollection<ArcGisLayer>();
         public ObservableCollection<ArcGisLayer> PublicLayers { get; } = new ObservableCollection<ArcGisLayer>();
+        /// <summary>"Private Layers" — on-device layers not shared to Everyone: either received
+        /// via a share from another user, or moved here from "My ArcGIS Layers" on first
+        /// download. Card is hidden entirely when this is empty (see ShowSharedPrivateLayersCard).</summary>
+        public ObservableCollection<ArcGisLayer> SharedPrivateLayers { get; } = new ObservableCollection<ArcGisLayer>();
 
         private bool _privateLayersExpanded = true;
         public bool PrivateLayersExpanded
@@ -182,6 +194,19 @@ namespace FeatureLink.ViewModels
         }
         public ICommand TogglePrivateLayersCommand { get; }
         private void TogglePrivateLayers() => PrivateLayersExpanded = !PrivateLayersExpanded;
+
+        private bool _sharedPrivateLayersExpanded = true;
+        public bool SharedPrivateLayersExpanded
+        {
+            get => _sharedPrivateLayersExpanded;
+            private set { _sharedPrivateLayersExpanded = value; RaisePropertyChanged(nameof(SharedPrivateLayersExpanded)); }
+        }
+        public ICommand ToggleSharedPrivateLayersCommand { get; }
+        private void ToggleSharedPrivateLayers() => SharedPrivateLayersExpanded = !SharedPrivateLayersExpanded;
+
+        /// <summary>Whole "Private Layers" card hidden when empty — mirrors
+        /// refreshSharedPrivateLayers()'s sharedPrivateLayersCard visibility toggle.</summary>
+        public bool ShowSharedPrivateLayersCard => SharedPrivateLayers.Count > 0;
 
         private bool _publicLayersExpanded = true;
         public bool PublicLayersExpanded
@@ -320,10 +345,13 @@ namespace FeatureLink.ViewModels
         // ── Constructor ──────────────────────────────────────────────────────────
 
         [ImportingConstructor]
-        public FeatureLinkDockPane(ICotMessageSender cotSender, ILocationService locationService)
+        public FeatureLinkDockPane(ICotMessageSender cotSender, ILocationService locationService,
+            ICommunicationService communicationService)
         {
             _cotSender = cotSender;
             _locationService = locationService;
+            _communicationService = communicationService;
+            StartShareFileWatcher();
 
             NavigateHomeCommand = new DelegateCommand(() => NavigatePage(0));
             NavigateLayersCommand = new DelegateCommand(() => NavigatePage(1));
@@ -336,6 +364,7 @@ namespace FeatureLink.ViewModels
 
             ToggleStatsCommand = new DelegateCommand(ToggleStats);
             TogglePrivateLayersCommand = new DelegateCommand(TogglePrivateLayers);
+            ToggleSharedPrivateLayersCommand = new DelegateCommand(ToggleSharedPrivateLayers);
             TogglePublicLayersCommand = new DelegateCommand(TogglePublicLayers);
             TogglePliLayerCommand = new DelegateCommand(TogglePliLayer);
 
@@ -343,7 +372,7 @@ namespace FeatureLink.ViewModels
             SignOutCommand = new DelegateCommand(OnSignOut, () => IsAuthenticated);
             RefreshLayersCommand = new DelegateCommand(async () => await OnRefreshLayersAsync());
             AddPublicLayerCommand = new DelegateCommand(async () => await OnAddPublicLayerAsync());
-            DownloadLayerCommand = new DelegateCommand<ArcGisLayer>(async layer => await DownloadLayerAsync(layer));
+            DownloadLayerCommand = new DelegateCommand<ArcGisLayer>(async layer => await OnDownloadLayerAsync(layer));
             RemoveLayerCommand = new DelegateCommand<ArcGisLayer>(OnRemoveLayer);
             ToggleLayerVisibilityCommand = new DelegateCommand<ArcGisLayer>(OnToggleLayerVisibility);
             PliActionCommand = new DelegateCommand(async () =>
@@ -426,10 +455,14 @@ namespace FeatureLink.ViewModels
             RunOnUi(() =>
             {
                 var preserved = PrivateLayers.ToDictionary(l => l.Url, l => l);
+                // Already downloaded onto this device (see MoveMyArcGisLayerOnDownload) — it now
+                // lives in SharedPrivateLayers or PublicLayers, not the browse list.
+                var onDevice = new HashSet<string>(
+                    SharedPrivateLayers.Select(l => l.Url).Concat(PublicLayers.Select(l => l.Url)));
                 PrivateLayers.Clear();
                 foreach (var layer in layers)
                 {
-                    if (_excludedPrivateLayerUrls.Contains(layer.Url)) continue;
+                    if (_excludedPrivateLayerUrls.Contains(layer.Url) || onDevice.Contains(layer.Url)) continue;
                     layer.Type = "private";
                     if (preserved.TryGetValue(layer.Url, out var old))
                     {
@@ -454,7 +487,7 @@ namespace FeatureLink.ViewModels
             string token = await _authService.GetTokenAsync().ConfigureAwait(false);
             long total = 0;
             var stats = new List<string>();
-            foreach (var layer in PrivateLayers.Concat(PublicLayers).ToList())
+            foreach (var layer in PrivateLayers.Concat(SharedPrivateLayers).Concat(PublicLayers).ToList())
             {
                 try
                 {
@@ -506,30 +539,161 @@ namespace FeatureLink.ViewModels
             await DownloadLayerAsync(layer).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Watches WinTAK's own Mission Package extraction folder for an incoming
+        /// ".featurelink.json" share (ATAK's sendLayerShare() naming). WinTAK's core handles the
+        /// accept-prompt/extraction/GDAL-import-attempt chain itself — there's no plugin hook for
+        /// that step the way ATAK's FeatureLinkMarshal/FeatureLinkImporter register into ATAK's
+        /// own import pipeline, and ICommunicationService.FileTransferred (tried first) turned
+        /// out not to fire for server-relayed Mission Package content in a live test — WinTAK
+        /// just logs a "GDAL: not recognized as a supported file format" warning and moves on.
+        /// Watching the real extraction folder directly sidesteps needing that event at all.
+        /// </summary>
+        private void StartShareFileWatcher()
+        {
+            try
+            {
+                string root = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "WinTAK", "attachments");
+                Directory.CreateDirectory(root);
+
+                _shareFileWatcher = new FileSystemWatcher(root, "*.featurelink.json")
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime,
+                };
+                _shareFileWatcher.Created += OnShareFileCreated;
+                _shareFileWatcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex)
+            {
+                RunOnUi(() => StatusText = $"Could not watch for shared layers: {ex.Message}");
+            }
+        }
+
+        private void OnShareFileCreated(object sender, FileSystemEventArgs e)
+        {
+            _ = ImportFeatureLinkShareAsync(e.FullPath);
+        }
+
+        /// <summary>The Created event can fire while WinTAK's own extraction/GDAL-import-attempt
+        /// still holds the file open — retry briefly instead of failing on the first IOException.</summary>
+        private static async Task<string> ReadFileWithRetryAsync(string path)
+        {
+            const int maxAttempts = 6;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    return File.ReadAllText(path);
+                }
+                catch (IOException) when (attempt < maxAttempts)
+                {
+                    await Task.Delay(250).ConfigureAwait(false);
+                }
+            }
+            return File.ReadAllText(path);
+        }
+
+        /// <summary>
+        /// Applies a received layer-share file — the WinTAK counterpart of ATAK's
+        /// importFeatureLinkShareUri()/applyScannedDisplayConfig() url branch. Only the bare
+        /// url/name/private/freq fields are used; sym/lbl/popup styling in the payload is
+        /// ignored, matching this port's existing DisplayConfig-symbology-mapping scope cut (see
+        /// README "What's deferred") — the layer still downloads and renders as CoT markers with
+        /// default styling.
+        /// </summary>
+        private async Task ImportFeatureLinkShareAsync(string path)
+        {
+            try
+            {
+                string json = await ReadFileWithRetryAsync(path).ConfigureAwait(false);
+                var o = Newtonsoft.Json.Linq.JObject.Parse(json);
+
+                string url = (string)o["url"];
+                if (string.IsNullOrEmpty(url))
+                {
+                    RunOnUi(() => StatusText = "Received a FeatureLink file with no layer URL.");
+                    return;
+                }
+
+                bool isPrivate = (bool?)o["private"] ?? false;
+                string name = (string)o["layer"]?["name"];
+                int freqInterval = (int?)o["freq"]?["iv"] ?? 0;
+                string freqUnit = (string)o["freq"]?["u"] ?? "s";
+                bool hasDisplayConfig = o["sym"] != null || o["lbl"] != null
+                    || o["popup"] != null || o["cm"] != null;
+
+                if (SharedPrivateLayers.Any(l => l.Url == url) || PublicLayers.Any(l => l.Url == url))
+                {
+                    RunOnUi(() => StatusText = $"Layer already in your list: {name ?? url}");
+                    return;
+                }
+
+                RunOnUi(() => StatusText = $"Receiving shared layer: {name ?? url}…");
+
+                var layer = await _restClient.FetchLayerInfoAsync(url).ConfigureAwait(false);
+                if (layer == null)
+                {
+                    RunOnUi(() => StatusText = "Could not load the shared layer.");
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(name)) layer.Name = name;
+                layer.Type = isPrivate ? "private" : "public";
+                layer.RecurrenceInterval = freqInterval;
+                layer.RecurrenceUnit = freqUnit;
+                layer.HasDisplayConfig = hasDisplayConfig;
+
+                RunOnUi(() =>
+                {
+                    if (isPrivate) SharedPrivateLayers.Add(layer); else PublicLayers.Add(layer);
+                    StatusText = $"Received shared layer: {layer.Name}";
+                    RaisePropertyChanged(nameof(StatusLayersText));
+                    RaisePropertyChanged(nameof(ShowSharedPrivateLayersCard));
+                    NavigatePage(1);
+                    SaveSettings();
+                });
+
+                await DownloadLayerAsync(layer).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                RunOnUi(() => StatusText = $"Failed to import shared layer: {ex.Message}");
+            }
+        }
+
         /// <summary>Mirrors confirmRemovePublicLayer()/onLayerDelete()'s AlertDialog confirmation —
         /// this previously removed the layer immediately on click with no confirmation at all.</summary>
         private void OnRemoveLayer(ArcGisLayer layer)
         {
             if (layer == null) return;
 
-            bool isPrivate = layer.Type == "private";
-            string message = isPrivate
+            bool isMyArcGis = PrivateLayers.Contains(layer);
+            bool isSharedPrivate = SharedPrivateLayers.Contains(layer);
+            string message = (isMyArcGis || isSharedPrivate)
                 ? $"Remove \"{layer.Name}\" from your layer list here? It stays in your ArcGIS account — this only hides it on this device. Any markers it added to the map will also be removed."
                 : $"Remove \"{layer.Name}\" from your layer list? Any markers it added to the map will also be removed.";
             var result = MessageBox.Show(message, "Remove Layer?", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (result != MessageBoxResult.Yes) return;
 
-            if (isPrivate)
+            if (isMyArcGis)
             {
                 PrivateLayers.Remove(layer);
                 _excludedPrivateLayerUrls.Add(layer.Url);
+            }
+            else if (isSharedPrivate)
+            {
+                SharedPrivateLayers.Remove(layer);
             }
             else
             {
                 PublicLayers.Remove(layer);
             }
-            _layerMarkerUids.Remove(layer.Url);
+            RemoveLayerMarkers(layer);
             RaisePropertyChanged(nameof(StatusLayersText));
+            RaisePropertyChanged(nameof(ShowSharedPrivateLayersCard));
             SaveSettings();
         }
 
@@ -538,6 +702,39 @@ namespace FeatureLink.ViewModels
         {
             if (layer == null) return;
             layer.Visible = !layer.Visible;
+            SaveSettings();
+        }
+
+        /// <summary>Download/sync button handler — mirrors onLayerAction()'s private branch.
+        /// Downloading a "My ArcGIS Layers" browse item for the first time moves it onto the
+        /// device before downloading it.</summary>
+        private async Task OnDownloadLayerAsync(ArcGisLayer layer)
+        {
+            if (layer == null) return;
+            if (PrivateLayers.Contains(layer)) MoveMyArcGisLayerOnDownload(layer);
+            await DownloadLayerAsync(layer).ConfigureAwait(false);
+        }
+
+        /// <summary>Moves a "My ArcGIS Layers" browse-list item onto the device once its
+        /// download/sync button is tapped, landing it in SharedPrivateLayers or PublicLayers
+        /// depending on whether the ArcGIS item is shared to Everyone (ArcGisLayer.Access) —
+        /// from then on it behaves like any other on-device layer in that section instead of
+        /// staying in the browse list.</summary>
+        private void MoveMyArcGisLayerOnDownload(ArcGisLayer layer)
+        {
+            PrivateLayers.Remove(layer);
+            if (layer.Access == "public")
+            {
+                layer.Type = "public";
+                PublicLayers.Add(layer);
+            }
+            else
+            {
+                layer.Type = "private";
+                SharedPrivateLayers.Add(layer);
+            }
+            RaisePropertyChanged(nameof(StatusLayersText));
+            RaisePropertyChanged(nameof(ShowSharedPrivateLayersCard));
             SaveSettings();
         }
 
@@ -616,6 +813,45 @@ namespace FeatureLink.ViewModels
             // controls whether the item is (re-)posted at all on the next download/refresh.
             // TODO: revisit if/when a WinTAK item-visibility API is confirmed.
             if (visible) _cotSender.Process(cotEvent);
+        }
+
+        /// <summary>
+        /// Removes a layer's markers from the map. There's no documented "remove map item by
+        /// uid" call in any reviewed SDK sample (see README "Known limitations" — this is the
+        /// same gap noted for shrinking feature sets), so instead of removing the item directly
+        /// this re-posts each of the layer's known uids with an already-past stale time — the
+        /// standard CoT-protocol expiry convention, which any compliant CoT consumer (including
+        /// WinTAK's own map engine, which ingests self-posted events through the same pipeline as
+        /// ATAK/WinTAK/CloudTAK
+        /// devices' events) treats as "expire this immediately." Avoids needing an unconfirmed
+        /// item-removal API at all.
+        /// </summary>
+        private void RemoveLayerMarkers(ArcGisLayer layer)
+        {
+            if (layer == null) return;
+            if (_layerMarkerUids.TryGetValue(layer.Url, out var uids))
+            {
+                var now = DateTime.UtcNow;
+                var expired = new CoordinatedTime(now.AddMinutes(-1));
+                foreach (var uid in uids)
+                {
+                    var cotEvent = new CotEvent(
+                        uid: uid,
+                        type: "a-f-G",
+                        vers: CotEvent.VERSION_2_0,
+                        point: new CotPoint(new GeoPoint(0, 0)),
+                        time: new CoordinatedTime(now),
+                        start: new CoordinatedTime(now),
+                        stale: expired,
+                        how: CotEvent.HOW_MACHINE_GENERATED,
+                        detail: null,
+                        opex: null,
+                        qos: null,
+                        access: null);
+                    _cotSender.Process(cotEvent);
+                }
+            }
+            _layerMarkerUids.Remove(layer.Url);
         }
 
         // -------------------------------------------------------------------------
@@ -762,8 +998,17 @@ namespace FeatureLink.ViewModels
         private async void CheckLayerRecurrence()
         {
             var now = DateTime.UtcNow;
-            var due = PrivateLayers.Concat(PublicLayers)
-                .Where(l => l.RecurrenceTimeSpan() > TimeSpan.Zero && (now - l.LastSync) >= l.RecurrenceTimeSpan())
+            // PrivateLayers ("My ArcGIS Layers") is excluded entirely — it's a pure browse list
+            // now, not on-device content (see MoveMyArcGisLayerOnDownload). LastSyncTicks == 0
+            // means never manually downloaded yet — skip it here rather than treating "never
+            // synced" as "infinitely overdue" and auto-downloading every layer right after
+            // sign-in, before the user has asked for any of them (same fix already made in
+            // CloudTAK's scheduler.ts). Auto-refresh only kicks in once a layer's had its first
+            // manual download via the sync/download button.
+            var due = SharedPrivateLayers.Concat(PublicLayers)
+                .Where(l => l.LastSyncTicks > 0
+                    && l.RecurrenceTimeSpan() > TimeSpan.Zero
+                    && (now - l.LastSync) >= l.RecurrenceTimeSpan())
                 .ToList();
             foreach (var layer in due)
                 await DownloadLayerAsync(layer).ConfigureAwait(false);
@@ -780,6 +1025,8 @@ namespace FeatureLink.ViewModels
             foreach (var l in settings.PrivateLayers) PrivateLayers.Add(l);
             PublicLayers.Clear();
             foreach (var l in settings.PublicLayers) PublicLayers.Add(l);
+            SharedPrivateLayers.Clear();
+            foreach (var l in settings.SharedPrivateLayers) SharedPrivateLayers.Add(l);
 
             _excludedPrivateLayerUrls.Clear();
             foreach (var u in settings.ExcludedPrivateLayerUrls) _excludedPrivateLayerUrls.Add(u);
@@ -796,6 +1043,7 @@ namespace FeatureLink.ViewModels
             RaisePropertyChanged(nameof(StatusPliText));
             RaisePropertyChanged(nameof(StatusAutoSendText));
             RaisePropertyChanged(nameof(StatusLayersText));
+            RaisePropertyChanged(nameof(ShowSharedPrivateLayersCard));
             RaisePropertyChanged(nameof(ShowSetPliEndpointButton));
         }
 
@@ -805,6 +1053,7 @@ namespace FeatureLink.ViewModels
             {
                 PrivateLayers = PrivateLayers.ToList(),
                 PublicLayers = PublicLayers.ToList(),
+                SharedPrivateLayers = SharedPrivateLayers.ToList(),
                 ExcludedPrivateLayerUrls = _excludedPrivateLayerUrls.ToList(),
                 PortalUrl = _authService.PortalUrl,
                 Pli = new PliSettings
@@ -838,6 +1087,13 @@ namespace FeatureLink.ViewModels
             StopPliTimer();
             _recurrenceTimer?.Dispose();
             _recurrenceTimer = null;
+            if (_shareFileWatcher != null)
+            {
+                _shareFileWatcher.EnableRaisingEvents = false;
+                _shareFileWatcher.Created -= OnShareFileCreated;
+                _shareFileWatcher.Dispose();
+                _shareFileWatcher = null;
+            }
         }
     }
 }

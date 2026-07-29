@@ -41,6 +41,22 @@ namespace FeatureLink.Models
 
         public bool IsPrivate => Type == "private";
 
+        private string _access = "org";
+        /// <summary>ArcGIS portal sharing scope for a "My ArcGIS Layers" browse item: "public"
+        /// (shared to Everyone), "org", or "private". Only meaningful for items returned by
+        /// ArcGisFeatureService.SearchUserLayersAsync() — decides whether
+        /// MoveMyArcGisLayerOnDownload() files a downloaded item into PublicLayers or
+        /// SharedPrivateLayers. Layers added via URL or received via a share default to "org"
+        /// since there's no portal item to ask.</summary>
+        public string Access { get => _access; set { _access = value; RaisePropertyChanged(); } }
+
+        private bool _hasDisplayConfig;
+        /// <summary>Whether a display config (icons/colors/labels/popups) is attached — set from
+        /// a received share's sym/lbl/popup/cm keys. WinTAK doesn't apply this styling (out of
+        /// scope per the porting brief — see README), so this only drives the Config/No Config
+        /// badge, matching what the layer actually carries rather than claiming it renders.</summary>
+        public bool HasDisplayConfig { get => _hasDisplayConfig; set { _hasDisplayConfig = value; RaisePropertyChanged(); } }
+
         private long _featureCount;
         public long FeatureCount { get => _featureCount; set { _featureCount = value; RaisePropertyChanged(); } }
 
@@ -116,6 +132,8 @@ namespace FeatureLink.Models
                 new XElement("Name", Name ?? string.Empty),
                 new XElement("Url", Url ?? string.Empty),
                 new XElement("Type", Type ?? "public"),
+                new XElement("Access", Access ?? "org"),
+                new XElement("HasDisplayConfig", HasDisplayConfig),
                 new XElement("FeatureCount", FeatureCount),
                 new XElement("LastSyncTicks", LastSyncTicks),
                 new XElement("DownloadEnabled", DownloadEnabled),
@@ -132,6 +150,8 @@ namespace FeatureLink.Models
                 Name = (string)el.Element("Name") ?? "Unknown",
                 Url = (string)el.Element("Url") ?? string.Empty,
                 Type = (string)el.Element("Type") ?? "public",
+                Access = (string)el.Element("Access") ?? "org",
+                HasDisplayConfig = (bool?)el.Element("HasDisplayConfig") ?? false,
                 FeatureCount = (long?)el.Element("FeatureCount") ?? 0,
                 LastSyncTicks = (long?)el.Element("LastSyncTicks") ?? 0,
                 DownloadEnabled = (bool?)el.Element("DownloadEnabled") ?? false,

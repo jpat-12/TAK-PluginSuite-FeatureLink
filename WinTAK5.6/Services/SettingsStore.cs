@@ -39,6 +39,10 @@ namespace FeatureLink.Services
         {
             public List<ArcGisLayer> PrivateLayers { get; set; } = new List<ArcGisLayer>();
             public List<ArcGisLayer> PublicLayers { get; set; } = new List<ArcGisLayer>();
+            /// <summary>On-device layers not shared to Everyone — either received via a share
+            /// from another user, or moved here from the "My ArcGIS Layers" browse list on first
+            /// download because their portal item's Access wasn't "public".</summary>
+            public List<ArcGisLayer> SharedPrivateLayers { get; set; } = new List<ArcGisLayer>();
             public PliSettings Pli { get; set; } = new PliSettings();
             public string PortalUrl { get; set; } = "https://www.arcgis.com";
 
@@ -71,6 +75,11 @@ namespace FeatureLink.Services
                     settings.PublicLayers = publicEl.Elements("Layer")
                         .Select(ArcGisLayer.FromXElement).ToList();
 
+                var sharedPrivateEl = root.Element("SharedPrivateLayers");
+                if (sharedPrivateEl != null)
+                    settings.SharedPrivateLayers = sharedPrivateEl.Elements("Layer")
+                        .Select(ArcGisLayer.FromXElement).ToList();
+
                 settings.Pli = PliSettings.FromXElement(root.Element("Pli"));
 
                 var excludedEl = root.Element("ExcludedPrivateLayerUrls");
@@ -94,6 +103,7 @@ namespace FeatureLink.Services
                 new XElement("PortalUrl", settings.PortalUrl ?? "https://www.arcgis.com"),
                 new XElement("PrivateLayers", settings.PrivateLayers.Select(l => l.ToXElement())),
                 new XElement("PublicLayers", settings.PublicLayers.Select(l => l.ToXElement())),
+                new XElement("SharedPrivateLayers", settings.SharedPrivateLayers.Select(l => l.ToXElement())),
                 settings.Pli.ToXElement(),
                 new XElement("ExcludedPrivateLayerUrls",
                     settings.ExcludedPrivateLayerUrls.Select(u => new XElement("Url", u))));
