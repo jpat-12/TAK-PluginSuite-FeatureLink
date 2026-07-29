@@ -112,7 +112,11 @@ network call it has to authenticate on its own.
   run, `portalAuth.middleware.js` has already verified the request and set
   `req.authentikUser`. Serves each dataset's `exported_config` verbatim.
 - **`views/featurelink-configs.ejs`** — the Administration hub (list saved
-  dataset configs, Open/QR/Copy-link/Delete, "+ New Dataset Config").
+  dataset configs, Open/QR/Copy-link/Delete, "+ Add Data Layer(s)"). That button opens the
+  configurator's Add Data source picker: Web Map (resolves every FeatureLayer it contains —
+  one becomes a normal single-dataset session, several prompt "keep together" (tagged with a
+  shared `group`, still independent datasets) vs. "display separately") or a single
+  FeatureLayer, with or without setting up its symbology up front.
 - **`views/featurelink.ejs`** — the Onboarding page (list configs; Download +
   Open in ATAK for any dataset with a live FeatureLayer configured).
 - Patches (idempotent) to:

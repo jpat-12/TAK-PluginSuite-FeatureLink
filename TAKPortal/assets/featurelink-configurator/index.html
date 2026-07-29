@@ -817,6 +817,56 @@
       line-height: 1.4;
     }
 
+    /* ── Add Data / source-picker modal ── */
+    #source-picker-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.55);
+      display: none; align-items: center; justify-content: center;
+      z-index: 500; padding: 20px;
+    }
+    #source-picker-overlay.open { display: flex; }
+    .picker-modal {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: var(--shadow); width: 100%; max-width: 640px; max-height: 90vh;
+      overflow-y: auto; padding: 24px;
+    }
+    .picker-modal h2 { font-size: 17px; margin-bottom: 4px; }
+    .picker-modal .picker-sub { color: var(--text-muted); font-size: 13px; margin-bottom: 18px; }
+    .picker-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .picker-choices.single-col { grid-template-columns: 1fr; }
+    .picker-card {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 16px; text-align: left; cursor: pointer; color: var(--text);
+      transition: border-color .15s, background .15s; font-family: inherit;
+    }
+    .picker-card:hover { border-color: var(--accent); background: #313749; }
+    .picker-card .pc-icon { font-size: 22px; margin-bottom: 8px; }
+    .picker-card .pc-title { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    .picker-card .pc-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+    .picker-card:disabled { opacity: .45; cursor: default; }
+    .picker-modal .picker-back { background: none; border: none; color: var(--text-muted); font-size: 12px; cursor: pointer; margin-bottom: 14px; padding: 0; }
+    .picker-modal .picker-back:hover { color: var(--text); }
+    .picker-modal textarea, .picker-modal input[type=text] {
+      width: 100%; font-size: 13px; font-family: inherit; padding: 8px 10px;
+      border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg); color: var(--text);
+      resize: vertical;
+    }
+    .picker-modal .picker-primary-btn {
+      background: var(--accent); border: none; color: #fff; padding: 9px 18px; border-radius: var(--radius);
+      font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 10px;
+    }
+    .picker-modal .picker-primary-btn:hover { opacity: .88; }
+    .picker-modal .picker-primary-btn:disabled { opacity: .4; cursor: default; }
+    .picker-modal .picker-status { font-size: 12px; color: var(--text-muted); margin-top: 8px; min-height: 16px; }
+    .picker-modal .picker-status.error { color: var(--danger); }
+    .picker-layer-list { list-style: none; margin: 12px 0; max-height: 180px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+    .picker-layer-list li { padding: 7px 10px; font-size: 12px; border-bottom: 1px solid var(--border); }
+    .picker-layer-list li:last-child { border-bottom: none; }
+    header button.add-data-btn {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      padding: 6px 12px; border-radius: var(--radius); font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    header button.add-data-btn:hover { border-color: var(--accent); }
+
     /* Responsive collapse */
     @media (max-width: 900px) {
       .panel-left { width: 240px; }
@@ -841,6 +891,7 @@
   <span class="badge">FeatureLink</span>
   <span class="saved-badge" id="saved-name-badge" title="Currently editing this saved config"></span>
   <span class="spacer"></span>
+  <button class="add-data-btn" type="button" onclick="openSourcePicker()">+ Add Data</button>
   <a class="admin-link-btn" href="/featurelink-configs">&#128194; Saved Configs</a>
   <button class="save-btn" id="save-btn" disabled onclick="saveDataset()">
     &#128190; Save
@@ -969,6 +1020,88 @@
 
 <div id="toast"></div>
 
+<!-- ── Add Data / source-picker modal ── -->
+<div id="source-picker-overlay">
+  <div class="picker-modal">
+
+    <!-- Step 1: top-level source choice -->
+    <div id="picker-step-choice">
+      <h2>Add Data Layer(s)</h2>
+      <div class="picker-sub">How do you want to bring in the data?</div>
+      <div class="picker-choices">
+        <button type="button" class="picker-card" onclick="pickerChooseWebMap()">
+          <div class="pc-icon">🗺️</div>
+          <div class="pc-title">Web Map</div>
+          <div class="pc-desc">Paste an ArcGIS Web Map link — pulls in every FeatureLayer it contains.</div>
+        </button>
+        <button type="button" class="picker-card" onclick="pickerChooseFeatureLayer('with')">
+          <div class="pc-icon">🎨</div>
+          <div class="pc-title">FeatureLayer — with symbology</div>
+          <div class="pc-desc">Paste one FeatureLayer URL, then set up its symbology yourself.</div>
+        </button>
+        <button type="button" class="picker-card" onclick="pickerChooseFeatureLayer('none')" style="grid-column: 1 / -1;">
+          <div class="pc-icon">📍</div>
+          <div class="pc-title">FeatureLayer — without symbology</div>
+          <div class="pc-desc">Paste one FeatureLayer URL and skip straight to CoT mapping — uses a plain default marker (you can style it later).</div>
+        </button>
+      </div>
+    </div>
+
+    <!-- Step 2: Web Map URL entry -->
+    <div id="picker-step-webmap" style="display:none">
+      <button type="button" class="picker-back" onclick="pickerShowChoice()">&larr; Back</button>
+      <h2>Add from a Web Map</h2>
+      <div class="picker-sub">Paste the Web Map's viewer link (or its item URL) and resolve it.</div>
+      <textarea id="picker-webmap-url" rows="2" placeholder="https://...maps.arcgis.com/home/webmap/viewer.html?webmap=..."></textarea>
+      <button type="button" class="picker-primary-btn" id="picker-webmap-resolve-btn" onclick="pickerResolveWebMap()">Resolve</button>
+      <div class="picker-status" id="picker-webmap-status"></div>
+    </div>
+
+    <!-- Step 3a: Web Map resolved to a single layer -> ask with/without symbology -->
+    <div id="picker-step-webmap-single" style="display:none">
+      <button type="button" class="picker-back" onclick="pickerShowWebMap()">&larr; Back</button>
+      <h2>One FeatureLayer found</h2>
+      <div class="picker-sub" id="picker-webmap-single-name"></div>
+      <div class="picker-choices">
+        <button type="button" class="picker-card" onclick="pickerBeginResolvedLayer('with')">
+          <div class="pc-icon">🎨</div>
+          <div class="pc-title">With symbology</div>
+          <div class="pc-desc">Set up its symbology yourself.</div>
+        </button>
+        <button type="button" class="picker-card" onclick="pickerBeginResolvedLayer('none')">
+          <div class="pc-icon">📍</div>
+          <div class="pc-title">Without symbology</div>
+          <div class="pc-desc">Plain default marker, straight to CoT mapping.</div>
+        </button>
+      </div>
+    </div>
+
+    <!-- Step 3b: Web Map resolved to multiple layers -> keep together vs. separately -->
+    <div id="picker-step-webmap-multi" style="display:none">
+      <button type="button" class="picker-back" onclick="pickerShowWebMap()">&larr; Back</button>
+      <h2 id="picker-webmap-multi-title">Multiple FeatureLayers found</h2>
+      <div class="picker-sub">Each layer becomes its own dataset with a plain default marker — open any of them afterward to customize its symbology.</div>
+      <ul class="picker-layer-list" id="picker-webmap-layer-list"></ul>
+      <div class="cfg-label" style="margin-bottom:6px">Group name</div>
+      <input type="text" id="picker-webmap-group-name" />
+      <div class="picker-choices" style="margin-top:14px">
+        <button type="button" class="picker-card" onclick="pickerBulkImport(true)">
+          <div class="pc-icon">🔗</div>
+          <div class="pc-title">Keep together</div>
+          <div class="pc-desc">Tag all of these with the group name above so they show up clustered on the Saved Configs list.</div>
+        </button>
+        <button type="button" class="picker-card" onclick="pickerBulkImport(false)">
+          <div class="pc-icon">🧩</div>
+          <div class="pc-title">Display separately</div>
+          <div class="pc-desc">Import as independent, ungrouped datasets.</div>
+        </button>
+      </div>
+      <div class="picker-status" id="picker-webmap-multi-status"></div>
+    </div>
+
+  </div>
+</div>
+
 <!-- SheetJS for Excel support -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <!-- QR code generation. Pinned to 1.4.4: qrcode@1.5.x removed the standalone
@@ -996,6 +1129,8 @@ let state = {
   rawFile: null,          // File object for the currently loaded local file, if any (re-sent on Save)
   savedDatasetId: null,   // set once this session is linked to a saved dataset (admin page)
   savedDatasetName: null,
+  savedDatasetGroup: '',  // set when this session came from a "keep together" Web Map import
+  pickerSymbologyMode: null, // 'with' | 'none' — set by the Add Data picker, consumed once in processRows()
   rows: [],
   fields: [],        // [{name, type, samples}]
   filtered: [],
@@ -1375,6 +1510,12 @@ function processRows(rows, fileName) {
     state.pendingConfig = null;
   }
 
+  // Set by the Add Data source picker: 'with' sends the user straight to the Symbology
+  // tab to set it up, 'none' leaves them on CoT Mapping with the plain default marker
+  // processRows() above already configured. Consumed once, not persisted.
+  if (state.pickerSymbologyMode === 'with') goToStage('rendercolumn');
+  state.pickerSymbologyMode = null;
+
   generateQR();
 }
 
@@ -1407,7 +1548,7 @@ function renderFileChip(name, count) {
 
 function clearFile() {
   state.rows = []; state.filtered = []; state.fields = []; state.fileName = null; state.featureLayerUrl = null; state.pendingConfig = null;
-  state.rawFile = null; state.savedDatasetId = null; state.savedDatasetName = null;
+  state.rawFile = null; state.savedDatasetId = null; state.savedDatasetName = null; state.savedDatasetGroup = '';
   updateSavedBadge();
   document.getElementById('file-chip').style.display = 'none';
   document.getElementById('drop-zone').style.display = '';
@@ -2878,18 +3019,17 @@ function arrayBufferToBase64(buf) {
   return btoa(binary);
 }
 
-async function saveDataset() {
-  if (!state.rows.length) { showToast('Load a dataset first'); return; }
-
-  const defaultName = state.savedDatasetName || state.cfg.layer.name || state.fileName || 'Untitled';
-  const input = prompt('Save as name:', defaultName);
-  if (input === null) return;
-  const name = input.trim() || defaultName;
-
+/**
+ * Shared save logic for both the manual Save button and the headless bulk-import path
+ * (multi-layer Web Map "Add Data"). Assumes state.rows is already populated (the caller
+ * loaded the data first) and does not prompt — name/group are passed in directly.
+ */
+async function saveDatasetCore(name, group) {
   const sourceType = state.featureLayerUrl ? 'url' : 'file';
   const payload = {
     id: state.savedDatasetId || undefined,
     name,
+    group: group || '',
     source_type: sourceType,
     source_url: state.featureLayerUrl || '',
     file_name: state.rawFile ? state.rawFile.name : (state.fileName || ''),
@@ -2904,22 +3044,33 @@ async function saveDataset() {
     exported_config: sourceType === 'url' ? buildUrlConfigExport() : null,
   };
 
+  if (sourceType === 'file') {
+    if (!state.rawFile) throw new Error('original file no longer available — reload it first');
+    const buf = await state.rawFile.arrayBuffer();
+    payload.file_content_b64 = arrayBufferToBase64(buf);
+  }
+
+  const resp = await fetch('/api/featurelink/admin/datasets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || 'save failed');
+  return resp.json();
+}
+
+async function saveDataset() {
+  if (!state.rows.length) { showToast('Load a dataset first'); return; }
+
+  const defaultName = state.savedDatasetName || state.cfg.layer.name || state.fileName || 'Untitled';
+  const input = prompt('Save as name:', defaultName);
+  if (input === null) return;
+  const name = input.trim() || defaultName;
+
   const btn = document.getElementById('save-btn');
   btn.disabled = true;
   try {
-    if (sourceType === 'file') {
-      if (!state.rawFile) throw new Error('original file no longer available — reload it first');
-      const buf = await state.rawFile.arrayBuffer();
-      payload.file_content_b64 = arrayBufferToBase64(buf);
-    }
-
-    const resp = await fetch('/api/featurelink/admin/datasets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || 'save failed');
-    const saved = await resp.json();
+    const saved = await saveDatasetCore(name, state.savedDatasetGroup);
     state.savedDatasetId = saved.id;
     state.savedDatasetName = saved.name;
     updateSavedBadge();
@@ -2940,6 +3091,7 @@ async function loadSavedDataset(id) {
 
     state.savedDatasetId = rec.id;
     state.savedDatasetName = rec.name;
+    state.savedDatasetGroup = rec.group || '';
     updateSavedBadge();
     state.pendingConfig = { _internal: true, cfg: (rec.state || {}).cfg || {} };
 
@@ -3361,15 +3513,212 @@ function scheduleQRRefresh() {
   qrDebounce = setTimeout(generateQR, 600);
 }
 
+// ══════════════════════════════════════════
+//  Add Data / source-picker
+// ══════════════════════════════════════════
+// Guides a fresh session (or a deliberate "+ Add Data" click) into one of three intake
+// paths: a single FeatureLayer (with or without manual symbology setup), or an ArcGIS
+// Web Map — which may itself resolve to one FeatureLayer (same as pasting it directly)
+// or several (grouped-but-separate bulk import, see pickerBulkImport()).
+let pickerResolvedLayers = null; // [{title, url}] from the last successful Web Map resolve
+
+function openSourcePicker() {
+  // Reached mid-session via the header's "+ Add Data" button — an unsaved dataset already
+  // in the workspace would otherwise get silently overwritten the moment the user picks a
+  // new source and loads it.
+  if (state.rows.length && !state.savedDatasetId) {
+    if (!confirm('This clears the currently loaded (unsaved) dataset. Continue?')) return;
+  }
+  if (state.rows.length) clearFile();
+  pickerShowChoice();
+  document.getElementById('source-picker-overlay').classList.add('open');
+}
+function closeSourcePicker() {
+  document.getElementById('source-picker-overlay').classList.remove('open');
+}
+function pickerShowStep(id) {
+  ['picker-step-choice', 'picker-step-webmap', 'picker-step-webmap-single', 'picker-step-webmap-multi']
+    .forEach(s => { document.getElementById(s).style.display = (s === id) ? '' : 'none'; });
+}
+function pickerShowChoice() { pickerShowStep('picker-step-choice'); }
+function pickerShowWebMap() { pickerShowStep('picker-step-webmap'); }
+
+function pickerChooseWebMap() {
+  document.getElementById('picker-webmap-url').value = '';
+  document.getElementById('picker-webmap-status').textContent = '';
+  document.getElementById('picker-webmap-status').className = 'picker-status';
+  pickerShowStep('picker-step-webmap');
+}
+
+/** FeatureLayer path (single layer, pasted directly by the user in the main panel). */
+function pickerChooseFeatureLayer(symbologyMode) {
+  closeSourcePicker();
+  pickerBeginFeatureLayerEntry(symbologyMode, '');
+}
+
+function pickerBeginFeatureLayerEntry(symbologyMode, prefillUrl) {
+  state.pickerSymbologyMode = symbologyMode; // 'with' | 'none' — read once loadFromUrl() finishes
+  const urlInputEl = document.getElementById('layer-url-input');
+  if (prefillUrl) {
+    urlInputEl.value = prefillUrl;
+    autoGrowUrlInput(urlInputEl);
+    loadFromUrl();
+  } else {
+    urlInputEl.focus();
+  }
+}
+
+/** Extracts an ArcGIS item id from a viewer link, item REST URL, or a bare id, and
+ * resolves the org/portal's sharing/rest base from whatever URL the id came from. */
+function pickerParseWebMapInput(raw) {
+  const trimmed = raw.trim();
+  const idMatch = trimmed.match(/[0-9a-f]{32}/i);
+  if (!idMatch) throw new Error('Could not find an item ID in that link — paste the Web Map\'s viewer link or item URL.');
+  const id = idMatch[0];
+
+  let dataUrl = null;
+  try {
+    const u = new URL(trimmed);
+    if (/\/sharing\/rest\//i.test(u.pathname)) {
+      // Already a sharing/rest URL of some form (item, data, etc.) — anchor on its portal base.
+      const base = trimmed.split(/\/sharing\/rest\/.*/i)[0];
+      dataUrl = `${base}/sharing/rest/content/items/${id}/data?f=json`;
+    } else {
+      // A viewer/home page URL (e.g. https://org.maps.arcgis.com/home/webmap/viewer.html?webmap=<id>,
+      // or an Enterprise portal's .../portal/apps/... equivalent) — the portal's own
+      // /sharing/rest lives at the same origin (+ web adaptor path, if any) as that page.
+      const portalPathMatch = u.pathname.match(/^(\/[^/]+)?\/(home|apps)\//i);
+      const webAdaptor = portalPathMatch && portalPathMatch[1] ? portalPathMatch[1] : '';
+      dataUrl = `${u.origin}${webAdaptor}/sharing/rest/content/items/${id}/data?f=json`;
+    }
+  } catch (_) {
+    throw new Error('That doesn\'t look like a full URL — paste the Web Map\'s viewer link or item URL.');
+  }
+  return { id, dataUrl };
+}
+
+/** Flattens a Web Map's operationalLayers (including nested group layers) down to the
+ * FeatureLayer entries this tool can actually add — anything with a FeatureServer/MapServer
+ * layer URL. Table-only/basemap/tiled layers are skipped. */
+function pickerExtractFeatureLayers(webmapJson) {
+  const out = [];
+  const walk = (layers, groupTitle) => {
+    (layers || []).forEach(l => {
+      if (Array.isArray(l.layers)) { walk(l.layers, l.title || groupTitle); return; }
+      if (!l.url) return;
+      if (l.layerType && !/FeatureLayer/i.test(l.layerType)) return;
+      if (!/\/(FeatureServer|MapServer)\/\d+\/?$/i.test(l.url)) return;
+      out.push({ title: l.title || groupTitle || 'Layer', url: l.url.replace(/\/+$/, '') });
+    });
+  };
+  walk(webmapJson.operationalLayers, null);
+  return out;
+}
+
+async function pickerResolveWebMap() {
+  const status = document.getElementById('picker-webmap-status');
+  const btn = document.getElementById('picker-webmap-resolve-btn');
+  const raw = document.getElementById('picker-webmap-url').value;
+  if (!raw.trim()) { status.textContent = 'Paste a Web Map link first.'; status.className = 'picker-status error'; return; }
+
+  btn.disabled = true;
+  status.className = 'picker-status';
+  status.textContent = 'Resolving…';
+  try {
+    const { dataUrl } = pickerParseWebMapInput(raw);
+    const resp = await fetch(dataUrl);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching the Web Map`);
+    const json = await resp.json();
+    if (json.error) throw new Error(json.error.message || 'Web Map service returned an error');
+
+    const layers = pickerExtractFeatureLayers(json);
+    if (!layers.length) throw new Error('No FeatureLayers found in this Web Map (only basemap/tiled layers?)');
+
+    pickerResolvedLayers = layers;
+    status.textContent = '';
+
+    if (layers.length === 1) {
+      document.getElementById('picker-webmap-single-name').textContent = layers[0].title;
+      pickerShowStep('picker-step-webmap-single');
+    } else {
+      document.getElementById('picker-webmap-multi-title').textContent = `${layers.length} FeatureLayers found`;
+      document.getElementById('picker-webmap-layer-list').innerHTML =
+        layers.map(l => `<li>${l.title}</li>`).join('');
+      // The Web Map's /data endpoint doesn't carry its item title (that's separate item
+      // metadata) — default to a generic name and let the user rename it here.
+      document.getElementById('picker-webmap-group-name').value = 'Web Map';
+      document.getElementById('picker-webmap-multi-status').textContent = '';
+      pickerShowStep('picker-step-webmap-multi');
+    }
+  } catch (e) {
+    status.textContent = `✗ ${e.message}`;
+    status.className = 'picker-status error';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/** Web Map resolved to exactly one FeatureLayer — behaves identically to pasting that
+ * URL directly in the FeatureLayer path, just pre-filled. */
+function pickerBeginResolvedLayer(symbologyMode) {
+  const layer = pickerResolvedLayers && pickerResolvedLayers[0];
+  closeSourcePicker();
+  if (layer) pickerBeginFeatureLayerEntry(symbologyMode, layer.url);
+}
+
+/** Web Map resolved to multiple FeatureLayers — bulk-imports each as its own dataset with
+ * a plain default marker (the same "no symbology configured" state loadFromUrl() already
+ * leaves things in), optionally tagged with a shared group name. Reuses loadFromUrl()/
+ * saveDatasetCore() sequentially rather than duplicating their logic, then resets via
+ * clearFile() between layers so each import starts clean. */
+async function pickerBulkImport(together) {
+  const layers = pickerResolvedLayers || [];
+  const groupName = together ? (document.getElementById('picker-webmap-group-name').value.trim() || 'Web Map') : '';
+  closeSourcePicker();
+
+  let ok = 0;
+  const failed = [];
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    showToast(`Importing ${i + 1}/${layers.length}: ${layer.title}…`);
+    try {
+      clearFile();
+      document.getElementById('layer-url-input').value = layer.url;
+      await loadFromUrl();
+      if (!state.rows.length) throw new Error('no features returned');
+      const saved = await saveDatasetCore(layer.title, groupName);
+      state.savedDatasetId = saved.id;
+      state.savedDatasetName = saved.name;
+      state.savedDatasetGroup = groupName;
+      ok++;
+    } catch (e) {
+      failed.push(`${layer.title}: ${e.message}`);
+    }
+  }
+
+  clearFile();
+  updateSavedBadge();
+  pickerResolvedLayers = null;
+
+  if (failed.length) {
+    showToast(`Imported ${ok}/${layers.length} layers — ${failed.length} failed (see console)`);
+    console.warn('FeatureLink bulk import failures:\n' + failed.join('\n'));
+  } else {
+    showToast(`Imported ${ok} layer${ok === 1 ? '' : 's'}${groupName ? ` into "${groupName}"` : ''}. Find them under Saved Configs.`);
+  }
+}
+
 // Init empty tabs
 renderAllTabs();
 
 // If opened as /featurelink-configs/configurator?load=<id> (from the hub page, a
 // copied link, or a scanned "Saved Dataset Link" QR), load that dataset + its
-// saved config automatically.
+// saved config automatically. Otherwise, for a genuinely fresh session, walk the user
+// through the Add Data source picker instead of dropping them on a blank upload panel.
 (function initFromQuery() {
   const loadId = new URLSearchParams(window.location.search).get('load');
   if (loadId) loadSavedDataset(loadId);
+  else openSourcePicker();
 })();
 
 // ══════════════════════════════════════════

@@ -54,6 +54,7 @@ function listDatasets() {
     out.push({
       id: record.id,
       name: record.name || "Untitled",
+      group: record.group || "",
       source_type: record.source_type || "file",
       source_url: record.source_url || "",
       file_name: record.file_name || "",
@@ -104,6 +105,10 @@ function saveDataset(payload, actorUsername) {
 
   const record = {
     name: String(payload.name || "Untitled").trim().slice(0, 200),
+    // Set when this dataset was created as part of a multi-layer Web Map import the user
+    // chose to "keep together" — datasets sharing a group are still independent records
+    // (own source_url/symbology/etc.), just visually clustered on the admin hub page.
+    group: String(payload.group !== undefined ? payload.group : existing.group || "").trim().slice(0, 200),
     source_type: sourceType,
     source_url: String(payload.source_url || "").trim(),
     file_name: String(payload.file_name || "").trim(),

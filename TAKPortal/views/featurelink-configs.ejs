@@ -11,7 +11,7 @@
         <a href="/featurelink">FeatureLink</a> under Onboarding.
       </p>
     </div>
-    <a class="btn" href="/featurelink-configs/configurator">+ New Dataset Config</a>
+    <a class="btn" href="/featurelink-configs/configurator" style="font-size: 20px; font-weight: 700; padding: 18px 32px; line-height: 1;">+ Add Data Layer(s)</a>
   </div>
 
   <div class="card" style="margin-top: 16px;">
@@ -21,6 +21,7 @@
       <thead>
         <tr>
           <th>Name</th>
+          <th>Group</th>
           <th>Source</th>
           <th>Fields</th>
           <th>Updated</th>
@@ -110,6 +111,9 @@
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td>' + escapeHtml(d.name) + '</td>' +
+      '<td>' + (d.group
+        ? '<span style="white-space: nowrap; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; background: var(--accent, #0078d4); color: #fff;">' + escapeHtml(d.group) + '</span>'
+        : '<span class="muted">—</span>') + '</td>' +
       '<td>' + source + '</td>' +
       '<td>' + d.field_count + '</td>' +
       '<td>' + (d.updated_at ? new Date(d.updated_at).toLocaleString() : '') + '</td>' +
@@ -136,8 +140,16 @@
           emptyEl.style.display = '';
           return;
         }
+        // Datasets already arrive newest-first; re-sort so grouped ones (from a "keep
+        // together" Web Map import) sit adjacent instead of interleaved by update time,
+        // while everything ungrouped keeps its newest-first order.
+        const sorted = datasets.slice().sort((a, b) => {
+          if (a.group && b.group) return a.group === b.group ? 0 : a.group.localeCompare(b.group);
+          if (a.group !== b.group) return a.group ? -1 : 1;
+          return 0;
+        });
         bodyEl.innerHTML = '';
-        datasets.forEach((ds) => bodyEl.appendChild(renderRow(ds)));
+        sorted.forEach((ds) => bodyEl.appendChild(renderRow(ds)));
         tableEl.style.display = '';
         bodyEl.querySelectorAll('.deleteBtn').forEach((btn) => {
           btn.addEventListener('click', function () {
