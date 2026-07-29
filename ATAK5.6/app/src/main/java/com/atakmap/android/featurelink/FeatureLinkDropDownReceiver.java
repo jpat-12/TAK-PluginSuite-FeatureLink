@@ -1497,15 +1497,28 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         // (AUTO-ICONSET-SPEC.md / Phase A) instead of prompting: the federated generator reproduces
         // the identical UID/group/filenames the config references, so the "missing" set becomes
         // present locally with no server and no dialog. The zip is written to atak/iconsets/ and
-        // ATAK imports it asynchronously (REFRESH_ICONSET), so we proceed to apply — any briefly
+        // ATAK imports it asynchronously (ADD_ICONSET), so we proceed to apply — any briefly
         // unmatched markers self-correct once the import lands (spec §0).
+        //
+        // cfg.rendererOverride, when present, means TAK Portal built this config's icon symbology
+        // from a Web Map's per-layer style override, not cfg.url's own default renderer (§2.3) —
+        // re-deriving from the bare URL here would extract from a DIFFERENT renderer and compute
+        // a non-matching uid/group, so the exact renderer/uid/group TAK Portal already computed
+        // are passed through instead of letting generate() re-derive anything.
         if (config.url != null && !config.url.isEmpty()) {
             Toast.makeText(pluginContext, "Fetching icons for this layer…", Toast.LENGTH_SHORT).show();
             final DisplayConfig cfg = config;
             final String token = config.isPrivate ? authManager.getToken() : null;
+            final JSONObject rendererOverride = cfg.rendererOverride != null
+                    ? cfg.rendererOverride.optJSONObject("renderer") : null;
+            final String uidOverride = (cfg.rendererOverride != null && cfg.rendererOverride.has("uid"))
+                    ? cfg.rendererOverride.optString("uid") : null;
+            final String groupOverride = (cfg.rendererOverride != null && cfg.rendererOverride.has("group"))
+                    ? cfg.rendererOverride.optString("group") : null;
             executor.submit(() -> {
                 try {
-                    AutoIconset.generate(pluginContext, restClient, cfg.url, null, token);
+                    AutoIconset.generate(pluginContext, restClient, cfg.url, null, token,
+                            rendererOverride, uidOverride, groupOverride);
                 } catch (Exception e) {
                     Log.w(TAG, "regenerate missing iconset failed for " + cfg.url, e);
                 }

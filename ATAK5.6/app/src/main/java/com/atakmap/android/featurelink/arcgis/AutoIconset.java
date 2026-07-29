@@ -273,8 +273,9 @@ public final class AutoIconset {
 
     /**
      * Generate + install an iconset from a FeatureServer layer, per the spec. Blocking (does a
-     * network fetch) — call from a background thread. Returns null if the URL is invalid, the
-     * renderer has no esriPMS symbols, or install fails (all logged).
+     * network fetch, unless rendererOverride/layerNameOverride make one unnecessary) — call from
+     * a background thread. Returns null if the URL is invalid, the renderer has no esriPMS
+     * symbols, or install fails (all logged).
      *
      * @param ctx           an ATAK/host context (for the broadcast + filesystem)
      * @param client        the ArcGIS REST client (supplies the renderer JSON fetch)
@@ -284,24 +285,44 @@ public final class AutoIconset {
      */
     public static Result generate(Context ctx, ArcGISRestClient client,
             String sourceUrl, String fieldOverride, String token) {
+        return generate(ctx, client, sourceUrl, fieldOverride, token, null, null, null);
+    }
+
+    /**
+     * Same as {@link #generate(Context, ArcGISRestClient, String, String, String)}, but accepts a
+     * pre-resolved renderer, uid, and group instead of always re-deriving them from the
+     * FeatureServer layer's own default. Needed when the config came from a Web Map's per-layer
+     * style override (AUTO-ICONSET-SPEC.md §2.3): the plain FeatureServer URL alone re-derives the
+     * SERVICE's default renderer — a completely different renderer (different field, different
+     * symbols) than the override TAK Portal actually extracted icons from — which would compute a
+     * non-matching uid and, separately, a non-matching group if the layer's display name was ever
+     * edited in the configurator after TAK Portal generated the set. Passing the exact uid/group
+     * TAK Portal already computed sidesteps both risks entirely — this method only needs to
+     * re-decode the renderer's own base64 image bytes and rebuild the zip, no recomputation.
+     * All three null falls back to the network-fetch/self-derive behavior above.
+     */
+    public static Result generate(Context ctx, ArcGISRestClient client, String sourceUrl,
+            String fieldOverride, String token, JSONObject rendererOverride,
+            String uidOverride, String groupOverride) {
         String canonicalUrl = canonicalize(sourceUrl);
         if (canonicalUrl == null) return null;
 
-        JSONObject meta;
-        try {
-            meta = client.fetchJson(canonicalUrl, token);
-        } catch (Exception e) {
-            Log.e(TAG, "renderer fetch failed for " + canonicalUrl, e);
-            return null;
+        JSONObject renderer = rendererOverride;
+        if (renderer == null) {
+            JSONObject meta;
+            try {
+                meta = client.fetchJson(canonicalUrl, token);
+            } catch (Exception e) {
+                Log.e(TAG, "renderer fetch failed for " + canonicalUrl, e);
+                return null;
+            }
+            if (meta == null || meta.has("error")) {
+                Log.w(TAG, "no layer metadata for " + canonicalUrl);
+                return null;
+            }
+            JSONObject drawingInfo = meta.optJSONObject("drawingInfo");
+            renderer = drawingInfo != null ? drawingInfo.optJSONObject("renderer") : null;
         }
-        if (meta == null || meta.has("error")) {
-            Log.w(TAG, "no layer metadata for " + canonicalUrl);
-            return null;
-        }
-
-        String layerName = meta.optString("name", meta.optString("serviceDescription", "Layer"));
-        JSONObject drawingInfo = meta.optJSONObject("drawingInfo");
-        JSONObject renderer = drawingInfo != null ? drawingInfo.optJSONObject("renderer") : null;
 
         List<Pms> entries = new ArrayList<>();
         Extraction ex = extract(renderer, fieldOverride, entries);
@@ -311,8 +332,20 @@ public final class AutoIconset {
             return null;
         }
 
-        String uid = uid(canonicalUrl, field);
-        String group = sanitizeGroupBase(layerName) + " Icons";
+        String uid = (uidOverride != null && !uidOverride.isEmpty()) ? uidOverride : uid(canonicalUrl, field);
+        String group;
+        if (groupOverride != null && !groupOverride.isEmpty()) {
+            group = groupOverride;
+        } else {
+            JSONObject meta2;
+            try {
+                meta2 = client.fetchJson(canonicalUrl, token);
+            } catch (Exception e) {
+                meta2 = null;
+            }
+            String layerName = meta2 != null ? meta2.optString("name", meta2.optString("serviceDescription", "Layer")) : "Layer";
+            group = sanitizeGroupBase(layerName) + " Icons";
+        }
 
         // §5.2/§5.3 naming + base64 decode, preserving renderer order for deterministic _N suffixes
         Set<String> seen = new HashSet<>();

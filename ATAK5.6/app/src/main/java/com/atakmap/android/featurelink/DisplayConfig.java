@@ -53,9 +53,19 @@ final class DisplayConfig {
      * section instead of "Public Layers" on their end. */
     final boolean isPrivate;
 
+    /** Present only when this config's icon symbology came from a Web Map's per-layer style
+     * override (AUTO-ICONSET-SPEC.md §2.3) rather than the FeatureServer layer's own default
+     * renderer — shape {"renderer": <esri renderer JSON>, "uid": <str>, "group": <str>}, the
+     * exact values TAK Portal already computed. Re-deriving {@link #url}'s renderer/uid/group
+     * independently would get the SERVICE's default (a different renderer entirely) and/or drift
+     * if the layer's display name was edited after generation, so all three ride along together
+     * rather than letting the device recompute any of them. See
+     * FeatureLinkDropDownReceiver.applyScannedDisplayConfig()'s missing-iconset regeneration. */
+    final JSONObject rendererOverride;
+
     private DisplayConfig(String url, String name, float opacity, boolean visible,
             SymConfig sym, LabelConfig lbl, PopupConfig popup, CotMapping cotMapping,
-            int freqInterval, String freqUnit, boolean isPrivate) {
+            int freqInterval, String freqUnit, boolean isPrivate, JSONObject rendererOverride) {
         this.url          = url;
         this.name         = name;
         this.opacity      = opacity;
@@ -67,6 +77,7 @@ final class DisplayConfig {
         this.freqInterval = freqInterval;
         this.freqUnit     = freqUnit;
         this.isPrivate    = isPrivate;
+        this.rendererOverride = rendererOverride;
     }
 
     /** Parses a v:2 or v:1-display JSONObject. Returns null if the object is not a display config. */
@@ -92,9 +103,10 @@ final class DisplayConfig {
             int    freqInterval    = freqJ  != null ? freqJ.optInt("iv", 0)        : 0;
             String freqUnit        = freqJ  != null ? freqJ.optString("u", "s")  : "s";
             boolean isPrivate      = o.optBoolean("private", false);
+            JSONObject rendererOverride = o.optJSONObject("rendererOverride");
 
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
-                    freqInterval, freqUnit, isPrivate);
+                    freqInterval, freqUnit, isPrivate, rendererOverride);
         } catch (Exception e) {
             return null;
         }
@@ -130,7 +142,7 @@ final class DisplayConfig {
             String freqUnit        = freqEnabled ? freqJ.optString("intervalUnit", "s") : "s";
 
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
-                    freqInterval, freqUnit, false);
+                    freqInterval, freqUnit, false, null);
         } catch (Exception e) {
             return null;
         }
@@ -170,7 +182,7 @@ final class DisplayConfig {
                     new ArrayList<>(), adv, new ArrayList<>(), Color.BLUE,
                     new ArrayList<>(), "", "", null);
         }
-        return new DisplayConfig(url, "", 1.0f, true, sym, null, null, null, 0, "s", false);
+        return new DisplayConfig(url, "", 1.0f, true, sym, null, null, null, 0, "s", false, null);
     }
 
     /**

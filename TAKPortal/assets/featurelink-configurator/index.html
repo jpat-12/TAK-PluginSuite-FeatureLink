@@ -1132,6 +1132,8 @@ let state = {
   savedDatasetGroup: '',  // set when this session came from a "keep together" Web Map import
   pickerSymbologyMode: null, // 'with' | 'none' — set by the Add Data picker, consumed once in processRows()
   pickerRendererOverride: null, // Web Map per-layer style override, if any — read once in loadFromUrl()
+  rendererOverrideForExport: null, // {renderer, uid, group} embedded in the exported config so ATAK
+                                    // can regenerate a matching iconset — see applyAutoSymbology()
   rows: [],
   fields: [],        // [{name, type, samples}]
   filtered: [],
@@ -1349,7 +1351,7 @@ async function loadFromUrl() {
       const effectiveInfo = rendererOverride
         ? { ...info, drawingInfo: { renderer: rendererOverride } }
         : info;
-      await applyAutoSymbology(effectiveInfo, baseUrl);
+      await applyAutoSymbology(effectiveInfo, baseUrl, !!rendererOverride);
     }
 
   } catch (err) {
@@ -1405,8 +1407,16 @@ function shapeSymbolFromEsriSms(symbol) {
  * A renderer can mix both per value; each entry is converted by whichever family its own
  * symbol is. classBreaks-with-icons is a known, documented gap (spec §3, "uncommon") — icons
  * still get registered for sharing via the endpoint, just not auto-assigned per range here.
+ *
+ * @param isWebMapOverride true when `info`'s renderer came from a Web Map's per-layer style
+ *   override rather than the layer's own service default (loadFromUrl()). When icons end up
+ *   being generated from an override, state.rendererOverrideForExport is set so the exported
+ *   config carries the exact renderer/uid/group used — ATAK's own on-device regeneration
+ *   (AutoIconset.generate()) has no way to know about a Web Map override on its own and would
+ *   otherwise re-derive the service's plain default, computing a non-matching iconset.
  */
-async function applyAutoSymbology(info, layerUrl) {
+async function applyAutoSymbology(info, layerUrl, isWebMapOverride) {
+  state.rendererOverrideForExport = null;
   const renderer = info && info.drawingInfo && info.drawingInfo.renderer;
   if (!renderer || typeof renderer !== 'object') return;
 
@@ -1437,7 +1447,12 @@ async function applyAutoSymbology(info, layerUrl) {
     } catch (e) { console.warn('Auto-iconset request failed:', e); }
     // Make the freshly-registered set available to resolveUsericonPath()/the icon picker
     // before touching state.cfg, or the QR/export builders below would resolve a null path.
-    if (iconData) { if (!iconManifest) await loadManifest(); else await refreshCustomIconsets(); }
+    if (iconData) {
+      if (!iconManifest) await loadManifest(); else await refreshCustomIconsets();
+      if (isWebMapOverride) {
+        state.rendererOverrideForExport = { renderer, uid: iconData.uid, group: iconData.group };
+      }
+    }
   }
   const iconGroup = iconData && iconData.group;
   const valueToFilename = new Map((iconData && iconData.valueMap || []).map(v => [String(v.value), v.filename]));
@@ -1720,6 +1735,7 @@ function renderFileChip(name, count) {
 function clearFile() {
   state.rows = []; state.filtered = []; state.fields = []; state.fileName = null; state.featureLayerUrl = null; state.pendingConfig = null;
   state.rawFile = null; state.savedDatasetId = null; state.savedDatasetName = null; state.savedDatasetGroup = '';
+  state.rendererOverrideForExport = null;
   updateSavedBadge();
   document.getElementById('file-chip').style.display = 'none';
   document.getElementById('drop-zone').style.display = '';
@@ -3352,6 +3368,10 @@ function buildUrlConfigExport() {
   if (cm) compact.cm = cm;
   const freq = buildFreqCompact();
   if (freq) compact.freq = freq;
+  // Set only when this symbology's icons came from a Web Map's per-layer style override
+  // (applyAutoSymbology()) — carries the exact renderer/uid/group used so ATAK's own missing-
+  // iconset regeneration doesn't have to (and can't correctly) re-derive them from url alone.
+  if (state.rendererOverrideForExport) compact.rendererOverride = state.rendererOverrideForExport;
   return compact;
 }
 
