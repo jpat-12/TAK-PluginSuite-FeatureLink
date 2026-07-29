@@ -11,13 +11,15 @@
         android:orientation="vertical"
         android:padding="@dimen/fl_space_md">
 
-        <!-- ── MY ARCGIS LAYERS ───────────────────────────────────────────── -->
+        <!-- ── MY ARCGIS LAYERS (browse list — only relevant while signed in) ───────── -->
         <LinearLayout
+            android:id="@+id/my_arcgis_layers_card"
             style="@style/FL.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:layout_marginBottom="@dimen/fl_space_md">
+            android:layout_marginBottom="@dimen/fl_space_md"
+            android:visibility="gone">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -58,17 +60,6 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
-                <!-- Shown when not signed in -->
-                <TextView
-                    android:id="@+id/layers_sign_in_hint"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Sign in on the Home tab to see your ArcGIS layers."
-                    style="@style/FL.Text.Hint"
-                    android:gravity="center"
-                    android:paddingTop="@dimen/fl_space_lg"
-                    android:visibility="gone" />
-
                 <LinearLayout
                     android:id="@+id/private_layers_list"
                     android:layout_width="match_parent"
@@ -80,15 +71,17 @@
 
         </LinearLayout>
 
-        <!-- ── PRIVATE LAYERS (shared to you — e.g. via a group, or another user's Share
-             button — distinct from "My ArcGIS Layers" above, which is only what your own
-             account's search turns up and gets wiped/rebuilt on every Refresh/re-sign-in) ── -->
+        <!-- ── PRIVATE LAYERS (on-device, not shared to Everyone — either shared to you by
+             another user, or downloaded from "My ArcGIS Layers" and not public) — hidden
+             entirely when empty. ─────────────────────────────────────────────────────── -->
         <LinearLayout
+            android:id="@+id/private_layers_card"
             style="@style/FL.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:layout_marginBottom="@dimen/fl_space_md">
+            android:layout_marginBottom="@dimen/fl_space_md"
+            android:visibility="gone">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -96,12 +89,35 @@
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
 
-                <TextView
+                <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Private Layers"
-                    style="@style/FL.Text.SectionHeader" />
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Private Layers"
+                        style="@style/FL.Text.SectionHeader" />
+
+                    <TextView
+                        android:id="@+id/private_layers_count_badge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_pill_count"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="2dp"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/fl_badge_count_text"
+                        android:text="0" />
+
+                </LinearLayout>
 
                 <ImageButton
                     android:id="@+id/collapse_shared_private_btn"
@@ -121,15 +137,6 @@
                 android:orientation="vertical"
                 android:layout_marginTop="@dimen/fl_space_sm"
                 android:visibility="gone">
-
-                <TextView
-                    android:id="@+id/shared_private_layers_empty_hint"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Layers someone shares with you privately (e.g. through a group) show up here."
-                    style="@style/FL.Text.Hint"
-                    android:gravity="center"
-                    android:paddingTop="@dimen/fl_space_lg" />
 
                 <LinearLayout
                     android:id="@+id/shared_private_layers_list"
@@ -154,12 +161,35 @@
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
 
-                <TextView
+                <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Public Layers"
-                    style="@style/FL.Text.SectionHeader" />
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Public Layers"
+                        style="@style/FL.Text.SectionHeader" />
+
+                    <TextView
+                        android:id="@+id/public_layers_count_badge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_pill_count"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="2dp"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/fl_badge_count_text"
+                        android:text="0" />
+
+                </LinearLayout>
 
                 <Button
                     android:id="@+id/open_add_layer_btn"

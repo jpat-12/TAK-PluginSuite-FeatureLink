@@ -7,7 +7,6 @@ import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageButton;
-import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -85,7 +84,8 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         ImageButton eyeIcon         = convertView.findViewById(R.id.layer_eye_icon);
         TextView    nameText        = convertView.findViewById(R.id.layer_name_text);
         TextView    typeBadge       = convertView.findViewById(R.id.layer_type_badge);
-        ImageView   stylingIcon     = convertView.findViewById(R.id.layer_styling_icon);
+        TextView    configBadge     = convertView.findViewById(R.id.layer_config_badge);
+        TextView    featureCountBadge = convertView.findViewById(R.id.layer_feature_count_badge);
         View        intervalRow     = convertView.findViewById(R.id.layer_interval_row);
         EditText    intervalSecondsEdit = convertView.findViewById(R.id.layer_interval_seconds_edit);
         ImageButton actionBtn       = convertView.findViewById(R.id.layer_action_btn);
@@ -99,8 +99,15 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         typeBadge.setTextColor(getContext().getResources().getColor(
                 isPrivate ? R.color.fl_badge_private : R.color.fl_badge_public));
 
-        stylingIcon.setVisibility(styledLayerUrls != null && styledLayerUrls.contains(layer.url)
-                ? View.VISIBLE : View.GONE);
+        boolean hasConfig = styledLayerUrls != null && styledLayerUrls.contains(layer.url);
+        configBadge.setText(hasConfig ? "Config" : "No Config");
+        configBadge.setBackgroundResource(hasConfig
+                ? R.drawable.bg_pill_config : R.drawable.bg_pill_no_config);
+        configBadge.setTextColor(getContext().getResources().getColor(hasConfig
+                ? R.color.fl_badge_config_text : R.color.fl_badge_no_config_text));
+
+        featureCountBadge.setText(layer.featureCount < 0 ? "error"
+                : layer.featureCount + (layer.featureCount == 1 ? " feature" : " features"));
 
         shareBtn.setVisibility(View.VISIBLE);
         shareBtn.setOnClickListener(v -> {

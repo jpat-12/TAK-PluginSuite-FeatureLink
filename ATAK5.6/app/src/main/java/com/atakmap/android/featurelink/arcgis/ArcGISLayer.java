@@ -7,6 +7,11 @@ public class ArcGISLayer {
     public String name;
     public String url;
     public String type;           // "private" or "public"
+    /** ArcGIS portal sharing scope for a "My ArcGIS Layers" item: "public" (shared to
+     * Everyone), "org", or "private". Only meaningful for items returned by
+     * ArcGISRestClient.searchUserLayers() — layers added via URL (page_add_layer) or received
+     * via a share default to "org" since there's no portal item to ask. */
+    public String access = "org";
     public long featureCount = 0;
     public long lastSync = 0;
     public boolean downloadEnabled = false;
@@ -39,6 +44,7 @@ public class ArcGISLayer {
         obj.put("name",               name);
         obj.put("url",                url);
         obj.put("type",               type);
+        obj.put("access",             access);
         obj.put("featureCount",       featureCount);
         obj.put("lastSync",           lastSync);
         obj.put("downloadEnabled",    downloadEnabled);
@@ -54,6 +60,7 @@ public class ArcGISLayer {
                 obj.optString("name", "Unknown"),
                 obj.optString("url",  ""),
                 obj.optString("type", "public"));
+        layer.access           = obj.optString("access", "org");
         layer.featureCount    = obj.optLong("featureCount", 0);
         layer.lastSync        = obj.optLong("lastSync", 0);
         layer.downloadEnabled = obj.optBoolean("downloadEnabled", false);

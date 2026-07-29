@@ -30,4 +30,12 @@
     <color name="fl_badge_private">#FF5252</color>
     <color name="fl_badge_public">#2196F3</color>
 
+    <!-- Count / config bubbles -->
+    <color name="fl_badge_count_bg">#1A3A44</color>
+    <color name="fl_badge_count_text">#4FC3F7</color>
+    <color name="fl_badge_config_bg">#1B3A1E</color>
+    <color name="fl_badge_config_text">#4CAF50</color>
+    <color name="fl_badge_no_config_bg">#3A1B1B</color>
+    <color name="fl_badge_no_config_text">#FF5252</color>
+
 </resources>

@@ -164,17 +164,20 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     // Layers page — public layers section (plain containers, not ListViews, so the whole
     // Layers page can be one scrollable unit with each section sized to its content)
     private LinearLayout publicLayersList;
+    private TextView publicLayersCountBadge;
     private EditText publicLayerUrlEdit;
 
-    // Layers page — private layers section
+    // Layers page — "My ArcGIS Layers" section (browse list of the signed-in user's own ArcGIS
+    // content); the whole card is hidden while signed out, not just its content.
     private LinearLayout privateLayersList;
-    private TextView layersSignInHint;
+    private View myArcGisLayersCard;
 
-    // Layers page — shared-private layers section (layers someone shared with you privately,
-    // e.g. through a group — distinct from "My ArcGIS Layers", which only ever holds what your
-    // own account's search turns up and gets wiped/rebuilt on every Refresh/re-sign-in)
+    // Layers page — "Private Layers" section: on-device layers not shared to Everyone, either
+    // shared to you by another user, or downloaded from "My ArcGIS Layers" and not public — see
+    // moveMyArcGisLayerOnDownload(). Whole card hidden when this list is empty.
     private LinearLayout sharedPrivateLayersList;
-    private TextView sharedPrivateLayersEmptyHint;
+    private View sharedPrivateLayersCard;
+    private TextView sharedPrivateLayersCountBadge;
     private LinearLayout sharedPrivateLayersContent;
     private android.widget.ImageButton collapseSharedPrivateBtn;
     private boolean sharedPrivateLayersExpanded = false;
@@ -745,9 +748,14 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             List<ArcGISLayer> layers = restClient.searchUserLayers(portal, token, username);
             mainHandler.post(() -> {
                 Set<String> excluded = getExcludedPrivateUrls();
+                Set<String> onDevice = new HashSet<>();
+                for (ArcGISLayer l : sharedPrivateLayers) onDevice.add(l.url);
+                for (ArcGISLayer l : publicLayers)        onDevice.add(l.url);
                 privateLayers.clear();
                 for (ArcGISLayer l : layers) {
-                    if (excluded.contains(l.url)) continue;
+                    // Already downloaded onto this device (see moveMyArcGisLayerOnDownload) —
+                    // it now lives in Private or Public Layers, not the browse list.
+                    if (excluded.contains(l.url) || onDevice.contains(l.url)) continue;
                     l.type = "private";
                     privateLayers.add(l);
                 }
@@ -768,18 +776,19 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void wireLayersPageViews() {
         // Public layers section
-        publicLayersList    = layersPageView.findViewById(R.id.public_layers_list);
-        publicLayersContent = layersPageView.findViewById(R.id.public_layers_content);
-        collapsePublicBtn   = layersPageView.findViewById(R.id.collapse_public_btn);
+        publicLayersList       = layersPageView.findViewById(R.id.public_layers_list);
+        publicLayersContent    = layersPageView.findViewById(R.id.public_layers_content);
+        publicLayersCountBadge = layersPageView.findViewById(R.id.public_layers_count_badge);
+        collapsePublicBtn      = layersPageView.findViewById(R.id.collapse_public_btn);
         Button openAddLayerBtn = layersPageView.findViewById(R.id.open_add_layer_btn);
         openAddLayerBtn.setOnClickListener(v -> showAddLayerPage());
         collapsePublicBtn.setOnClickListener(v -> togglePublicLayersSection());
 
-        // Private layers section ("My ArcGIS Layers")
+        // "My ArcGIS Layers" section — browse list, only shown while signed in
         privateLayersList    = layersPageView.findViewById(R.id.private_layers_list);
         privateLayersContent = layersPageView.findViewById(R.id.private_layers_content);
+        myArcGisLayersCard   = layersPageView.findViewById(R.id.my_arcgis_layers_card);
         collapsePrivateBtn   = layersPageView.findViewById(R.id.collapse_private_btn);
-        layersSignInHint     = layersPageView.findViewById(R.id.layers_sign_in_hint);
         Button refreshPrivateBtn = layersPageView.findViewById(R.id.refresh_private_layers_btn);
         refreshPrivateBtn.setOnClickListener(v -> {
             if (authManager.isAuthenticated()) fetchUserLayers();
@@ -787,11 +796,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         });
         collapsePrivateBtn.setOnClickListener(v -> togglePrivateLayersSection());
 
-        // Shared-private layers section ("Private Layers" — shared to you by another user)
-        sharedPrivateLayersList      = layersPageView.findViewById(R.id.shared_private_layers_list);
-        sharedPrivateLayersContent   = layersPageView.findViewById(R.id.shared_private_layers_content);
-        sharedPrivateLayersEmptyHint = layersPageView.findViewById(R.id.shared_private_layers_empty_hint);
-        collapseSharedPrivateBtn     = layersPageView.findViewById(R.id.collapse_shared_private_btn);
+        // "Private Layers" section — on-device layers not shared to Everyone; hidden when empty
+        sharedPrivateLayersList       = layersPageView.findViewById(R.id.shared_private_layers_list);
+        sharedPrivateLayersContent    = layersPageView.findViewById(R.id.shared_private_layers_content);
+        sharedPrivateLayersCard       = layersPageView.findViewById(R.id.private_layers_card);
+        sharedPrivateLayersCountBadge = layersPageView.findViewById(R.id.private_layers_count_badge);
+        collapseSharedPrivateBtn      = layersPageView.findViewById(R.id.collapse_shared_private_btn);
         collapseSharedPrivateBtn.setOnClickListener(v -> toggleSharedPrivateLayersSection());
 
         // Apply persisted collapse/expand state (all three default collapsed) now that the
@@ -843,19 +853,21 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void refreshPublicLayers() {
+        publicLayersCountBadge.setText(String.valueOf(publicLayers.size()));
         populateLayerList(publicLayersList, publicLayers);
     }
 
     private void refreshPrivateLayers() {
         boolean authed = authManager.isAuthenticated();
-        layersSignInHint.setVisibility(authed ? View.GONE    : View.VISIBLE);
-        privateLayersList.setVisibility(authed ? View.VISIBLE : View.GONE);
+        myArcGisLayersCard.setVisibility(authed ? View.VISIBLE : View.GONE);
+        if (!authed) return;
         populateLayerList(privateLayersList, privateLayers);
     }
 
     private void refreshSharedPrivateLayers() {
-        sharedPrivateLayersEmptyHint.setVisibility(
-                sharedPrivateLayers.isEmpty() ? View.VISIBLE : View.GONE);
+        sharedPrivateLayersCard.setVisibility(
+                sharedPrivateLayers.isEmpty() ? View.GONE : View.VISIBLE);
+        sharedPrivateLayersCountBadge.setText(String.valueOf(sharedPrivateLayers.size()));
         populateLayerList(sharedPrivateLayersList, sharedPrivateLayers);
     }
 
@@ -917,10 +929,35 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 confirmRemovePublicLayer(layer);
             }
         } else {
-            // Action button or interval change on a private/shared-private layer — save and sync
+            // Downloading a "My ArcGIS Layers" item for the first time moves it onto the device,
+            // into Private or Public Layers depending on its ArcGIS sharing scope.
+            if (privateLayers.contains(layer)) {
+                moveMyArcGisLayerOnDownload(layer);
+            }
             saveLayerOfSection(layer);
             downloadLayer(layer);
         }
+    }
+
+    /** Moves a "My ArcGIS Layers" browse-list item onto the device once its download/refresh
+     * button is tapped, landing it in Private Layers or Public Layers depending on whether the
+     * ArcGIS item is shared to Everyone ({@link ArcGISLayer#access}) — from then on it behaves
+     * like any other on-device layer in that section instead of staying in the browse list. */
+    private void moveMyArcGisLayerOnDownload(ArcGISLayer layer) {
+        privateLayers.remove(layer);
+        savePrivateLayers();
+        if ("public".equals(layer.access)) {
+            layer.type = "public";
+            publicLayers.add(layer);
+            savePublicLayers();
+            refreshPublicLayers();
+        } else {
+            layer.type = "private";
+            sharedPrivateLayers.add(layer);
+            saveSharedPrivateLayers();
+            refreshSharedPrivateLayers();
+        }
+        refreshPrivateLayers();
     }
 
     /** Public-layer refresh interval/unit spinner changed — save only, this device only. The
@@ -1177,8 +1214,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         restClient.downloadLayerAsCoT(layer.url, token, cotMapping);
                 Log.d(TAG, "downloadLayer: downloaded " + features.size() + " features from " + layer.url);
                 layer.lastSync = System.currentTimeMillis();
-                savePrivateLayers();
                 mainHandler.post(() -> {
+                    saveLayerOfSection(layer);
                     // Swap out old markers for this layer
                     MapGroup root = getMapView().getRootGroup();
                     removeLayerMarkers(layer);

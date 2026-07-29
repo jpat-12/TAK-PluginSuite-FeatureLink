@@ -56,7 +56,11 @@ public class ArcGISRestClient {
                 String name = item.optString("title", "Unnamed");
                 String url = item.optString("url", "");
                 if (!url.isEmpty()) {
-                    layers.add(new ArcGISLayer(name, url, "private"));
+                    ArcGISLayer layer = new ArcGISLayer(name, url, "private");
+                    // Portal item "access": "public" (shared to Everyone), "org", or "private" —
+                    // used to decide which on-device section this layer lands in once downloaded.
+                    layer.access = item.optString("access", "private");
+                    layers.add(layer);
                 }
             }
         } catch (Exception e) {
