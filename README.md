@@ -49,7 +49,17 @@ Personal recommendation - TAK Portal Link & Map-Based Config are the easiest, es
 | 2 | **QR Code Config** | Build a styled config in TAK Portal or an Infra-TAK module, then scan the QR from **Layers > + Add Layer**. | Doesn't work for layers needing a large styling palette - the QR payload has a size limit. |
 | 3 | **TAK Portal Link** | From TAK Portal's sidebar: **Onboarding > FeatureLink > Open in ATAK**. | Needs an admin to set up the FeatureLayer config once - after that it's the same for every field user. |
 | 4 | **Map-Based Config** | Styling is read directly from a saved Web Map. | |
-| 5 | **Single FeatureLayer Import** | Styling is read directly from the feature layer, or the user is prompted for it. | |
+| 5 | **Single FeatureLayer Import** | Styling is read directly from the feature layer, or the user is prompted for it. | Picture-marker (`esriPMS`) icons in the layer's renderer are auto-generated into a matching ATAK iconset **on-device, no server round-trip** — so custom marker icons render without any manual icon work, and match across platforms. *New; not yet field-tested. See [AUTO-ICONSET-SPEC.md](AUTO-ICONSET-SPEC.md).* |
+
+> **Auto-generated marker icons (federated, no server).** Methods 4/5 above now read a
+> layer's own picture-marker symbols and build a matching ATAK iconset locally on whichever
+> platform ingests the link — ATAK, TAK Portal, and (planned) CloudTAK/WinTAK each produce the
+> **same** `{uid}/{group}/{filename}` reference for the same source layer, so an icon one device
+> places renders identically on another's map with no shared server. The rules that keep the
+> platforms in lockstep are frozen in [AUTO-ICONSET-SPEC.md](AUTO-ICONSET-SPEC.md); the rollout
+> plan and platform status are in [WebMapFeatureLayer-AutoConfigurator.md](WebMapFeatureLayer-AutoConfigurator.md).
+> Currently implemented on **ATAK** and **TAK Portal** (FeatureServer/layer URLs; Web Map link
+> resolution and CloudTAK/WinTAK are pending). Not yet validated on live hardware.
 
 > <details>
 > <summary><strong>TAK Portal vs. Infra-TAK - which config source should you use?</strong></summary>
@@ -136,7 +146,8 @@ Personal recommendation - TAK Portal Link & Map-Based Config are the easiest, es
    Layer** (via QR scan) to set up a shared position layer, then enable
    **Auto-Send PLI** to start streaming your position to it.
 5. **Import a config** - on the Layers tab, tap **Add Layer**, then either
-   **Scan Config QR** or paste a Feature Service URL directly.
+   **Scan Config QR** or paste a Feature Service URL directly. Pasting a URL now also
+   auto-generates the layer's custom marker icons on-device (no manual icon work).
 6. **Scan a QR code** - any scan entry point (Add Layer page, PLI layer URL
    field, PLI's Scan Config QR button) accepts all FeatureLink QR types and
    routes automatically to the right tab.
@@ -154,13 +165,17 @@ reference and building from source.
 In development. A browser-based Vue3/TypeScript port that runs inside the CloudTAK web UI
 itself rather than as a native app - install/enable/disable lifecycle, layer browse/download
 with display-config styling, PLI create/join/auto-send, and a "Send to Feature Layer" picker
-(replacing ATAK's radial menu) are implemented. Sign-in is the same ArcGIS OAuth2 PKCE flow as
-the ATAK plugin, opening ArcGIS's hosted login page in a popup - it redirects to a single fixed
-relay page rather than this deployment's own origin, so it works unmodified on any CloudTAK
-install with no per-deployment ArcGIS app setup (see [`CloudTAK/README.md`](CloudTAK/README.md)
-for how). QR scanning is replaced by paste/upload config JSON, since a desktop browser has no
-camera-scan equivalent. UI mirrors the ATAK plugin's tabs, section layout, and collapse behavior
-rather than being redesigned.
+(replacing ATAK's radial menu) are implemented. Signing into ArcGIS lists every owned layer with
+its live feature count (a count-only query - no download until you choose to). Layer configs an
+ATAK/WinTAK user **Shares** to a CloudTAK session are auto-imported: the package lands in
+CloudTAK's Import Manager and the plugin polls, extracts, and applies it automatically. Sign-in
+is the same ArcGIS OAuth2 PKCE flow as the ATAK plugin, opening ArcGIS's hosted login page in a
+popup - it redirects to a single fixed relay page rather than this deployment's own origin, so it
+works unmodified on any CloudTAK install with no per-deployment ArcGIS app setup (see
+[`CloudTAK/README.md`](CloudTAK/README.md) for how). QR scanning is replaced by paste/upload
+config JSON, and the share button downloads a `.featurelink.json` file, since a desktop browser
+has no camera-scan equivalent. UI mirrors the ATAK plugin's tabs, section layout, and collapse
+behavior rather than being redesigned.
 
 Install into an existing CloudTAK checkout (default `~/CloudTAK`):
 
@@ -190,6 +205,8 @@ deferred, and build/deploy instructions. WinTAK 5.7.x port planned after 5.6.x s
 ## Related
 
 - [CONFIG-FORMAT.md](CONFIG-FORMAT.md) - the display-config/QR payload contract between the Display Configurator and the ATAK/WinTAK plugin
+- [AUTO-ICONSET-SPEC.md](AUTO-ICONSET-SPEC.md) - frozen cross-platform contract for turning an ArcGIS renderer into a matching ATAK iconset on every surface (canonical URL, UID formula, group/filename rules)
+- [WebMapFeatureLayer-AutoConfigurator.md](WebMapFeatureLayer-AutoConfigurator.md) - the federated (server-free) auto-iconset rollout plan and per-platform status
 - [ATAK-Plugin_FeatureLink](https://github.com/jpat-12/ATAK-Plugin_FeatureLink) - original standalone repo for the ATAK plugin, **deprecated**
 - [infra-TAK](https://github.com/jpat-12/infra-TAK) - the console the `Infra-TAK/` module installs into
 - [TAK-Portal](https://github.com/AdventureSeeker423/TAK-Portal) - the portal the `TAKPortal/` module installs into

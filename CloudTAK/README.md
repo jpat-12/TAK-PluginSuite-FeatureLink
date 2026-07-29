@@ -17,8 +17,9 @@ several ATAK-specific mechanisms don't have a direct equivalent and were adapted
 |---|---|
 | Device GPS → PLI layer (`MapView.getSelfMarker()`) | CloudTAK's own CoT self-marker position (best-effort; see **Known limitation** below) |
 | Radial (long-press) menu → "Send to Feature Layer" | **Send Item to Feature Layer** picker in the plugin panel — pick an on-screen item, pick a layer, Send |
-| QR code scan/generate (ZXing camera) | Dropped. Layer/PLI-endpoint sharing is copy-to-clipboard / paste-JSON / upload-`.json` instead |
-| ATAK Mission Package send-to-contact | Copy-to-clipboard / download-as-file (no CloudTAK contact-send API used here) |
+| QR code scan/generate (ZXing camera) | Dropped. Layer/PLI-endpoint sharing is download-`.featurelink.json` / paste-JSON / upload-`.json` instead |
+| ATAK Mission Package send-to-contact | The share button downloads a `<name>.featurelink.json` file to hand off by any channel. An in-app send to a picked TAK contact (ATAK/WinTAK/CloudTAK) is fully designed against CloudTAK's `/api/marti/package` + contacts API but not yet built — see [`docs/CLOUDTAK-SHARE-DESIGN.md`](../docs/CLOUDTAK-SHARE-DESIGN.md) |
+| ATAK Mission Package **received** by a CloudTAK session | Auto-ingested from CloudTAK's Import Manager — see **Receiving ATAK/WinTAK layer shares** below |
 | `featurelink://import` deep link, native OAuth WebView | Dropped |
 | OAuth PKCE sign-in, `featurelink://auth` custom-scheme redirect | Same OAuth2 PKCE flow and same ArcGIS OAuth app/client ID, redirecting to ArcGIS's hosted login page in a popup — but the redirect_uri is a fixed relay page instead of a custom URI scheme, so it works unmodified on every CloudTAK deployment (see **Authentication** below) |
 
@@ -30,6 +31,27 @@ CoT self-marker position — the same gap `CloudTAK-Plugin_StatusBoard_CAP` flag
 and degrades to a silent no-op (logged once to the console) if that shape isn't what's
 actually there on your CloudTAK build. Re-verify `getSelfPosition()` against your CloudTAK
 version, or replace it with a confirmed API once CloudTAK exposes one.
+
+## Receiving ATAK/WinTAK layer shares (auto-import)
+
+When an ATAK/WinTAK user hits **Share** on a FeatureLink layer, ATAK only knows how to send an
+ATAK Mission Package — there's no CloudTAK-aware send path. Sent to a CloudTAK session, that
+package lands in CloudTAK's own generic **Import Manager**, which tries to build a map tileset
+from it and fails ("No features found… Cannot create tileset") since it's a small JSON config,
+not spatial data. The uploaded `.zip` survives that failure, and inside it is a
+`<name>.featurelink.json` file.
+
+`lib/importIngest.ts` polls CloudTAK's `/api/import` every 60s for packages named like ATAK's
+share convention (`FeatureLink - <layer>`), downloads the raw zip, extracts that file
+(`lib/zipReader.ts` parses the ZIP by hand + `DecompressionStream`, no bundled zip dep), and
+applies it the same way **Add Layer → Import Config** does. Success/failure surfaces as an
+**Auto-Import** row on the Home tab.
+
+This reaches past `PluginAPI`'s documented surface to call `/api/import` directly with a token
+read out of `localStorage` (`lib/cloudtakInternals.ts`), so it's inherently fragile against
+future CloudTAK changes — every failure path is caught and shown rather than failing silently.
+Note the match is done **client-side** on the import name; CloudTAK's `/api/import` `filter`
+query param is a plain substring match, not a regex (an anchored `^FeatureLink` matches nothing).
 
 ## Authentication
 
@@ -146,7 +168,7 @@ plugin/
     SendToLayerPicker.vue       pushed view: pick a map item + layer, send (radial-menu replacement)
     LayerRow.vue                shared layer-list row (visibility, interval, actions)
     tabs/
-      HomeTab.vue                 feature-count stats, quick-glance status card
+      HomeTab.vue                 feature-count stats, quick-glance status card, Auto-Import status row
       LayersTab.vue                private (signed-in) + public layer lists
       PliTab.vue                   create/join PLI layer, auto-send toggle, share endpoint
   lib/
@@ -156,11 +178,14 @@ plugin/
     store.ts                     reactive state + localStorage persistence
     oauth.ts                     ArcGIS OAuth2 PKCE flow: auth URL, code exchange, refresh
     arcgisAuth.ts                session manager: sign in/out via OAuth popup, token persistence + refresh
-    arcgisRest.ts                fetch-based ArcGIS REST client (search, download, applyEdits, publish)
+    arcgisRest.ts                fetch-based ArcGIS REST client (search, download, applyEdits, publish, count-only query)
     displayConfig.ts             styling-rule JSON parse + per-feature color/icon/label resolution
-    layerActions.ts              shared layer CRUD/download logic
-    layerShare.ts                share-config JSON builder + clipboard/file helpers
-    importConfig.ts              paste/upload config JSON → apply (QR-scan replacement)
+    layerActions.ts              shared layer CRUD/download; feature counts on sign-in (count-only, no download)
+    layerShare.ts                share-config JSON builder + clipboard/file-download helpers
+    importConfig.ts              paste/upload/auto-ingested config JSON → apply (QR-scan replacement)
+    importIngest.ts              polls /api/import for ATAK-shared packages, applies them (see Receiving section)
+    zipReader.ts                 hand-rolled ZIP central-directory parse + DecompressionStream (no zip dep)
+    cloudtakInternals.ts         reach-in: reads CloudTAK's session token from localStorage for /api/import
     cot.ts                       map marker reach-in, PLI breadcrumbs, on-screen marker listing
     scheduler.ts                 layer auto-refresh + PLI auto-send background loops
 ```

@@ -10,6 +10,7 @@ An ATAK plugin that bridges ATAK and ArcGIS Feature Services, enabling operators
 - **PLI Auto-Send** — Continuously stream your device's position to a designated ArcGIS Feature Layer on a configurable interval.
 - **PLI History Overlay** — Renders up to 5 fading breadcrumb markers on the map showing recent PLI positions (color-matched to your team).
 - **Public Layer Support** — Add and manage public ArcGIS Feature Service URLs without authentication.
+- **Auto-Iconset Generation** *(new; not yet field-tested)* — Pasting a Feature Service URL reads the layer's own picture-marker (`esriPMS`) renderer symbols and builds a matching ATAK iconset **on-device, no server round-trip**, so the layer's custom marker icons render locally *and* on any other device that ingests the same link. The UID/group/filenames are computed from a frozen cross-platform contract ([`../AUTO-ICONSET-SPEC.md`](../AUTO-ICONSET-SPEC.md)), so a marker shared to another platform resolves to the same icon. A display config that references a missing iconset whose source layer is known is regenerated locally instead of prompting.
 - **Radial Menu Integration** — "Send to Feature Layer" action appears on the radial menu of any point map item.
 - **QR Code Share** — Generate and scan QR codes to share portal credentials or layer URLs between devices.
 - **3-Tab UI** — Home (stats), Layers (authenticated + public), and PLI, with Account and Add Layer as dedicated pushed pages.
@@ -94,7 +95,10 @@ stats fetched live from ArcGIS REST. Tap the chevron to collapse/expand it.
   select layers for download; set a recurrence interval with the spinner.
 - **Public Layers** — tap **Add Layer** to push the **Add Layer** page, which offers
   **Scan Config QR** (primary) or pasting a Feature Service URL directly (fallback).
-  The **Upload Display Prefs (JSON)** action also lives on this page.
+  The **Upload Display Prefs (JSON)** action also lives on this page. Pasting a URL also
+  auto-generates the layer's custom marker icons on-device (see **Auto-Iconset Generation**
+  above) — a "Icons ready: …" toast confirms it, and the layer's own renderer styling is
+  applied so the icons show on your map with no extra steps.
 
 ### PLI Tab
 
@@ -244,7 +248,8 @@ com.atakmap.android.featurelink
 │   └── FeatureLinkTool.java        # Toolbar button, fires SHOW_PLUGIN intent
 ├── arcgis/
 │   ├── ArcGISAuthManager.java      # Token lifecycle, uses AtakAuthenticationDatabase
-│   ├── ArcGISRestClient.java       # All HTTP calls (generateToken, query, applyEdits, …)
+│   ├── ArcGISRestClient.java       # All HTTP calls (generateToken, query, applyEdits, fetchJson, …)
+│   ├── AutoIconset.java            # ArcGIS renderer → on-device ATAK iconset (AUTO-ICONSET-SPEC.md)
 │   └── ArcGISLayer.java            # Data model with JSON serialization
 ├── radial/
 │   └── FeatureLinkMenuFactory.java # Injects "Send to Feature Layer" into radial menu

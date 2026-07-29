@@ -91,8 +91,21 @@ network call it has to authenticate on its own.
   `/api/featurelink/admin/custom-icons`; deleting a set is restricted to its
   uploader or a `page.featurelink_configs` admin, same ownership pattern as
   datasets. See [`../CONFIG-FORMAT.md`](../CONFIG-FORMAT.md)'s "Custom icon
-  sets" section for the known limitation that ATAK can't yet render an
-  arbitrary uploaded image as a marker icon.
+  sets" section for background on how ATAK resolves an iconset UID.
+- **`services/featurelinkArcgisIconset.service.js`** + two endpoints on the
+  custom-icons router (**`POST /api/featurelink/admin/custom-icons/from-arcgis`**,
+  **`GET …/by-uid/:uid`**) — the TAK Portal half of the cross-platform
+  auto-iconset feature. `from-arcgis` reads a FeatureServer layer's renderer,
+  pulls every picture-marker (`esriPMS`) symbol's embedded image, and registers
+  them as an icon set whose UID/group/filenames are computed *deterministically*
+  per [`../AUTO-ICONSET-SPEC.md`](../AUTO-ICONSET-SPEC.md) — string-identical to
+  what the ATAK plugin independently produces for the same layer, so a marker
+  shared between them resolves to the same icon with **no shared server**.
+  `by-uid` is an optional lookup so a device that meets an unfamiliar iconset UID
+  can resolve it. This closes the "ATAK can't render an arbitrary custom marker"
+  gap for renderer-embedded icons. Registration reuses the custom-icons manifest
+  (`registerArcgisSet`), so no zip round-trip and no new host dependency (uses
+  `fs`/`crypto` + Node 18+ `fetch`). *New; not yet field-tested.*
 - **`routes/featurelinkBrowse.routes.js`** — the field-user list/download API
   behind the Onboarding page, mounted at `/api/featurelink/configs*`. Requires
   nothing beyond an ordinary logged-in session — by the time these handlers
