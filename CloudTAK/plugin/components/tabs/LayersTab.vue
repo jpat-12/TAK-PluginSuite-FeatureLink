@@ -53,7 +53,7 @@ import { authState, isAuthenticated } from '../../lib/arcgisAuth.ts';
 import {
     downloadLayer, fetchUserLayers, removePublicLayer, removePrivateLayer, toggleLayerVisibility, setLayerRecurrence,
 } from '../../lib/layerActions.ts';
-import { buildShareConfigJson, copyToClipboard } from '../../lib/layerShare.ts';
+import { buildShareConfigJson, downloadAsFile } from '../../lib/layerShare.ts';
 import type { ArcGISLayer } from '../../lib/types.ts';
 import LayerRow from '../LayerRow.vue';
 
@@ -71,14 +71,17 @@ async function doRefreshPrivate(): Promise<void> {
     try { await fetchUserLayers(); } finally { refreshing.value = false; }
 }
 
-async function shareLayer(layer: ArcGISLayer): Promise<void> {
+// Interim share: download the config as a <name>.featurelink.json file — the same file ATAK's
+// LayerShareHelper produces — so it can be handed off by any channel and imported on the other
+// side (ATAK/WinTAK "Upload Pref File" or CloudTAK Add Layer → Import Config). The in-app
+// send-to-contact path (contacts via /api/marti/api/contacts/all + PUT /api/marti/package with
+// destinations) is the follow-up; this gives a working cross-platform hand-off in the meantime.
+function shareLayer(layer: ArcGISLayer): void {
     const json = buildShareConfigJson(layer);
-    const copied = await copyToClipboard(json);
-    shareMessage.value = copied
-        ? `Copied "${layer.name}" config to clipboard`
-        : 'Could not access clipboard — copy manually from the browser console';
-    if (!copied) console.info('[featurelink] share config:', json);
-    window.setTimeout(() => { shareMessage.value = ''; }, 4000);
+    const safeName = layer.name.replace(/[^a-zA-Z0-9 _-]/g, '_');
+    downloadAsFile(json, `${safeName}.featurelink.json`);
+    shareMessage.value = `Downloaded "${safeName}.featurelink.json" — send it to any ATAK/WinTAK/CloudTAK user to import`;
+    window.setTimeout(() => { shareMessage.value = ''; }, 5000);
 }
 </script>
 
