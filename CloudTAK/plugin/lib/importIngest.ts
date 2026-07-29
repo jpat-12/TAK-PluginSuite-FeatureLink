@@ -21,9 +21,12 @@ import { applyConfigText } from './importConfig.ts';
 
 const POLL_MS = 60_000;
 const HANDLED_KEY = 'cloudtak-featurelink:handled-imports';
-// Postgres ~* (case-insensitive regex) match against the import's name, server-side — matches
-// LayerShareHelper.java's "FeatureLink - <layer>.zip" package naming.
-const NAME_FILTER = '^FeatureLink';
+// CloudTAK's /api/import `filter` query param is a plain substring match on the name, NOT a
+// regex — an anchored '^FeatureLink' matched literally nothing and the list came back empty, so
+// nothing was ever ingested. We fetch the most recent imports unfiltered and match the name
+// client-side instead, which is robust regardless of the filter param's exact server semantics.
+// Matches LayerShareHelper.java's "FeatureLink - <layer>.zip" package naming.
+const NAME_PREFIX = 'FeatureLink';
 const ENTRY_SUFFIX = '.featurelink.json';
 
 export const ingestState = reactive<{ status: 'idle' | 'ok' | 'error'; message: string }>({
@@ -75,12 +78,16 @@ async function checkOnce(): Promise<void> {
     if (!token) return; // not signed into CloudTAK yet (or storage key changed — see cloudtakInternals.ts)
 
     const handled = loadHandled();
+    // Fetch a generous recent window: since we filter by name client-side (not server-side), a
+    // burst of unrelated imports between polls could otherwise push a FeatureLink share off the
+    // page before it's seen. 50 is plenty of headroom at expected volume.
     const list = await apiGet<ImportListResponse>(
-        `/api/import?limit=25&sort=created&order=desc&filter=${encodeURIComponent(NAME_FILTER)}`,
+        `/api/import?limit=50&sort=created&order=desc`,
         token,
     );
 
     for (const item of list.items ?? []) {
+        if (!item.name?.startsWith(NAME_PREFIX)) continue;
         if (handled.has(item.id)) continue;
         // Marked handled before processing, even though this deliberately means a package that
         // errors out never gets retried automatically — better than a bad package looping every
