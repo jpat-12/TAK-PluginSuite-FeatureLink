@@ -7,6 +7,12 @@ import { reactive, watch } from 'vue';
 import type { ArcGISLayer, DisplayConfig } from './types.ts';
 
 export interface FeatureLinkState {
+    // "My ArcGIS Layers" — browse list of the signed-in user's own ArcGIS content, refreshed
+    // from a portal search. Not yet on the device; moves into privateLayers/publicLayers (see
+    // moveBrowseLayerOnDownload in layerActions.ts) the first time it's downloaded.
+    browseLayers: ArcGISLayer[];
+    // "Private Layers" — on-device layers not shared to Everyone: either shared to you by
+    // another user/config import, or downloaded from browseLayers and not public.
     privateLayers: ArcGISLayer[];
     publicLayers: ArcGISLayer[];
     excludedPrivateUrls: string[];
@@ -23,6 +29,7 @@ const KEY = 'cloudtak-featurelink:v1';
 
 function defaults(): FeatureLinkState {
     return {
+        browseLayers: [],
         privateLayers: [],
         publicLayers: [],
         excludedPrivateUrls: [],

@@ -9,7 +9,7 @@
                 {{ layer.visible ? '👁' : '🚫' }}
             </button>
             <div class='fl-row-info'>
-                <div class='fl-row-name'>{{ layer.name }}</div>
+                <div class='fl-row-name'>{{ layer.name }}<span class='fl-config-badge' :class='{ on: hasConfig }'>{{ hasConfig ? 'Config' : 'No Config' }}</span></div>
                 <div class='fl-row-meta'>{{ layer.featureCount < 0 ? 'error' : `${layer.featureCount} features` }} · {{ lastSyncLabel }}</div>
             </div>
         </div>
@@ -26,12 +26,16 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { store } from '../lib/store.ts';
 import type { ArcGISLayer } from '../lib/types.ts';
 
 const props = defineProps<{ layer: ArcGISLayer }>();
 const emit = defineEmits<{ toggleVisible: []; intervalChange: [seconds: number]; action: []; share: []; delete: [] }>();
 
 const lastSyncLabel = computed(() => (props.layer.lastSync ? new Date(props.layer.lastSync).toLocaleTimeString() : 'never synced'));
+// Always-visible bubble: whether this layer has a display config (icons/colors/labels/popups)
+// attached — see store.displayConfigs. Ports item_layer.xml's layer_config_badge.
+const hasConfig = computed(() => Boolean(store.displayConfigs[props.layer.url]));
 
 function onIntervalChange(e: Event): void {
     emit('intervalChange', Number((e.target as HTMLInputElement).value));
@@ -52,7 +56,9 @@ function onDeleteClick(): void {
 .fl-row-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .fl-eye { background: none; border: none; cursor: pointer; font-size: 14px; }
 .fl-row-info { min-width: 0; }
-.fl-row-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-row-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+.fl-config-badge { flex-shrink: 0; font-size: 9px; font-weight: 700; border-radius: 20px; padding: 1px 7px; background: #3a1b1b; color: #ff5252; }
+.fl-config-badge.on { background: #1b3a1e; color: #4caf50; }
 .fl-row-meta { font-size: 10px; opacity: .65; }
 .fl-row-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .fl-interval { display: flex; align-items: center; gap: 2px; font-size: 10px; opacity: .8; }

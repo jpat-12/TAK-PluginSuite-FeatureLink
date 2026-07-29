@@ -3,10 +3,17 @@
 
 export type LayerKind = 'private' | 'public';
 
+// ArcGIS portal sharing scope for a "My ArcGIS Layers" item: 'public' (shared to Everyone),
+// 'org', or 'private'. Only meaningful for layers returned by arcgisRest.searchUserLayers() —
+// layers added by URL or received via a share default to 'org' since there's no portal item to
+// ask. Mirrors ArcGISLayer.java's `access` field.
+export type LayerAccess = 'public' | 'org' | 'private';
+
 export interface ArcGISLayer {
     name: string;
     url: string;
     type: LayerKind;
+    access: LayerAccess;
     featureCount: number;
     lastSync: number;               // epoch ms; 0 = never synced
     downloadEnabled: boolean;
@@ -16,9 +23,9 @@ export interface ArcGISLayer {
     visible: boolean;
 }
 
-export function newLayer(name: string, url: string, type: LayerKind): ArcGISLayer {
+export function newLayer(name: string, url: string, type: LayerKind, access: LayerAccess = 'org'): ArcGISLayer {
     return {
-        name, url, type,
+        name, url, type, access,
         featureCount: 0,
         lastSync: 0,
         downloadEnabled: false,

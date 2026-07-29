@@ -26,10 +26,16 @@ export async function searchUserLayers(portalUrl: string, token: string, usernam
     const params = new URLSearchParams({ q, num: '100', f: 'json', token });
     const url = `${normalizePortalUrl(portalUrl)}/sharing/rest/search?${params.toString()}`;
     try {
-        const json = await readJson<{ results?: { title?: string; url?: string }[] }>(await fetch(url));
+        const json = await readJson<{ results?: { title?: string; url?: string; access?: string }[] }>(await fetch(url));
         const out: ArcGISLayer[] = [];
         for (const item of json.results ?? []) {
-            if (item.url) out.push(newLayer(item.title ?? 'Unnamed', item.url, 'private'));
+            if (item.url) {
+                // Portal item "access": "public" (shared to Everyone), "org", or "private" —
+                // used to decide which on-device section this layer lands in once downloaded.
+                const access = item.access === 'public' || item.access === 'org' || item.access === 'private'
+                    ? item.access : 'private';
+                out.push(newLayer(item.title ?? 'Unnamed', item.url, 'private', access));
+            }
         }
         return out;
     } catch (e) {

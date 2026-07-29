@@ -16,7 +16,7 @@
             </div>
             <div class='fl-status-row'>
                 <span>Layers</span>
-                <b>{{ store.privateLayers.length }} private, {{ store.publicLayers.length }} public</b>
+                <b>{{ store.browseLayers.length + store.privateLayers.length }} private, {{ store.publicLayers.length }} public</b>
             </div>
             <div v-if='ingestState.status !== "idle"' class='fl-status-row'>
                 <span>Auto-Import</span>
@@ -64,7 +64,7 @@ const loading = ref(false);
 
 const isAuthed = computed(() => { void authState.username; return isAuthenticated(); });
 const pliConnected = computed(() => { void authState.username; return isPliConnected(isAuthenticated()); });
-const allLayers = computed(() => [...store.privateLayers, ...store.publicLayers]);
+const allLayers = computed(() => [...store.browseLayers, ...store.privateLayers, ...store.publicLayers]);
 const totalCount = computed(() => allLayers.value.reduce((sum, l) => sum + Math.max(0, l.featureCount), 0));
 
 async function refresh(): Promise<void> {
