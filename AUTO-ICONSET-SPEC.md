@@ -216,15 +216,26 @@ Every generated zip MUST contain an `iconset.xml` at the zip root:
 
 ```xml
 <iconset name="{group}" uid="{uid}" defaultGroup="{group}" version="1">
-  <icon name="{filename}" group="{group}"/>
+  <icon name="{filename}"/>
   <!-- one <icon> per generated PNG -->
 </iconset>
 ```
 
 - `name` and `uid` MUST both be non-empty (or ATAK ignores the file and hashes the zip — §0.1).
 - `uid` is the §4 digest, verbatim.
-- ATAK does **not** read group/filename from these `<icon>` elements (it uses the zip paths — §0.2);
-  they are included for correctness and for other consumers (e.g. the Portal configurator preview).
+- **The `<icon>` element MUST carry only `name` — no `group` attribute.** ATAK's real parser
+  (`org.simpleframework.xml`, strict mode) deserializes each `<icon>` into
+  `com.atakmap.android.icons.UserIcon`, whose only `@Attribute`-annotated fields are `name` and
+  `type2525b`; `UserIcon.group` is a plain unannotated Java field, not part of the XML schema. A
+  stray `group` attribute with no matching annotation throws `AttributeException` and fails the
+  **entire document parse** — confirmed live against a real device
+  (`org.simpleframework.xml.core.AttributeException: Attribute 'group' does not have a match in
+  class com.atakmap.android.icons.UserIcon`), at which point ATAK silently discards the whole
+  file's `uid` and falls back to hashing the raw zip bytes (§0.1's fallback), breaking the
+  cross-platform UID-matching guarantee this whole spec exists for. This was a real bug in the
+  ATAK-side generator (`AutoIconset.java`) — fixed; earlier revisions of this doc incorrectly
+  showed `group="{group}"` here. ATAK does **not** read group/filename from `<icon>` regardless
+  (it uses the zip paths — §0.2) — there was never a reason for a consumer to need it there.
 - `version="1"` mirrors this spec's version. Bumping the spec bumps this.
 
 ### Zip layout

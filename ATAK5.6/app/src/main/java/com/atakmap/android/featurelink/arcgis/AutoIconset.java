@@ -380,14 +380,39 @@ public final class AutoIconset {
         }
 
         try {
-            AtakBroadcast.getInstance().sendBroadcast(new Intent("com.atakmap.app.REFRESH_ICONSET"));
+            // The actual broadcast ATAK's IconsMapComponent listens for — confirmed by
+            // decompiling com.atakmap.android.icons.IconsMapComponent/IconsMapAdapter from the
+            // SDK jar. There is no "com.atakmap.app.REFRESH_ICONSET" action anywhere in ATAK
+            // core; a previous version of this method sent that and ATAK silently never
+            // imported the zip (UserIconDatabase.getIconSet() always came back empty, so this
+            // method kept re-running on every reopen without ever actually registering).
+            // IconsMapComponent's own default-iconset bootstrap sends exactly this shape when
+            // it installs a bundled set, which is what this mirrors.
+            Intent intent = new Intent("com.atakmap.android.icons.ADD_ICONSET");
+            intent.putExtra("show_progress", false);
+            intent.putExtra("filepath", zip.getAbsolutePath());
+            AtakBroadcast.getInstance().sendBroadcast(intent);
         } catch (Exception e) {
-            Log.w(TAG, "REFRESH_ICONSET broadcast failed (zip still written)", e);
+            Log.w(TAG, "ADD_ICONSET broadcast failed (zip still written)", e);
         }
         return zip;
     }
 
-    /** §7: iconset.xml with non-empty name+uid, one <icon> per PNG, version marker. */
+    /**
+     * §7: iconset.xml with non-empty name+uid, one <icon> per PNG, version marker.
+     *
+     * The per-icon element carries ONLY {@code name} — no {@code group} attribute. ATAK's real
+     * parser (org.simpleframework.xml, strict mode) deserializes each <icon> into
+     * com.atakmap.android.icons.UserIcon, whose only @Attribute-annotated fields are "name" and
+     * "type2525b"; UserIcon.group is a plain unannotated Java field, not part of the XML schema.
+     * A stray "group" attribute with no matching annotation throws AttributeException and fails
+     * the ENTIRE document parse — confirmed live via `adb logcat` against a real device
+     * (org.simpleframework.xml.core.AttributeException: Attribute 'group' does not have a match
+     * in class com.atakmap.android.icons.UserIcon) — at which point ATAK discards our uid
+     * entirely and falls back to hashing the raw zip bytes (spec §0.1's documented fallback),
+     * breaking the whole cross-platform UID-matching guarantee. This matches §0.2 anyway: ATAK
+     * only ever reads group from the zip ENTRY PATH, never from this XML.
+     */
     private static String buildIconsetXml(String uid, String group, Set<String> fileNames) {
         StringBuilder sb = new StringBuilder();
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -395,7 +420,7 @@ public final class AutoIconset {
           .append("\" defaultGroup=\"").append(xml(group)).append("\" version=\"")
           .append(SPEC_VERSION).append("\">\n");
         for (String f : fileNames) {
-            sb.append("  <icon name=\"").append(xml(f)).append("\" group=\"").append(xml(group)).append("\"/>\n");
+            sb.append("  <icon name=\"").append(xml(f)).append("\"/>\n");
         }
         sb.append("</iconset>\n");
         return sb.toString();
