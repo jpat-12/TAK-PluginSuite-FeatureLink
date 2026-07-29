@@ -76,6 +76,7 @@
       : '<span class="muted">No live FeatureLayer configured yet</span>';
     div.innerHTML =
       '<span class="fl-card-name">' + escapeHtml(c.name) + '</span>' +
+      '<span class="muted">' + (c.fieldCount || 0) + ' fields · ' + (c.featureCount || 0).toLocaleString() + ' features</span>' +
       '<span class="muted">Updated ' + (c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—') + '</span>' +
       '<div class="fl-card-actions">' + actions + '</div>';
 

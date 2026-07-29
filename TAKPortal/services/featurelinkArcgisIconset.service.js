@@ -159,9 +159,10 @@ function pmsFrom(symbol, rawLabel) {
 function extractPmsEntries(renderer, fieldOverride) {
   const entries = [];
   let field = "";
-  if (!renderer || typeof renderer !== "object") return { field: fieldOverride || "", entries };
+  if (!renderer || typeof renderer !== "object") return { field: fieldOverride || "", entries, rendererType: "simple" };
 
-  const type = renderer.type || "simple";
+  const rawType = renderer.type || "simple";
+  const type = /^uniqueValue/i.test(rawType) ? "uniqueValue" : /^classBreaks/i.test(rawType) ? "classBreaks" : "simple";
   const pushDefault = () => {
     const d = pmsFrom(renderer.defaultSymbol, renderer.defaultLabel || null);
     if (d) {
@@ -170,14 +171,16 @@ function extractPmsEntries(renderer, fieldOverride) {
     }
   };
 
-  if (type === "uniqueValue" || type === "uniqueValueRenderer") {
+  if (type === "uniqueValue") {
     field = renderer.field1 || renderer.field || "";
     for (const info of renderer.uniqueValueInfos || []) {
       const e = pmsFrom(info.symbol, info.label || info.value);
-      if (e) entries.push(e);
+      // Carried through to generateFromArcgis() so the caller can build a per-value icon
+      // symbology mapping (value -> generated filename), not just register the icon set.
+      if (e) { e.value = info.value; entries.push(e); }
     }
     pushDefault();
-  } else if (type === "classBreaks" || type === "classBreaksRenderer") {
+  } else if (type === "classBreaks") {
     field = renderer.field || "";
     for (const info of renderer.classBreakInfos || []) {
       const e = pmsFrom(info.symbol, info.label);
@@ -194,7 +197,7 @@ function extractPmsEntries(renderer, fieldOverride) {
   }
 
   if (fieldOverride != null && fieldOverride !== "") field = fieldOverride;
-  return { field, entries };
+  return { field, entries, rendererType: type };
 }
 
 // -------------------------------------------------------------------------
@@ -229,7 +232,7 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername } = {
 
   const layerName = meta.name || meta.serviceDescription || "Layer";
   const renderer = meta.drawingInfo && meta.drawingInfo.renderer;
-  const { field: driveField, entries } = extractPmsEntries(renderer, field);
+  const { field: driveField, entries, rendererType } = extractPmsEntries(renderer, field);
 
   if (!entries.length) {
     return {
@@ -243,7 +246,9 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername } = {
   const uid = uidFor(canonicalUrl, driveField);
   const group = `${sanitizeGroupBase(layerName)} Icons`;
 
-  // §5.2/§5.3 naming + base64 decode
+  // §5.2/§5.3 naming + base64 decode. value/isDefault ride along on each icon entry (rather
+  // than being re-derived from `entries` by position afterward) so a skipped undecodable
+  // symbol can't shift a later entry's value out of alignment with its filename.
   const seen = new Set();
   const icons = [];
   for (const e of entries) {
@@ -254,7 +259,7 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername } = {
     } catch (_) {
       continue; // skip an undecodable symbol rather than fail the whole set
     }
-    if (bytes && bytes.length) icons.push({ atakName, bytes });
+    if (bytes && bytes.length) icons.push({ atakName, bytes, value: e.value, isDefault: !!e.isDefault });
   }
 
   if (!icons.length) {
@@ -273,14 +278,31 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername } = {
   });
   if (!result.success) return result;
 
+  // For a caller that wants to auto-build display-config symbology (not just register the
+  // set): each non-default icon's driving-field value -> generated filename, plus the
+  // fallback/default icon's filename, if any. classBreaks renderers intentionally have no
+  // per-entry `value` (numeric ranges aren't a single match value) so valueMap is empty for
+  // them — icons are still generated/registered for sharing, just not auto-assigned here.
+  const valueMap = icons
+    .filter((i) => !i.isDefault && typeof i.value !== "undefined")
+    .map((i) => ({ value: i.value, filename: i.atakName }));
+  const defaultIcon = icons.find((i) => i.isDefault);
+
   return {
     success: true,
     set: result.set,
     uid,
-    group,
+    // The manifest's own stored name, not the local `group` var — registerArcgisSet() runs
+    // it through cleanSetName() (trim + 60-char cap) before storing, which for a long layer
+    // name could differ from the pre-registration string by a trailing char or two. Callers
+    // need the name that will actually resolve via resolveUsericonPath()/the icons API.
+    group: result.set.name,
     canonicalUrl,
     field: driveField,
     iconCount: icons.length,
+    rendererType,
+    valueMap,
+    defaultFilename: defaultIcon ? defaultIcon.atakName : null,
   };
 }
 

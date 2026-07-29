@@ -86,6 +86,11 @@ router.post("/from-arcgis", async (req, res) => {
       field: result.field,
       canonicalUrl: result.canonicalUrl,
       iconCount: result.iconCount,
+      // For a caller building display-config symbology automatically (the configurator's
+      // "Add Data" auto-import path), not just registering the set for later manual picking.
+      rendererType: result.rendererType,
+      valueMap: result.valueMap,
+      defaultFilename: result.defaultFilename,
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: toSafeApiError(err) });

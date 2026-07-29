@@ -27,6 +27,8 @@ router.get("/configs", (req, res) => {
       sourceType: d.source_type,
       updatedAt: d.updated_at,
       hasLiveLayer: !!d.has_export,
+      fieldCount: d.field_count,
+      featureCount: d.feature_count,
     }));
     res.json({ configs });
   } catch (err) {
