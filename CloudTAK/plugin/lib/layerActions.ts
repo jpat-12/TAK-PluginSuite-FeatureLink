@@ -203,4 +203,14 @@ export function findLayer(url: string): ArcGISLayer | undefined {
     return store.privateLayers.find(l => l.url === url) ?? store.publicLayers.find(l => l.url === url);
 }
 
+// Settings menu "Clear All Layers" — removes every on-device Private/Public layer in bulk by
+// reusing the same per-layer removal used by the trash-can button (markers cleared, owned
+// layers sent back to "My ArcGIS Layers", non-owned ones removed entirely), rather than a
+// separate bulk code path that could drift from single-layer delete behavior. Snapshots each
+// array first since removePrivateLayer/removePublicLayer splice the live store array.
+export async function clearAllLayers(): Promise<void> {
+    for (const layer of [...store.privateLayers]) await removePrivateLayer(layer);
+    for (const layer of [...store.publicLayers]) await removePublicLayer(layer);
+}
+
 export { newLayer };

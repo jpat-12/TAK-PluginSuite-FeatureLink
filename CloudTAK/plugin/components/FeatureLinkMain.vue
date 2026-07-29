@@ -10,6 +10,14 @@
                 :title='isAuthed ? `Signed in as ${username}` : "Sign in to ArcGIS"'
                 @click='showAccount = true'
             >{{ isAuthed ? username : 'Sign In' }}</button>
+
+            <div class='fl-gear-wrap'>
+                <button class='fl-gear-btn' title='Settings' @click='showSettingsMenu = !showSettingsMenu'>⚙</button>
+                <div v-if='showSettingsMenu' class='fl-settings-backdrop' @click='showSettingsMenu = false'></div>
+                <div v-if='showSettingsMenu' class='fl-settings-menu'>
+                    <button class='fl-menu-item danger' @click='onClearAllLayers'>Clear All Layers</button>
+                </div>
+            </div>
         </div>
 
         <!-- Tab bar -->
@@ -42,14 +50,26 @@ import AccountView from './AccountView.vue';
 import AddLayerView from './AddLayerView.vue';
 import SendToLayerPicker from './SendToLayerPicker.vue';
 import { authState, isAuthenticated, getUsername } from '../lib/arcgisAuth.ts';
+import { clearAllLayers } from '../lib/layerActions.ts';
 
 const tab = ref<'home' | 'layers' | 'pli'>('home');
 const showAccount = ref(false);
 const showAddLayer = ref(false);
 const showSend = ref(false);
+const showSettingsMenu = ref(false);
 
 const isAuthed = computed(() => { void authState.username; return isAuthenticated(); });
 const username = computed(() => getUsername());
+
+async function onClearAllLayers(): Promise<void> {
+    showSettingsMenu.value = false;
+    const ok = window.confirm(
+        'Remove all layers from this device? Layers from "My ArcGIS Layers" will move back '
+        + 'there; any others will be removed entirely. Map markers will be cleared.',
+    );
+    if (!ok) return;
+    await clearAllLayers();
+}
 </script>
 
 <style scoped>
@@ -64,6 +84,23 @@ const username = computed(() => getUsername());
     border: 1px solid #ff5722; background: transparent; color: #ff5722; cursor: pointer;
 }
 .fl-account-btn.authed { border-color: #4caf50; color: #4caf50; }
+.fl-gear-wrap { position: relative; }
+.fl-gear-btn {
+    font-size: 14px; padding: 4px 8px; border-radius: 4px; border: 1px solid #555;
+    background: transparent; color: inherit; cursor: pointer; line-height: 1;
+}
+.fl-settings-backdrop { position: fixed; inset: 0; z-index: 20; }
+.fl-settings-menu {
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: 21; min-width: 160px;
+    background: #1f1f1f; border: 1px solid #444; border-radius: 6px; padding: 4px;
+    display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0, 0, 0, .4);
+}
+.fl-menu-item {
+    text-align: left; padding: 8px 10px; border-radius: 4px; border: none;
+    background: transparent; color: inherit; cursor: pointer; font-size: 12px;
+}
+.fl-menu-item:hover { background: #2a2a2a; }
+.fl-menu-item.danger { color: #ff5722; }
 .fl-tabs { display: flex; border-bottom: 1px solid #333; flex-shrink: 0; }
 .fl-tabs button {
     flex: 1; padding: 8px; background: none; border: none; border-bottom: 2px solid transparent;
