@@ -76,6 +76,7 @@ cp -f "$SRC_DIR/routes/featurelinkCustomIcons.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/routes/featurelinkBrowse.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/services/featurelinkDatasets.service.js" "$PORTAL_DIR/services/"
 cp -f "$SRC_DIR/services/featurelinkCustomIcons.service.js" "$PORTAL_DIR/services/"
+cp -f "$SRC_DIR/services/featurelinkArcgisIconset.service.js" "$PORTAL_DIR/services/"
 cp -f "$SRC_DIR/views/featurelink-configs.ejs" "$PORTAL_DIR/views/"
 cp -f "$SRC_DIR/views/featurelink.ejs" "$PORTAL_DIR/views/"
 

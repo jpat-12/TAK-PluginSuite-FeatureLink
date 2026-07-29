@@ -13,6 +13,7 @@ const fs = require("fs");
 const multer = require("multer");
 
 const customIconsSvc = require("../services/featurelinkCustomIcons.service");
+const arcgisIconsetSvc = require("../services/featurelinkArcgisIconset.service");
 const { toSafeApiError } = require("../services/apiErrorPayload.service");
 
 const upload = multer({
@@ -58,6 +59,51 @@ router.post("/", upload.array("icons", 200), async (req, res) => {
     res.json({ ok: true, set: result.set });
   } catch (err) {
     cleanupTempFiles(req.files);
+    res.status(500).json({ ok: false, error: toSafeApiError(err) });
+  }
+});
+
+/**
+ * POST /api/featurelink/admin/custom-icons/from-arcgis
+ * Body: { url, field?, token? }. Reads a FeatureServer layer's renderer, extracts its
+ * picture-marker (esriPMS) symbols, and registers them as an icon set whose uid/group/
+ * filenames are computed per AUTO-ICONSET-SPEC.md — string-identical to what ATAK/WinTAK/
+ * CloudTAK independently produce for the same layer. This is the automatic "one-link" hook:
+ * the configurator calls it the moment a layer is loaded from a URL, not behind a button.
+ */
+router.post("/from-arcgis", async (req, res) => {
+  try {
+    const { url, field, token } = req.body || {};
+    if (!url) return res.status(400).json({ ok: false, error: "A FeatureServer layer URL is required." });
+    const actorUsername = req.authentikUser && req.authentikUser.username;
+    const result = await arcgisIconsetSvc.generateFromArcgis({ sourceUrl: url, field, token, actorUsername });
+    if (!result.success) return res.status(400).json({ ok: false, error: result.error });
+    res.json({
+      ok: true,
+      set: result.set,
+      uid: result.uid,
+      group: result.group,
+      field: result.field,
+      canonicalUrl: result.canonicalUrl,
+      iconCount: result.iconCount,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: toSafeApiError(err) });
+  }
+});
+
+/**
+ * GET /api/featurelink/admin/custom-icons/by-uid/:uid — optional shared-repository lookup
+ * (spec §10): resolve a set by its deterministic uid so a client that encountered an
+ * unfamiliar iconsetpath uid in incoming CoT can find/install it without re-ingesting the
+ * source. Registered BEFORE the /:name/:file catch-all so "by-uid" isn't read as a set name.
+ */
+router.get("/by-uid/:uid", (req, res) => {
+  try {
+    const set = customIconsSvc.findSetByUid(req.params.uid);
+    if (!set) return res.status(404).json({ ok: false, error: "not found" });
+    res.json({ ok: true, set });
+  } catch (err) {
     res.status(500).json({ ok: false, error: toSafeApiError(err) });
   }
 });

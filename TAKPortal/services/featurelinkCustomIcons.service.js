@@ -253,6 +253,92 @@ async function addCustomIcons(setName, files, actorUsername) {
   return { success: true, set: entry };
 }
 
+/**
+ * Registers a set generated from an ArcGIS renderer (AUTO-ICONSET-SPEC.md, Phase D) without
+ * going through the zip-upload path. The caller (featurelinkArcgisIconset.service.js) has
+ * already decoded the PNGs and computed the *deterministic* spec values:
+ *   - uid    = sha256(canonicalUrl + "/" + field), written VERBATIM (spec §4) — so a federated
+ *              ATAK/WinTAK/CloudTAK generator computing the same uid cross-resolves with this
+ *              set even though the PNG bytes differ (spec §0.1).
+ *   - group  = "<layer name> Icons" (spec §5.1)
+ *   - each icon's atakName = "<value>.png" (spec §5.2), stored as the icon's real ATAK filename.
+ * Unlike a real ATAK zip import (where uid would come from iconset.xml or a zip hash), here the
+ * uid is authoritative input — we do not hash anything.
+ *
+ * Idempotent: regenerating the same set (same name) wipes the prior files/entry first, so the
+ * stored filenames stay identical to the spec atakNames (no uniqueFileName _N drift on rerun),
+ * which is what keeps this set's paths equal to what other platforms independently produce.
+ *
+ * @param {object} a
+ * @param {string} a.name    storage/display name (the spec group)
+ * @param {string} a.uid     spec uid, used verbatim
+ * @param {string} a.group   spec group ("<layer name> Icons")
+ * @param {Array<{atakName:string, bytes:Buffer}>} a.icons
+ * @param {string} [a.sourceUrl]  canonical layer URL (audit/regenerate)
+ * @param {string} [a.field]      renderer driving field (audit)
+ * @param {number} [a.specVersion]
+ * @param {string} [a.actorUsername]
+ * @returns {{success:true, set:object} | {success:false, error:string}}
+ */
+function registerArcgisSet({ name, uid, group, icons, sourceUrl, field, specVersion, actorUsername }) {
+  const setName = cleanSetName(name);
+  if (!setName) return { success: false, error: "Icon set name is required." };
+  if (!uid) return { success: false, error: "A deterministic uid is required (spec §4)." };
+  if (!icons || !icons.length) return { success: false, error: "At least one icon is required." };
+
+  ensureDir();
+  const setDir = path.join(CUSTOM_ICONS_DIR, setName);
+
+  // Idempotent regenerate: drop any prior copy so stored names == spec atakNames exactly.
+  const sets = readManifest().filter((s) => s.name !== setName);
+  try {
+    if (fs.existsSync(setDir)) fs.rmSync(setDir, { recursive: true, force: true });
+  } catch (_) { /* best effort — a stale file just gets overwritten below */ }
+  fs.mkdirSync(setDir, { recursive: true });
+
+  const entry = {
+    name: setName,
+    icons: [],
+    groups: {},
+    atakNames: {},
+    uid,
+    defaultGroup: group || null,
+    // provenance for the auto-generated case (regenerate + "which layer is this from")
+    source: "arcgis-renderer",
+    sourceUrl: sourceUrl || null,
+    sourceField: field || "",
+    specVersion: specVersion || 1,
+    created_by: actorUsername || null,
+    created_at: new Date().toISOString(),
+  };
+
+  const takenLocal = new Set();
+  for (const icon of icons) {
+    const atakName = String(icon.atakName || "icon.png");
+    // atakName is already FILE_RE-safe (spec §5.2); guard local-storage collisions without
+    // mutating atakName — the ATAK-facing name must stay the deterministic spec value.
+    let localName = atakName.replace(FILE_RE, "_");
+    if (takenLocal.has(localName)) localName = uniqueFileName(setDir, localName);
+    takenLocal.add(localName);
+
+    fs.writeFileSync(path.join(setDir, localName), icon.bytes);
+    entry.icons.push(localName);
+    entry.groups[localName] = group;      // ATAK group (spec §5.1) — used by resolveUsericonPath
+    entry.atakNames[localName] = atakName; // real ATAK filename (spec §5.2)
+  }
+
+  sets.push(entry);
+  writeManifest(sets);
+  return { success: true, set: entry };
+}
+
+/** The manifest entry whose deterministic uid matches, or null. Backs a by-uid lookup (spec §10,
+ * optional Portal cache) so a device seeing an unfamiliar iconsetpath uid can resolve it. */
+function findSetByUid(uid) {
+  if (!uid) return null;
+  return readManifest().find((s) => s.uid === uid) || null;
+}
+
 function deleteCustomIconSet(setName) {
   const name = cleanSetName(setName);
   if (!name) return { success: false, error: "not found" };
@@ -280,6 +366,8 @@ function getCustomIconPath(setName, fileName) {
 module.exports = {
   listCustomIconSets,
   addCustomIcons,
+  registerArcgisSet,
+  findSetByUid,
   deleteCustomIconSet,
   getCustomIconPath,
 };

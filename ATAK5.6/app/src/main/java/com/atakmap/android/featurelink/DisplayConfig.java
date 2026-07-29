@@ -137,6 +137,43 @@ final class DisplayConfig {
     }
 
     /**
+     * Builds a display config that maps a layer's own renderer values to the iconset paths a
+     * local {@code AutoIconset} generation just produced (AUTO-ICONSET-SPEC.md / Phase A). This
+     * is what makes a plain "paste a Feature Service URL" (method 5) add render the layer's
+     * custom icons on THIS device — not only on devices that later receive its CoT. There is no
+     * server and no user-authored config involved; the styling is derived entirely from the
+     * layer's renderer plus the just-generated icon paths.
+     *
+     * @param url            the layer URL this config is keyed under (feature download target)
+     * @param field          renderer driving field (attribute matched per feature); "" for single
+     * @param singleIconPath one "uid/group/filename" for a single-symbol renderer, else null
+     * @param pathByValue     field value → "uid/group/filename" for a uniqueValue renderer
+     */
+    static DisplayConfig forAutoIcons(String url, String field, String singleIconPath,
+            Map<String, String> pathByValue) {
+        SymConfig sym;
+        if (singleIconPath != null && !singleIconPath.isEmpty()) {
+            // "ic" — single custom icon for every feature (resolveIconsetPath returns usericonPath).
+            sym = new SymConfig("ic", Color.BLUE, Color.BLACK, 12, "circle", 1.0f, "",
+                    new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), Color.BLUE,
+                    new ArrayList<>(), "", "", singleIconPath);
+        } else {
+            // "adv" — per-value icon entries; resolveIconsetPath matches attrs[field] to e.value.
+            List<UvEntry> adv = new ArrayList<>();
+            if (pathByValue != null) {
+                for (Map.Entry<String, String> e : pathByValue.entrySet()) {
+                    adv.add(new UvEntry(e.getKey(), Color.BLUE, true, "", "", e.getValue()));
+                }
+            }
+            sym = new SymConfig("adv", Color.BLUE, Color.BLACK, 12, "circle", 1.0f,
+                    field == null ? "" : field,
+                    new ArrayList<>(), adv, new ArrayList<>(), Color.BLUE,
+                    new ArrayList<>(), "", "", null);
+        }
+        return new DisplayConfig(url, "", 1.0f, true, sym, null, null, null, 0, "s", false);
+    }
+
+    /**
      * Serializes back to the same compact "sym"/"lbl"/"popup"/"cm" shape {@link #fromJson}
      * parses — the plugin only ever needed to read this schema before (produced by the web
      * configurator), but sharing an already-styled layer with another device (see

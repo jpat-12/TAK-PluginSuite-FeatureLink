@@ -40,6 +40,7 @@ import com.atakmap.android.dropdown.DropDownReceiver;
 import com.atakmap.android.featurelink.arcgis.ArcGISAuthManager;
 import com.atakmap.android.featurelink.arcgis.ArcGISLayer;
 import com.atakmap.android.featurelink.arcgis.ArcGISRestClient;
+import com.atakmap.android.featurelink.arcgis.AutoIconset;
 import com.atakmap.android.featurelink.plugin.R;
 import com.atakmap.android.ipc.AtakBroadcast;
 import com.atakmap.android.maps.MapGroup;
@@ -1086,6 +1087,21 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         addPublicLayerBtn.setEnabled(false);
         executor.submit(() -> {
             ArcGISLayer layer = restClient.fetchLayerInfo(url);
+            // One-link, no-server (method 5): generate + install this layer's iconset on-device
+            // per AUTO-ICONSET-SPEC.md, so a shared CoT that references it renders here without a
+            // TAK Portal round trip. Federated — the UID/group/filenames match what every other
+            // platform independently produces for the same layer. Non-fatal: on failure the layer
+            // still loads, markers just keep default styling until the set exists. Runs on this
+            // background thread (AutoIconset.generate does its own blocking renderer fetch).
+            AutoIconset.Result iconset = null;
+            if (layer != null) {
+                try {
+                    iconset = AutoIconset.generate(pluginContext, restClient, url, null, null);
+                } catch (Exception e) {
+                    Log.w(TAG, "auto-iconset generation failed for " + url, e);
+                }
+            }
+            final AutoIconset.Result iconsetResult = iconset;
             mainHandler.post(() -> {
                 addPublicLayerBtn.setEnabled(true);
                 if (layer != null) {
@@ -1095,6 +1111,20 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     publicLayerUrlEdit.setText("");
                     hideOverlay();
                     navigatePage(1);
+                    if (iconsetResult != null) {
+                        Toast.makeText(pluginContext, "Icons ready: " + iconsetResult.group
+                                + " (" + iconsetResult.iconCount + ")", Toast.LENGTH_SHORT).show();
+                        // Self-render: if there's no styling config for this layer yet, synthesize
+                        // one from the just-generated icons so the markers show their real icons on
+                        // THIS device too (not only on devices that receive its CoT). We don't
+                        // overwrite an existing config (e.g. one from a scanned QR / TAK Portal).
+                        if (layerDisplayConfigs.get(url) == null) {
+                            layerDisplayConfigs.put(url, DisplayConfig.forAutoIcons(url,
+                                    iconsetResult.field, iconsetResult.singleIconPath,
+                                    iconsetResult.pathByValue));
+                            saveDisplayConfigs();
+                        }
+                    }
                     downloadLayer(layer);
                 } else {
                     Toast.makeText(pluginContext, "Could not load layer from URL",
@@ -1421,21 +1451,51 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void applyScannedDisplayConfig(DisplayConfig config) {
         Set<String> missing = getMissingIconsetUids(config);
-        if (!missing.isEmpty()) {
-            new AlertDialog.Builder(getMapView().getContext())
-                    .setTitle("Missing Icon Set" + (missing.size() > 1 ? "s" : ""))
-                    .setMessage("This layer's styling uses " + missing.size()
-                            + " custom icon set" + (missing.size() > 1 ? "s" : "")
-                            + " not installed on this device:\n\n" + String.join("\n", missing)
-                            + "\n\nUnmatched features will fall back to a default marker until "
-                            + "those icon sets are imported (Settings > Import Content). "
-                            + "Continue anyway, or stop and get the icon sets first?")
-                    .setPositiveButton("Continue", (d, w) -> applyDisplayConfigNow(config))
-                    .setNegativeButton("Stop", null)
-                    .show();
+        if (missing.isEmpty()) {
+            applyDisplayConfigNow(config);
             return;
         }
-        applyDisplayConfigNow(config);
+
+        // Missing custom iconset(s). If we know the source layer URL, regenerate them on-device
+        // (AUTO-ICONSET-SPEC.md / Phase A) instead of prompting: the federated generator reproduces
+        // the identical UID/group/filenames the config references, so the "missing" set becomes
+        // present locally with no server and no dialog. The zip is written to atak/iconsets/ and
+        // ATAK imports it asynchronously (REFRESH_ICONSET), so we proceed to apply — any briefly
+        // unmatched markers self-correct once the import lands (spec §0).
+        if (config.url != null && !config.url.isEmpty()) {
+            Toast.makeText(pluginContext, "Fetching icons for this layer…", Toast.LENGTH_SHORT).show();
+            final DisplayConfig cfg = config;
+            final String token = config.isPrivate ? authManager.getToken() : null;
+            executor.submit(() -> {
+                try {
+                    AutoIconset.generate(pluginContext, restClient, cfg.url, null, token);
+                } catch (Exception e) {
+                    Log.w(TAG, "regenerate missing iconset failed for " + cfg.url, e);
+                }
+                mainHandler.post(() -> applyDisplayConfigNow(cfg));
+            });
+            return;
+        }
+
+        // No source layer to regenerate from (e.g. a display-only v:1 config with no url) — this is
+        // the documented offline limitation (spec §10). Warn and let the operator decide.
+        showMissingIconsetDialog(config, missing);
+    }
+
+    /** The pre-existing "can't fix it automatically" prompt — now only the fallback when there's
+     * no source layer URL to regenerate the missing iconset(s) from (spec §10). */
+    private void showMissingIconsetDialog(DisplayConfig config, Set<String> missing) {
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Missing Icon Set" + (missing.size() > 1 ? "s" : ""))
+                .setMessage("This layer's styling uses " + missing.size()
+                        + " custom icon set" + (missing.size() > 1 ? "s" : "")
+                        + " not installed on this device:\n\n" + String.join("\n", missing)
+                        + "\n\nUnmatched features will fall back to a default marker until "
+                        + "those icon sets are imported (Settings > Import Content). "
+                        + "Continue anyway, or stop and get the icon sets first?")
+                .setPositiveButton("Continue", (d, w) -> applyDisplayConfigNow(config))
+                .setNegativeButton("Stop", null)
+                .show();
     }
 
     private void applyDisplayConfigNow(DisplayConfig config) {

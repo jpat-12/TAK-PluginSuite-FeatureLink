@@ -87,6 +87,20 @@ public class ArcGISRestClient {
     // -------------------------------------------------------------------------
 
     /**
+     * Fetches a URL's raw JSON response with {@code f=json} (and the token, if given) appended.
+     * Used by {@link AutoIconset} to read a layer's {@code drawingInfo.renderer} for on-device
+     * iconset generation. Blocking — call from a background thread. Returns null on transport
+     * failure; the returned object may itself carry an ArcGIS {@code error} the caller must check.
+     */
+    public JSONObject fetchJson(String url, String token) throws Exception {
+        if (url == null || url.isEmpty()) return null;
+        String full = url + (url.contains("?") ? "&" : "?") + "f=json"
+                + (token != null && !token.isEmpty() ? "&token=" + enc(token) : "");
+        String resp = httpGet(full, null);
+        return resp == null ? null : new JSONObject(resp);
+    }
+
+    /**
      * Fetches basic metadata about a Feature Service layer.
      */
     public ArcGISLayer fetchLayerInfo(String serviceUrl) {
