@@ -65,18 +65,23 @@ router.post("/", upload.array("icons", 200), async (req, res) => {
 
 /**
  * POST /api/featurelink/admin/custom-icons/from-arcgis
- * Body: { url, field?, token? }. Reads a FeatureServer layer's renderer, extracts its
+ * Body: { url, field?, token?, renderer? }. Reads a FeatureServer layer's renderer, extracts its
  * picture-marker (esriPMS) symbols, and registers them as an icon set whose uid/group/
  * filenames are computed per AUTO-ICONSET-SPEC.md — string-identical to what ATAK/WinTAK/
  * CloudTAK independently produce for the same layer. This is the automatic "one-link" hook:
  * the configurator calls it the moment a layer is loaded from a URL, not behind a button.
+ *
+ * `renderer`, when supplied, is used instead of re-fetching the layer's own default — the
+ * configurator sends this when the layer came from a Web Map with its own per-layer style
+ * override (§2.3), so extraction matches what's actually being imported rather than the
+ * service's generic default.
  */
 router.post("/from-arcgis", async (req, res) => {
   try {
-    const { url, field, token } = req.body || {};
+    const { url, field, token, renderer } = req.body || {};
     if (!url) return res.status(400).json({ ok: false, error: "A FeatureServer layer URL is required." });
     const actorUsername = req.authentikUser && req.authentikUser.username;
-    const result = await arcgisIconsetSvc.generateFromArcgis({ sourceUrl: url, field, token, actorUsername });
+    const result = await arcgisIconsetSvc.generateFromArcgis({ sourceUrl: url, field, token, actorUsername, renderer });
     if (!result.success) return res.status(400).json({ ok: false, error: result.error });
     res.json({
       ok: true,

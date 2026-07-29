@@ -212,9 +212,14 @@ function extractPmsEntries(renderer, fieldOverride) {
  * @param {string} [args.field]           renderer field override (else taken from the renderer)
  * @param {string} [args.token]           ArcGIS token for non-public layers
  * @param {string} [args.actorUsername]   who triggered it (manifest audit)
+ * @param {object} [args.renderer]        pre-resolved renderer JSON to use instead of re-fetching
+ *   the layer's own default — e.g. a Web Map's per-layer style override (spec §2.3: "The override
+ *   may change the renderer used for symbol extraction, but the naming source stays the
+ *   FeatureServer layer"). The caller (the configurator) already resolved which renderer applies;
+ *   re-fetching here would silently ignore that and extract from the wrong one.
  * @returns {Promise<{success:true, set, uid, group, canonicalUrl, iconCount} | {success:false, error}>}
  */
-async function generateFromArcgis({ sourceUrl, field, token, actorUsername } = {}) {
+async function generateFromArcgis({ sourceUrl, field, token, actorUsername, renderer: rendererOverride } = {}) {
   let canonicalUrl;
   try {
     canonicalUrl = canonicalizeUrl(sourceUrl);
@@ -222,6 +227,9 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername } = {
     return { success: false, error: err.message };
   }
 
+  // Naming (layer name -> group) still comes from the FeatureServer layer itself even when the
+  // renderer is an override — only the renderer source changes, per spec §2.3 — so this fetch
+  // always happens, purely for layerName below.
   const tokenQs = token ? `&token=${encodeURIComponent(token)}` : "";
   let meta;
   try {
@@ -231,7 +239,7 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername } = {
   }
 
   const layerName = meta.name || meta.serviceDescription || "Layer";
-  const renderer = meta.drawingInfo && meta.drawingInfo.renderer;
+  const renderer = rendererOverride || (meta.drawingInfo && meta.drawingInfo.renderer);
   const { field: driveField, entries, rendererType } = extractPmsEntries(renderer, field);
 
   if (!entries.length) {

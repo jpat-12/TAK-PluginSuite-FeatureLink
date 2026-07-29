@@ -1131,6 +1131,7 @@ let state = {
   savedDatasetName: null,
   savedDatasetGroup: '',  // set when this session came from a "keep together" Web Map import
   pickerSymbologyMode: null, // 'with' | 'none' — set by the Add Data picker, consumed once in processRows()
+  pickerRendererOverride: null, // Web Map per-layer style override, if any — read once in loadFromUrl()
   rows: [],
   fields: [],        // [{name, type, samples}]
   filtered: [],
@@ -1270,6 +1271,10 @@ async function loadFromUrl() {
   // import payload) — don't let auto-iconset detection below clobber it with its own guess.
   // Captured before processRows() consumes/nulls state.pendingConfig.
   const skipAutoIconset = !!state.pendingConfig;
+  // Web Map per-layer style override (Add Data picker), if this load came from one — captured
+  // now and cleared below so a later manual "Load" click (no picker involved) doesn't reuse it.
+  const rendererOverride = state.pickerRendererOverride;
+  state.pickerRendererOverride = null;
 
   let rawUrl = input.value.trim();
   if (!rawUrl) { showToast('Paste a FeatureLayer URL first'); return; }
@@ -1337,7 +1342,15 @@ async function loadFromUrl() {
     // status is hidden by renderFileChip, but set a success note just in case
     status.textContent = `✓ ${allFeatures.length.toLocaleString()} features loaded`;
 
-    if (!skipAutoIconset) await applyAutoSymbology(info, baseUrl);
+    if (!skipAutoIconset) {
+      // Prefer the Web Map's per-layer style override over the service's own default renderer
+      // when one was captured (AUTO-ICONSET-SPEC.md §2.3) — same canonical URL/naming either
+      // way, just a different source for the renderer JSON symbols get extracted from.
+      const effectiveInfo = rendererOverride
+        ? { ...info, drawingInfo: { renderer: rendererOverride } }
+        : info;
+      await applyAutoSymbology(effectiveInfo, baseUrl);
+    }
 
   } catch (err) {
     state.pendingConfig = null;
@@ -1409,10 +1422,15 @@ async function applyAutoSymbology(info, layerUrl) {
   let iconData = null;
   if (needsIcons) {
     try {
+      // Sends the exact renderer JSON already resolved above (service default, or a Web Map's
+      // per-layer override — see loadFromUrl()) rather than letting the server re-fetch its own
+      // copy from the canonicalized URL. Without this, a Web Map override with different esriPMS
+      // symbols than the service default would extract icons from the WRONG renderer server-side
+      // while this function builds value/field mappings from the right one — silently mismatched.
       const resp = await fetch('/api/featurelink/admin/custom-icons/from-arcgis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: layerUrl }),
+        body: JSON.stringify({ url: layerUrl, renderer }),
       });
       const data = await resp.json();
       if (data && data.ok) iconData = data;
@@ -3706,14 +3724,16 @@ function pickerChooseWebMap() {
   pickerShowStep('picker-step-webmap');
 }
 
-/** FeatureLayer path (single layer, pasted directly by the user in the main panel). */
+/** FeatureLayer path (single layer, pasted directly by the user in the main panel) — no Web
+ * Map involved, so there's no per-map renderer override to carry. */
 function pickerChooseFeatureLayer(symbologyMode) {
   closeSourcePicker();
-  pickerBeginFeatureLayerEntry(symbologyMode, '');
+  pickerBeginFeatureLayerEntry(symbologyMode, '', null);
 }
 
-function pickerBeginFeatureLayerEntry(symbologyMode, prefillUrl) {
+function pickerBeginFeatureLayerEntry(symbologyMode, prefillUrl, rendererOverride) {
   state.pickerSymbologyMode = symbologyMode; // 'with' | 'none' — read once loadFromUrl() finishes
+  state.pickerRendererOverride = rendererOverride || null; // Web Map per-layer style override, if any
   const urlInputEl = document.getElementById('layer-url-input');
   if (prefillUrl) {
     urlInputEl.value = prefillUrl;
@@ -3755,7 +3775,13 @@ function pickerParseWebMapInput(raw) {
 
 /** Flattens a Web Map's operationalLayers (including nested group layers) down to the
  * FeatureLayer entries this tool can actually add — anything with a FeatureServer/MapServer
- * layer URL. Table-only/basemap/tiled layers are skipped. */
+ * layer URL. Table-only/basemap/tiled layers are skipped.
+ *
+ * Also carries each layer's own `layerDefinition.drawingInfo.renderer`, when the Web Map
+ * restyles it differently than the service's own default (AUTO-ICONSET-SPEC.md §2.3: "The
+ * override may change the renderer used for symbol extraction, but the naming source stays
+ * the FeatureServer layer"). loadFromUrl()'s auto-symbology hook prefers this over re-fetching
+ * the service default when present. */
 function pickerExtractFeatureLayers(webmapJson) {
   const out = [];
   const walk = (layers, groupTitle) => {
@@ -3764,7 +3790,8 @@ function pickerExtractFeatureLayers(webmapJson) {
       if (!l.url) return;
       if (l.layerType && !/FeatureLayer/i.test(l.layerType)) return;
       if (!/\/(FeatureServer|MapServer)\/\d+\/?$/i.test(l.url)) return;
-      out.push({ title: l.title || groupTitle || 'Layer', url: l.url.replace(/\/+$/, '') });
+      const rendererOverride = (l.layerDefinition && l.layerDefinition.drawingInfo && l.layerDefinition.drawingInfo.renderer) || null;
+      out.push({ title: l.title || groupTitle || 'Layer', url: l.url.replace(/\/+$/, ''), rendererOverride });
     });
   };
   walk(webmapJson.operationalLayers, null);
@@ -3819,7 +3846,7 @@ async function pickerResolveWebMap() {
 function pickerBeginResolvedLayer(symbologyMode) {
   const layer = pickerResolvedLayers && pickerResolvedLayers[0];
   closeSourcePicker();
-  if (layer) pickerBeginFeatureLayerEntry(symbologyMode, layer.url);
+  if (layer) pickerBeginFeatureLayerEntry(symbologyMode, layer.url, layer.rendererOverride);
 }
 
 /** Web Map resolved to multiple FeatureLayers — bulk-imports each as its own dataset with
@@ -3839,6 +3866,8 @@ async function pickerBulkImport(together) {
     showToast(`Importing ${i + 1}/${layers.length}: ${layer.title}…`);
     try {
       clearFile();
+      state.pickerSymbologyMode = null;
+      state.pickerRendererOverride = layer.rendererOverride || null;
       document.getElementById('layer-url-input').value = layer.url;
       await loadFromUrl();
       if (!state.rows.length) throw new Error('no features returned');
