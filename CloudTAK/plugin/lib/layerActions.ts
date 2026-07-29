@@ -61,6 +61,16 @@ export async function fetchUserLayers(): Promise<void> {
         else merged.push(layer);
     }
     store.privateLayers.splice(0, store.privateLayers.length, ...merged);
+
+    // On sign-in, show each layer's feature count without downloading any of them: queryFeatureCount
+    // is a returnCountOnly query (no geometry/attributes pulled, no markers placed) — downloading
+    // stays an explicit per-layer action. Iterate the reactive store entries (not `merged`) so the
+    // count assignment goes through Vue's proxy and the list updates; run in parallel so a user with
+    // many layers isn't waiting on a serial chain. A failed count shows as -1 ("error") in the row.
+    await Promise.all(store.privateLayers.map(async (layer) => {
+        try { layer.featureCount = await rest.queryFeatureCount(layer.url, token); }
+        catch { layer.featureCount = -1; }
+    }));
 }
 
 export async function addPublicLayer(url: string): Promise<{ ok: boolean; message: string; layer?: ArcGISLayer }> {
