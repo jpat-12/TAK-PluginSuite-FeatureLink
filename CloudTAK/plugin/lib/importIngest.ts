@@ -119,6 +119,15 @@ export function startImportIngestScheduler(): void {
     if (timer) return;
     timer = setInterval(() => { void checkOnce().catch(reportSchedulerFailure); }, POLL_MS);
     void checkOnce().catch(reportSchedulerFailure); // don't wait a full minute for the first check
+
+    // Browser tabs throttle/suspend setInterval timers when backgrounded or the OS suspends the
+    // process (laptop sleep/lock) — the interval above can silently stop firing for long
+    // stretches, so a package shared while the tab was backgrounded previously only got picked
+    // up once the user manually reloaded the page. Re-checking on visibility regain catches it
+    // up as soon as the tab is looked at again, without needing a reload.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') void checkOnce().catch(reportSchedulerFailure);
+    });
 }
 
 export function stopImportIngestScheduler(): void {
