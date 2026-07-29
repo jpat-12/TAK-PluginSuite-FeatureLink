@@ -137,6 +137,12 @@ export function startImportIngestScheduler(): void {
     });
 }
 
+// Manual trigger for the settings-menu "Check for Shared Configs" button — lets the user force
+// an immediate check instead of waiting on the 60s interval (see startImportIngestScheduler()).
+export async function checkForSharedConfigsNow(): Promise<void> {
+    await checkOnce().catch(reportSchedulerFailure);
+}
+
 export function stopImportIngestScheduler(): void {
     if (timer) { clearInterval(timer); timer = null; }
 }

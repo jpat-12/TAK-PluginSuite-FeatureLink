@@ -15,6 +15,9 @@
                 <button class='fl-gear-btn' title='Settings' @click='showSettingsMenu = !showSettingsMenu'>⚙</button>
                 <div v-if='showSettingsMenu' class='fl-settings-backdrop' @click='showSettingsMenu = false'></div>
                 <div v-if='showSettingsMenu' class='fl-settings-menu'>
+                    <button class='fl-menu-item' :disabled='checkingNow' @click='onCheckForSharedConfigs'>
+                        {{ checkingNow ? 'Checking…' : 'Check for Shared Configs' }}
+                    </button>
                     <button class='fl-menu-item danger' @click='onClearAllLayers'>Clear All Layers</button>
                 </div>
             </div>
@@ -51,12 +54,14 @@ import AddLayerView from './AddLayerView.vue';
 import SendToLayerPicker from './SendToLayerPicker.vue';
 import { authState, isAuthenticated, getUsername } from '../lib/arcgisAuth.ts';
 import { clearAllLayers } from '../lib/layerActions.ts';
+import { checkForSharedConfigsNow } from '../lib/importIngest.ts';
 
 const tab = ref<'home' | 'layers' | 'pli'>('home');
 const showAccount = ref(false);
 const showAddLayer = ref(false);
 const showSend = ref(false);
 const showSettingsMenu = ref(false);
+const checkingNow = ref(false);
 
 const isAuthed = computed(() => { void authState.username; return isAuthenticated(); });
 const username = computed(() => getUsername());
@@ -69,6 +74,15 @@ async function onClearAllLayers(): Promise<void> {
     );
     if (!ok) return;
     await clearAllLayers();
+}
+
+// Lets the user force an immediate check instead of waiting on the 60s background poll (see
+// importIngest.ts) — useful right after sharing from ATAK rather than sitting around, or if a
+// tab that's been open a long time has had its timer throttled by the browser.
+async function onCheckForSharedConfigs(): Promise<void> {
+    checkingNow.value = true;
+    try { await checkForSharedConfigsNow(); }
+    finally { checkingNow.value = false; showSettingsMenu.value = false; }
 }
 </script>
 
@@ -100,6 +114,8 @@ async function onClearAllLayers(): Promise<void> {
     background: transparent; color: inherit; cursor: pointer; font-size: 12px;
 }
 .fl-menu-item:hover { background: #2a2a2a; }
+.fl-menu-item:disabled { opacity: .5; cursor: default; }
+.fl-menu-item:disabled:hover { background: transparent; }
 .fl-menu-item.danger { color: #ff5722; }
 .fl-tabs { display: flex; border-bottom: 1px solid #333; flex-shrink: 0; }
 .fl-tabs button {
