@@ -96,8 +96,14 @@ export async function removePrivateLayer(layer: ArcGISLayer): Promise<void> {
 
 export async function toggleLayerVisibility(layer: ArcGISLayer): Promise<void> {
     layer.visible = !layer.visible;
+    // Hiding shouldn't depend on a successful re-download — just tear down the placed markers
+    // directly. (Re-showing below re-downloads and re-adds them.)
+    if (!layer.visible) {
+        await removeLayerMarkers(layer.url);
+        return;
+    }
     const displayConfig = store.displayConfigs[layer.url] ?? null;
-    // Re-run the sync so markers actually appear/disappear rather than just flipping a flag.
+    // Re-run the sync so markers actually appear rather than just flipping a flag.
     const token = layer.type === 'private' ? await auth.getToken() : null;
     const mapping = displayConfig ? cotMappingOf(displayConfig.cm) : null;
     try {

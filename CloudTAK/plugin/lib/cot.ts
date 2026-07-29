@@ -97,8 +97,12 @@ export async function syncLayerMarkers(
 
     for (const f of features) {
         const uid = markerUid(layerUrl, f.uid);
-        nextUids.push(uid);
+        // When hidden, don't record the uid as present — leaving nextUids empty means the
+        // removal loop below tears down every previously-placed marker for this layer (that's
+        // what makes Hide actually clear the map, not just flip the eye icon). Re-showing
+        // re-downloads and re-adds them fresh.
         if (!visible) continue;
+        nextUids.push(uid);
 
         let color: number;
         let label = f.callsign;
