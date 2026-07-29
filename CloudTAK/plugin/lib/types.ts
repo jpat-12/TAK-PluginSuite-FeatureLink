@@ -14,6 +14,11 @@ export interface ArcGISLayer {
     url: string;
     type: LayerKind;
     access: LayerAccess;
+    // True only for a layer that came from the signed-in user's own "My ArcGIS Layers" browse
+    // list (searchUserLayers) — never set for a layer added by pasting a URL or imported from a
+    // share. Lets removePrivateLayer/removePublicLayer send it back to the browse list on
+    // removal instead of just discarding it, since it's still the user's own ArcGIS item.
+    ownedByMe: boolean;
     featureCount: number;
     lastSync: number;               // epoch ms; 0 = never synced
     downloadEnabled: boolean;
@@ -23,9 +28,9 @@ export interface ArcGISLayer {
     visible: boolean;
 }
 
-export function newLayer(name: string, url: string, type: LayerKind, access: LayerAccess = 'org'): ArcGISLayer {
+export function newLayer(name: string, url: string, type: LayerKind, access: LayerAccess = 'org', ownedByMe = false): ArcGISLayer {
     return {
-        name, url, type, access,
+        name, url, type, access, ownedByMe,
         featureCount: 0,
         lastSync: 0,
         downloadEnabled: false,

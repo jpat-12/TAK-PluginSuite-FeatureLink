@@ -34,7 +34,7 @@ export async function searchUserLayers(portalUrl: string, token: string, usernam
                 // used to decide which on-device section this layer lands in once downloaded.
                 const access = item.access === 'public' || item.access === 'org' || item.access === 'private'
                     ? item.access : 'private';
-                out.push(newLayer(item.title ?? 'Unnamed', item.url, 'private', access));
+                out.push(newLayer(item.title ?? 'Unnamed', item.url, 'private', access, true));
             }
         }
         return out;

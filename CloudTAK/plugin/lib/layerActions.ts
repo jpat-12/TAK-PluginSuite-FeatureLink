@@ -130,11 +130,24 @@ export async function addPublicLayer(url: string): Promise<{ ok: boolean; messag
     return { ok: true, message, layer };
 }
 
+// Sends an owned layer back to "My ArcGIS Layers" on removal instead of just discarding it —
+// it's still the user's own ArcGIS item, so this is what a manual Refresh would eventually
+// re-add anyway (fetchUserLayers only skips a URL that's still on-device or excluded); doing it
+// immediately here means the user doesn't have to remember to hit Refresh to get it back.
+function returnOwnedLayerToBrowse(layer: ArcGISLayer): void {
+    if (!layer.ownedByMe) return;
+    if (store.browseLayers.some(l => l.url === layer.url)) return;
+    layer.type = 'private';
+    layer.lastSync = 0;
+    store.browseLayers.push(layer);
+}
+
 export async function removePublicLayer(layer: ArcGISLayer): Promise<void> {
     const i = store.publicLayers.findIndex(l => l.url === layer.url);
     if (i !== -1) store.publicLayers.splice(i, 1);
     await removeLayerMarkers(layer.url);
     delete store.displayConfigs[layer.url];
+    returnOwnedLayerToBrowse(layer);
 }
 
 // Removes a "My ArcGIS Layers" browse-list entry. The layer still exists in the user's ArcGIS
@@ -151,12 +164,14 @@ export async function removeBrowseLayer(layer: ArcGISLayer): Promise<void> {
 
 // Removes an on-device Private Layers entry (downloaded from "My ArcGIS Layers", or shared to
 // you privately by another user/config import). Nothing to delete server-side — just hides it
-// and its markers on this device.
+// and its markers on this device. If it came from "My ArcGIS Layers" (layer.ownedByMe), it goes
+// back there instead of disappearing entirely — see returnOwnedLayerToBrowse().
 export async function removePrivateLayer(layer: ArcGISLayer): Promise<void> {
     const i = store.privateLayers.findIndex(l => l.url === layer.url);
     if (i !== -1) store.privateLayers.splice(i, 1);
     await removeLayerMarkers(layer.url);
     delete store.displayConfigs[layer.url];
+    returnOwnedLayerToBrowse(layer);
 }
 
 export async function toggleLayerVisibility(layer: ArcGISLayer): Promise<void> {
