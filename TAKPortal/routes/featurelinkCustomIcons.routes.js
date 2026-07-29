@@ -14,6 +14,7 @@ const multer = require("multer");
 
 const customIconsSvc = require("../services/featurelinkCustomIcons.service");
 const arcgisIconsetSvc = require("../services/featurelinkArcgisIconset.service");
+const datasetsSvc = require("../services/featurelinkDatasets.service");
 const { toSafeApiError } = require("../services/apiErrorPayload.service");
 
 const upload = multer({
@@ -118,7 +119,42 @@ router.get("/by-uid/:uid", (req, res) => {
   }
 });
 
-/** DELETE /api/featurelink/admin/custom-icons/:name */
+/**
+ * GET /api/featurelink/admin/custom-icons/usage — every icon set plus which saved datasets
+ * reference it, backing the Icon Sets manager's usage column and its delete confirmation.
+ * Registered BEFORE the /:name/:file catch-all so "usage" isn't read as a set name.
+ */
+router.get("/usage", (req, res) => {
+  try {
+    const sets = customIconsSvc.listCustomIconSets();
+    const records = datasetsSvc.listDatasets().map((d) => datasetsSvc.loadDataset(d.id)).filter(Boolean);
+    const usage = customIconsSvc.computeIconsetUsage(records);
+    res.json({
+      ok: true,
+      iconsets: sets.map((s) => ({
+        name: s.name,
+        uid: s.uid || null,
+        defaultGroup: s.defaultGroup || null,
+        iconCount: (s.icons || []).length,
+        source: s.source || "upload",
+        sourceUrl: s.sourceUrl || null,
+        created_by: s.created_by || null,
+        created_at: s.created_at || null,
+        usedBy: usage[s.name] || [],
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: toSafeApiError(err) });
+  }
+});
+
+/**
+ * DELETE /api/featurelink/admin/custom-icons/:name — pass ?force=1 to delete a set that saved
+ * datasets still reference. Without it, an in-use set returns 409 plus the referencing dataset
+ * list, so the confirmation can name them; the client-side prompt is a convenience, this is the
+ * actual guard (deleting an in-use set makes those configs fall back to default markers on
+ * every device that hasn't already installed the iconset).
+ */
 router.delete("/:name", (req, res) => {
   try {
     const sets = customIconsSvc.listCustomIconSets();
@@ -131,9 +167,44 @@ router.delete("/:name", (req, res) => {
       return res.status(403).json({ ok: false, error: "Only the uploader (or an admin) can delete this icon set." });
     }
 
+    const force = req.query.force === "1" || req.query.force === "true";
+    if (!force) {
+      const records = datasetsSvc.listDatasets().map((d) => datasetsSvc.loadDataset(d.id)).filter(Boolean);
+      const usedBy = (customIconsSvc.computeIconsetUsage(records)[entry.name]) || [];
+      if (usedBy.length) {
+        return res.status(409).json({
+          ok: false,
+          inUse: true,
+          usedBy,
+          error: `"${entry.name}" is still used by ${usedBy.length} saved config(s).`,
+        });
+      }
+    }
+
     const result = customIconsSvc.deleteCustomIconSet(req.params.name);
     if (!result.success) return res.status(404).json({ ok: false, error: result.error });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: toSafeApiError(err) });
+  }
+});
+
+/**
+ * GET /api/featurelink/admin/custom-icons/:name/download — the set repackaged as an
+ * ATAK-installable iconset zip (spec §7 layout), for handing to a device directly via
+ * Settings > Import Content.
+ *
+ * Can't be shadowed by the /:name/:file icon route below despite sharing its shape: every real
+ * icon file has an image extension (enforced by IMAGE_EXT_RE on upload), so a stored file named
+ * exactly "download" can't exist.
+ */
+router.get("/:name/download", (req, res) => {
+  try {
+    const result = customIconsSvc.buildIconsetZip(req.params.name);
+    if (!result.success) return res.status(404).json({ ok: false, error: result.error });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${result.fileName.replace(/[^a-zA-Z0-9._-]/g, "_")}"`);
+    res.send(result.buffer);
   } catch (err) {
     res.status(500).json({ ok: false, error: toSafeApiError(err) });
   }

@@ -92,6 +92,26 @@ network call it has to authenticate on its own.
   uploader or a `page.featurelink_configs` admin, same ownership pattern as
   datasets. See [`../CONFIG-FORMAT.md`](../CONFIG-FORMAT.md)'s "Custom icon
   sets" section for background on how ATAK resolves an iconset UID.
+- **Icon Sets manager** — the configurator's **🎨 Icon Sets** header button lists
+  every stored set with its icon count, resolved uid, where it came from
+  (auto-generated from an ArcGIS renderer vs. uploaded), and which saved configs
+  reference it. Two supporting endpoints:
+  - **`GET …/custom-icons/usage`** — sets plus their referencing datasets. Usage is
+    matched on both iconset *name* (the configurator's internal state) and *uid* (the
+    resolved `{uid}/{group}/{file}` usericonPath in `exported_config`), because an
+    auto-generated set referenced from a Web Map override appears only by uid.
+  - **`GET …/custom-icons/:name/download`** — repackages a stored set as an
+    ATAK-installable iconset zip ([`../AUTO-ICONSET-SPEC.md`](../AUTO-ICONSET-SPEC.md)
+    §7 layout) for direct install via ATAK's Settings ‣ Import Content. Written with a
+    small store-only zip writer (`fs`/`crypto` only — no new host dependency, same
+    constraint as the rest of this module); verified against Java's own
+    `ZipFile`/`ZipInputStream`, which is what ATAK's importer uses.
+
+  Deleting a set that saved configs still reference returns **409** with the
+  referencing dataset list unless `?force=1` is passed — the UI re-confirms naming
+  them, but the server check is the real guard, since deleting an in-use set makes
+  those configs fall back to plain default markers on any device that hasn't already
+  installed the iconset.
 - **`services/featurelinkArcgisIconset.service.js`** + two endpoints on the
   custom-icons router (**`POST /api/featurelink/admin/custom-icons/from-arcgis`**,
   **`GET …/by-uid/:uid`**) — the TAK Portal half of the cross-platform

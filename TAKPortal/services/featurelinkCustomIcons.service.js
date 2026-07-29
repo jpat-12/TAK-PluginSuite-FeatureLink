@@ -363,6 +363,229 @@ function getCustomIconPath(setName, fileName) {
   return fs.existsSync(p) ? p : null;
 }
 
+// -------------------------------------------------------------------------
+// Zip export (ATAK-installable iconset package)
+// -------------------------------------------------------------------------
+
+let CRC_TABLE = null;
+
+/** Standard CRC-32 (same polynomial zip uses). Hand-rolled rather than zlib.crc32() because
+ * that's only available from Node 20.12 and this module targets the Node 18 floor. */
+function crc32(buf) {
+  if (!CRC_TABLE) {
+    CRC_TABLE = new Int32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      CRC_TABLE[i] = c;
+    }
+  }
+  let crc = -1;
+  for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ buf[i]) & 0xff];
+  return (crc ^ -1) >>> 0;
+}
+
+/**
+ * Minimal store-only (compression method 0) zip writer — no new host dependency, matching this
+ * module's "fs/crypto only" constraint. Store-only is a fully valid zip that Java's
+ * ZipFile/ZipInputStream (what ATAK's importer uses) reads normally, and PNG payloads are already
+ * compressed so deflating them would buy almost nothing anyway.
+ *
+ * @param {{path:string, data:Buffer}[]} entries in the order they should appear in the archive
+ */
+function buildStoredZip(entries) {
+  const local = [];
+  const central = [];
+  let offset = 0;
+  const DOS_DATE = 0x21; // 1980-01-01: ((year-1980)<<9)|(month<<5)|day — fixed, so output is deterministic
+  const UTF8_FLAG = 0x0800;
+
+  for (const e of entries) {
+    const nameBuf = Buffer.from(e.path, "utf8");
+    const crc = crc32(e.data);
+    const size = e.data.length;
+
+    const lfh = Buffer.alloc(30);
+    lfh.writeUInt32LE(0x04034b50, 0); // local file header signature
+    lfh.writeUInt16LE(20, 4); // version needed
+    lfh.writeUInt16LE(UTF8_FLAG, 6);
+    lfh.writeUInt16LE(0, 8); // method: stored
+    lfh.writeUInt16LE(0, 10); // mod time
+    lfh.writeUInt16LE(DOS_DATE, 12);
+    lfh.writeUInt32LE(crc, 14);
+    lfh.writeUInt32LE(size, 18); // compressed size == uncompressed (stored)
+    lfh.writeUInt32LE(size, 22);
+    lfh.writeUInt16LE(nameBuf.length, 26);
+    lfh.writeUInt16LE(0, 28); // extra field length
+    local.push(lfh, nameBuf, e.data);
+
+    const cdh = Buffer.alloc(46);
+    cdh.writeUInt32LE(0x02014b50, 0); // central directory header signature
+    cdh.writeUInt16LE(20, 4); // version made by
+    cdh.writeUInt16LE(20, 6); // version needed
+    cdh.writeUInt16LE(UTF8_FLAG, 8);
+    cdh.writeUInt16LE(0, 10); // method: stored
+    cdh.writeUInt16LE(0, 12); // mod time
+    cdh.writeUInt16LE(DOS_DATE, 14);
+    cdh.writeUInt32LE(crc, 16);
+    cdh.writeUInt32LE(size, 20);
+    cdh.writeUInt32LE(size, 24);
+    cdh.writeUInt16LE(nameBuf.length, 28);
+    cdh.writeUInt16LE(0, 30); // extra
+    cdh.writeUInt16LE(0, 32); // comment
+    cdh.writeUInt16LE(0, 34); // disk number start
+    cdh.writeUInt16LE(0, 36); // internal attrs
+    cdh.writeUInt32LE(0, 38); // external attrs
+    cdh.writeUInt32LE(offset, 42); // relative offset of local header
+    central.push(cdh, nameBuf);
+
+    offset += lfh.length + nameBuf.length + size;
+  }
+
+  const cdBuf = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); // end of central directory signature
+  eocd.writeUInt16LE(0, 4); // this disk
+  eocd.writeUInt16LE(0, 6); // disk with cd start
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cdBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20); // comment length
+
+  return Buffer.concat([...local, cdBuf, eocd]);
+}
+
+/**
+ * Packages a stored set back into an ATAK-installable iconset zip (AUTO-ICONSET-SPEC.md §7
+ * layout: iconset.xml at root + one "{group}/{filename}" entry per icon), so it can be handed
+ * to a device directly (ATAK Settings > Import Content) rather than only reached through a
+ * display config.
+ *
+ * Entry paths use each icon's *real* ATAK group/filename (groups/atakNames), not the sanitized
+ * local storage name — ATAK derives group/filename from the zip entry path verbatim (§0.2), so
+ * these paths are what make the downloaded zip resolve to the same iconsetpath the configs
+ * reference.
+ *
+ * iconset.xml carries only name+uid and per-icon `name` — NO `group` attribute: ATAK's strict
+ * SimpleXML parser rejects the whole file over an unrecognized attribute and silently falls back
+ * to hashing the zip, which would change the uid. See §7 and AutoIconset.buildIconsetXml().
+ * Omitted entirely for a set with no uid (a loose non-zip upload), which is exactly the case
+ * where ATAK's zip-hash fallback is the intended behavior.
+ *
+ * @returns {{success:true, fileName:string, buffer:Buffer} | {success:false, error:string}}
+ */
+function buildIconsetZip(setName) {
+  const name = cleanSetName(setName);
+  if (!name) return { success: false, error: "not found" };
+  const set = readManifest().find((s) => s.name === name);
+  if (!set) return { success: false, error: "not found" };
+
+  const entries = [];
+  const iconEntries = [];
+  for (const localName of set.icons || []) {
+    const p = path.join(CUSTOM_ICONS_DIR, name, localName);
+    if (!fs.existsSync(p)) continue;
+    const group = (set.groups && set.groups[localName]) || set.defaultGroup || OTHER_GROUP;
+    const atakName = (set.atakNames && set.atakNames[localName]) || localName;
+    iconEntries.push({ path: `${group}/${atakName}`, data: fs.readFileSync(p), atakName });
+  }
+  if (!iconEntries.length) return { success: false, error: "This icon set has no readable icon files." };
+
+  if (set.uid) {
+    const xml =
+      '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      `<iconset name="${xmlAttr(name)}" uid="${xmlAttr(set.uid)}"` +
+      (set.defaultGroup ? ` defaultGroup="${xmlAttr(set.defaultGroup)}"` : "") +
+      ' version="1">\n' +
+      iconEntries.map((e) => `  <icon name="${xmlAttr(e.atakName)}"/>\n`).join("") +
+      "</iconset>\n";
+    entries.push({ path: "iconset.xml", data: Buffer.from(xml, "utf8") });
+  }
+  entries.push(...iconEntries.map((e) => ({ path: e.path, data: e.data })));
+
+  return {
+    success: true,
+    fileName: `${name}.zip`,
+    buffer: buildStoredZip(entries),
+  };
+}
+
+function xmlAttr(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// -------------------------------------------------------------------------
+// Usage cross-reference (which saved datasets reference which icon set)
+// -------------------------------------------------------------------------
+
+/**
+ * Every iconset name and uid a single saved dataset record refers to, across both the
+ * configurator's internal state (state.cfg.symbology) and the plugin-facing exported_config
+ * (compact "sym" shape). Both are checked because a set can be referenced by *name* in the
+ * internal state while the exported config only carries the resolved "{uid}/{group}/{file}"
+ * usericonPath — matching either one counts as in-use.
+ */
+function collectIconsetRefs(record) {
+  const names = new Set();
+  const uids = new Set();
+  const addName = (n) => { if (n) names.add(String(n)); };
+  /** A usericonPath's first segment is the iconset uid (spec §5.4). */
+  const addPath = (p) => {
+    if (!p) return;
+    const first = String(p).split("/")[0];
+    if (first) uids.add(first);
+  };
+
+  const s = (((record.state || {}).cfg) || {}).symbology || {};
+  addName((s.icon || {}).iconset);
+  (((s.advanced || {}).valueSymbols) || []).forEach((v) => addName((v.symbol || {}).iconset));
+  (((s.advanced || {}).rules) || []).forEach((r) => addName((r.symbol || {}).iconset));
+
+  const ec = record.exported_config || {};
+  const sym = ec.sym || {};
+  addName(sym.is);
+  addPath(sym.up);
+  (sym.vs || []).forEach((v) => { addName(v.is); addPath(v.up); });
+  (sym.r || []).forEach((r) => { addName(r.is); addPath(r.up); });
+  if (ec.rendererOverride) {
+    if (ec.rendererOverride.uid) uids.add(String(ec.rendererOverride.uid));
+    addName(ec.rendererOverride.group);
+  }
+
+  return { names, uids };
+}
+
+/**
+ * Maps each custom icon set to the saved datasets using it — backs the "this set is in use"
+ * confirmation before a delete, and the usage column in the Icon Sets manager.
+ *
+ * Required as an argument rather than imported so this service keeps no dependency on the
+ * datasets service (callers already hold it).
+ *
+ * @param {Array} datasetRecords full dataset records (need .state and .exported_config)
+ * @returns {Object<string, {id:string,name:string}[]>} keyed by icon set name
+ */
+function computeIconsetUsage(datasetRecords) {
+  const sets = readManifest();
+  const usage = {};
+  for (const set of sets) usage[set.name] = [];
+
+  for (const rec of datasetRecords || []) {
+    const { names, uids } = collectIconsetRefs(rec);
+    for (const set of sets) {
+      if (names.has(set.name) || (set.uid && uids.has(set.uid))) {
+        usage[set.name].push({ id: rec.id, name: rec.name || "Untitled" });
+      }
+    }
+  }
+  return usage;
+}
+
 module.exports = {
   listCustomIconSets,
   addCustomIcons,
@@ -370,4 +593,6 @@ module.exports = {
   findSetByUid,
   deleteCustomIconSet,
   getCustomIconPath,
+  buildIconsetZip,
+  computeIconsetUsage,
 };

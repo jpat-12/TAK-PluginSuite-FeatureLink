@@ -818,12 +818,12 @@
     }
 
     /* ── Add Data / source-picker modal ── */
-    #source-picker-overlay {
+    #source-picker-overlay, #iconset-mgr-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,.55);
       display: none; align-items: center; justify-content: center;
       z-index: 500; padding: 20px;
     }
-    #source-picker-overlay.open { display: flex; }
+    #source-picker-overlay.open, #iconset-mgr-overlay.open { display: flex; }
     .picker-modal {
       background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
       box-shadow: var(--shadow); width: 100%; max-width: 640px; max-height: 90vh;
@@ -867,6 +867,31 @@
     }
     header button.add-data-btn:hover { border-color: var(--accent); }
 
+    /* ── Icon Sets manager modal ── */
+    .iconset-row {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 12px 0; border-bottom: 1px solid var(--border);
+    }
+    .iconset-row:last-child { border-bottom: none; }
+    .iconset-row .isr-main { flex: 1; min-width: 0; }
+    .iconset-row .isr-name { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
+    .iconset-row .isr-meta { font-size: 11px; color: var(--text-muted); line-height: 1.5; word-break: break-all; }
+    .iconset-row .isr-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .iconset-row .isr-actions button {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      padding: 5px 10px; border-radius: var(--radius); font-size: 11px; font-weight: 600; cursor: pointer;
+      white-space: nowrap;
+    }
+    .iconset-row .isr-actions button:hover { border-color: var(--accent); }
+    .iconset-row .isr-actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
+    .isr-badge {
+      display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px;
+      border-radius: 20px; margin-left: 6px; vertical-align: middle;
+    }
+    .isr-badge.linked { background: var(--accent-green); color: #fff; }
+    .isr-badge.unlinked { background: var(--warn); color: #fff; }
+    .isr-badge.inuse { background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); }
+
     /* Responsive collapse */
     @media (max-width: 900px) {
       .panel-left { width: 240px; }
@@ -892,6 +917,7 @@
   <span class="saved-badge" id="saved-name-badge" title="Currently editing this saved config"></span>
   <span class="spacer"></span>
   <button class="add-data-btn" type="button" onclick="openSourcePicker()">+ Add Data</button>
+  <button class="add-data-btn" type="button" onclick="openIconsetManager()">&#127912; Icon Sets</button>
   <a class="admin-link-btn" href="/featurelink-configs">&#128194; Saved Configs</a>
   <button class="save-btn" id="save-btn" disabled onclick="saveDataset()">
     &#128190; Save
@@ -1019,6 +1045,26 @@
 </section>
 
 <div id="toast"></div>
+
+<!-- ── Icon Sets manager modal ── -->
+<div id="iconset-mgr-overlay">
+  <div class="picker-modal" style="max-width: 760px">
+    <div style="display:flex; align-items:flex-start; gap:12px">
+      <div style="flex:1">
+        <h2>Icon Sets</h2>
+        <div class="picker-sub">
+          Custom icon sets stored on TAK Portal — generated automatically from a layer's ArcGIS
+          renderer, or uploaded by hand. Download one to install it on a device directly
+          (ATAK: Settings &rsaquo; Import Content).
+        </div>
+      </div>
+      <button type="button" class="picker-card" style="padding:6px 12px; font-size:12px; font-weight:600; flex:0 0 auto"
+              onclick="closeIconsetManager()">Close</button>
+    </div>
+    <div id="iconset-mgr-status" class="picker-status"></div>
+    <div id="iconset-mgr-list"></div>
+  </div>
+</div>
 
 <!-- ── Add Data / source-picker modal ── -->
 <div id="source-picker-overlay">
@@ -3705,6 +3751,129 @@ function scheduleQRRefresh() {
   if (!state.rows.length) return;
   clearTimeout(qrDebounce);
   qrDebounce = setTimeout(generateQR, 600);
+}
+
+// ══════════════════════════════════════════
+//  Icon Sets manager
+// ══════════════════════════════════════════
+// Lists every custom icon set on TAK Portal with what references it, and offers download
+// (repackaged as an ATAK-installable zip, spec §7) or delete. Usage comes from the server
+// (/usage) rather than being inferred here, since it has to scan every saved dataset's stored
+// config — and the same check re-runs server-side on delete, so the confirmation below is a
+// convenience, not the actual guard (see the DELETE route's 409/force handling).
+
+function openIconsetManager() {
+  document.getElementById('iconset-mgr-overlay').classList.add('open');
+  loadIconsetManager();
+}
+function closeIconsetManager() {
+  document.getElementById('iconset-mgr-overlay').classList.remove('open');
+}
+
+async function loadIconsetManager() {
+  const listEl = document.getElementById('iconset-mgr-list');
+  const statusEl = document.getElementById('iconset-mgr-status');
+  statusEl.className = 'picker-status';
+  statusEl.textContent = 'Loading…';
+  listEl.innerHTML = '';
+  try {
+    const r = await fetch(CUSTOM_ICONS_BASE + 'usage');
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'could not load icon sets');
+    statusEl.textContent = '';
+    renderIconsetManager(data.iconsets || []);
+  } catch (e) {
+    statusEl.className = 'picker-status error';
+    statusEl.textContent = `✗ ${e.message}`;
+  }
+}
+
+function renderIconsetManager(sets) {
+  const listEl = document.getElementById('iconset-mgr-list');
+  if (!sets.length) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:12px 0">'
+      + 'No custom icon sets yet. They\'re created automatically when you add a layer whose ArcGIS '
+      + 'renderer uses picture-marker icons, or you can upload one from any icon picker.</div>';
+    return;
+  }
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  listEl.innerHTML = sets.map(s => {
+    // No uid == a loose (non-zip) image upload: previews here, but ATAK can't resolve it to an
+    // on-device iconset, so markers fall back to default styling. Worth surfacing plainly.
+    const linked = s.uid
+      ? '<span class="isr-badge linked">Linked</span>'
+      : '<span class="isr-badge unlinked">Preview only</span>';
+    const usedBy = s.usedBy || [];
+    const usage = usedBy.length
+      ? `<span class="isr-badge inuse">Used by ${usedBy.length}</span>`
+      : '';
+    const usageLine = usedBy.length
+      ? `<div class="isr-meta">Used by: ${usedBy.map(u => esc(u.name)).join(', ')}</div>`
+      : '<div class="isr-meta">Not referenced by any saved config</div>';
+    const origin = s.source === 'arcgis-renderer'
+      ? `Auto-generated from ${esc(s.sourceUrl || 'an ArcGIS layer')}`
+      : 'Uploaded manually';
+    return `
+      <div class="iconset-row">
+        <div class="isr-main">
+          <div class="isr-name">${esc(s.name)}${linked}${usage}</div>
+          <div class="isr-meta">${s.iconCount} icon${s.iconCount === 1 ? '' : 's'} · ${origin}</div>
+          ${s.uid ? `<div class="isr-meta">uid: ${esc(s.uid)}</div>` : ''}
+          ${usageLine}
+        </div>
+        <div class="isr-actions">
+          <button type="button" onclick="downloadIconset(${JSON.stringify(s.name)})">Download</button>
+          <button type="button" class="danger" onclick="deleteIconsetFromManager(${JSON.stringify(s.name)})">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function downloadIconset(name) {
+  // Plain navigation rather than fetch+blob so the browser handles the attachment download
+  // (and the session cookie rides along exactly like any other portal download link).
+  window.location.href = CUSTOM_ICONS_BASE + encodeURIComponent(name) + '/download';
+}
+
+async function deleteIconsetFromManager(name) {
+  if (!confirm(`Delete icon set "${name}"?\n\nThis removes its stored images from TAK Portal. `
+      + `Devices that already installed it keep their copy.`)) return;
+
+  const statusEl = document.getElementById('iconset-mgr-status');
+  try {
+    let r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name), { method: 'DELETE' });
+    let data = await r.json();
+
+    // 409 == still referenced by saved configs. Re-confirm naming them, then force.
+    if (r.status === 409 && data.inUse) {
+      const names = (data.usedBy || []).map(u => u.name).join('\n  • ');
+      const proceed = confirm(
+        `"${name}" is still used by ${data.usedBy.length} saved config(s):\n\n  • ${names}\n\n`
+        + `Deleting it means those configs' markers fall back to plain default styling on any `
+        + `device that hasn't already installed this icon set.\n\nDelete anyway?`);
+      if (!proceed) return;
+      r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name) + '?force=1', { method: 'DELETE' });
+      data = await r.json();
+    }
+
+    if (!data.ok) throw new Error(data.error || 'delete failed');
+
+    // Drop it from the in-memory picker manifest too, and clear any now-dangling selection,
+    // so the icon pickers don't keep offering a set that no longer exists.
+    await refreshCustomIconsets();
+    if (state.cfg.symbology.icon.iconset === name) {
+      state.cfg.symbology.icon.iconset = '';
+      state.cfg.symbology.icon.icon = '';
+    }
+    renderCurrentStage();
+    loadIconsetManager();
+    showToast(`Deleted icon set "${name}"`);
+  } catch (e) {
+    statusEl.className = 'picker-status error';
+    statusEl.textContent = `✗ ${e.message}`;
+  }
 }
 
 // ══════════════════════════════════════════
