@@ -1337,7 +1337,7 @@ async function loadFromUrl() {
     // status is hidden by renderFileChip, but set a success note just in case
     status.textContent = `✓ ${allFeatures.length.toLocaleString()} features loaded`;
 
-    if (!skipAutoIconset) await applyAutoIconset(baseUrl);
+    if (!skipAutoIconset) await applyAutoSymbology(info, baseUrl);
 
   } catch (err) {
     state.pendingConfig = null;
@@ -1351,60 +1351,150 @@ async function loadFromUrl() {
   }
 }
 
+// Reverse of SHAPE_TO_ESRI_SMS (defined later in this file, under Export) — kept as its own
+// small local map here rather than sharing, since a forward reference to a later `const` in
+// the same top-level scope only works because nothing calls into this before the whole
+// script has finished its first pass (see that const's own definition for why that's safe).
+const ESRI_SMS_TO_SHAPE = {
+  esriSMSCircle: 'circle', esriSMSSquare: 'square', esriSMSDiamond: 'diamond',
+  esriSMSTriangle: 'triangle', esriSMSCross: 'cross', esriSMSX: 'x',
+};
+
+function esriColorToHex(c) {
+  if (!Array.isArray(c)) return '#888888';
+  const toHex = n => Math.max(0, Math.min(255, n | 0)).toString(16).padStart(2, '0');
+  return `#${toHex(c[0])}${toHex(c[1])}${toHex(c[2])}`;
+}
+
+/** esriSMS (colored simple-marker) symbol -> this tool's shape-symbol shape. Needs no server
+ * round trip — everything it needs is already in the layer's own `?f=json` metadata. */
+function shapeSymbolFromEsriSms(symbol) {
+  const c = symbol.color || [136, 136, 136, 255];
+  return {
+    mode: 'shape',
+    color: esriColorToHex(c),
+    shape: ESRI_SMS_TO_SHAPE[symbol.style] || 'circle',
+    size: symbol.size || 8,
+    opacity: c.length > 3 ? c[3] / 255 : 1,
+  };
+}
+
 /**
- * Auto-iconset, one-link hook (AUTO-ICONSET-SPEC.md): the moment a FeatureLayer is loaded
- * from a URL — not behind a button — ask TAK Portal to extract any picture-marker (esriPMS)
- * symbols from the layer's own renderer and register them as a deterministic cross-platform
- * icon set (ATAK/WinTAK/CloudTAK independently reproduce the same {uid}/{group}/{filename}
- * for the same layer, see the spec). If that succeeds, apply the matching icon symbology to
- * state.cfg automatically instead of leaving the plain default marker — this is what makes
- * an "Add Data" import (with or without manually visiting the Symbology tab) come in already
- * styled like its ArcGIS source. A layer whose renderer only has colored-shape (esriSMS)
- * symbols has nothing for this endpoint to extract; it fails harmlessly and the default
- * marker (already set by processRows()) is left alone.
+ * Auto symbology, one-link hook (AUTO-ICONSET-SPEC.md's sibling for the non-icon case): the
+ * moment a FeatureLayer is loaded from a URL — not behind a button — read its own ArcGIS
+ * renderer (already fetched as `info` by the caller) and apply matching display-config
+ * symbology automatically instead of leaving the plain default marker. Two symbol families:
+ *   - esriSMS (colored shapes) — the common case — built directly client-side, no extra
+ *     request needed.
+ *   - esriPMS (picture markers) — asks TAK Portal's from-arcgis endpoint to extract the
+ *     embedded images and register them as a deterministic cross-platform icon set (spec),
+ *     only when the renderer actually has one.
+ * A renderer can mix both per value; each entry is converted by whichever family its own
+ * symbol is. classBreaks-with-icons is a known, documented gap (spec §3, "uncommon") — icons
+ * still get registered for sharing via the endpoint, just not auto-assigned per range here.
  */
-async function applyAutoIconset(layerUrl) {
-  let data;
-  try {
-    const resp = await fetch('/api/featurelink/admin/custom-icons/from-arcgis', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: layerUrl }),
-    });
-    data = await resp.json();
-  } catch (e) {
-    console.warn('Auto-iconset request failed:', e);
-    return;
+async function applyAutoSymbology(info, layerUrl) {
+  const renderer = info && info.drawingInfo && info.drawingInfo.renderer;
+  if (!renderer || typeof renderer !== 'object') return;
+
+  const rawType = renderer.type || 'simple';
+  const type = /^uniqueValue/i.test(rawType) ? 'uniqueValue' : /^classBreaks/i.test(rawType) ? 'classBreaks' : 'simple';
+  const isPms = sym => sym && sym.type === 'esriPMS';
+
+  const needsIcons =
+    (type === 'uniqueValue' && (renderer.uniqueValueInfos || []).some(i => isPms(i.symbol)))
+    || (type === 'simple' && isPms(renderer.symbol))
+    || isPms(renderer.defaultSymbol);
+
+  let iconData = null;
+  if (needsIcons) {
+    try {
+      const resp = await fetch('/api/featurelink/admin/custom-icons/from-arcgis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: layerUrl }),
+      });
+      const data = await resp.json();
+      if (data && data.ok) iconData = data;
+    } catch (e) { console.warn('Auto-iconset request failed:', e); }
+    // Make the freshly-registered set available to resolveUsericonPath()/the icon picker
+    // before touching state.cfg, or the QR/export builders below would resolve a null path.
+    if (iconData) { if (!iconManifest) await loadManifest(); else await refreshCustomIconsets(); }
   }
-  if (!data || !data.ok) return; // no esriPMS symbols on this renderer — nothing to apply
+  const iconGroup = iconData && iconData.group;
+  const valueToFilename = new Map((iconData && iconData.valueMap || []).map(v => [String(v.value), v.filename]));
 
-  // Make the freshly-registered set available to resolveUsericonPath()/the icon picker
-  // before touching state.cfg, or the QR/export builders below would resolve a null usericonPath.
-  if (!iconManifest) await loadManifest();
-  else await refreshCustomIconsets();
-
-  const group = data.group;
-  if (data.valueMap && data.valueMap.length) {
-    state.cfg.symbology.type = 'advanced';
-    state.cfg.symbology.advanced.field = data.field || '';
-    state.cfg.symbology.advanced.valueSymbols = data.valueMap.map(v => ({
-      value: v.value, count: 0,
-      symbol: { mode: 'icon', iconset: group, icon: v.filename, size: 24, opacity: 1 },
-    }));
-    if (data.defaultFilename) {
-      state.cfg.symbology.advanced.defaultSymbol = { mode: 'icon', iconset: group, icon: data.defaultFilename, size: 24, opacity: 1 };
+  const defaultSymbolFor = (symbol) => {
+    if (isPms(symbol)) {
+      return iconGroup && iconData.defaultFilename
+        ? { mode: 'icon', iconset: iconGroup, icon: iconData.defaultFilename, size: 24, opacity: 1 }
+        : null;
     }
-  } else if (data.defaultFilename) {
-    // Single-symbol renderer — one icon for every feature, no per-value mapping.
-    state.cfg.symbology.type = 'icon';
-    state.cfg.symbology.icon = { iconset: group, icon: data.defaultFilename, size: 24, opacity: 1 };
+    return symbol && symbol.type === 'esriSMS' ? shapeSymbolFromEsriSms(symbol) : null;
+  };
+
+  let matched = 0;
+
+  if (type === 'uniqueValue') {
+    const valueSymbols = [];
+    for (const uv of renderer.uniqueValueInfos || []) {
+      let symbol = null;
+      if (isPms(uv.symbol)) {
+        const filename = iconGroup && valueToFilename.get(String(uv.value));
+        if (filename) symbol = { mode: 'icon', iconset: iconGroup, icon: filename, size: 24, opacity: 1 };
+      } else if (uv.symbol && uv.symbol.type === 'esriSMS') {
+        symbol = shapeSymbolFromEsriSms(uv.symbol);
+      }
+      if (symbol) valueSymbols.push({ value: uv.value, count: 0, symbol });
+    }
+    if (!valueSymbols.length) return; // nothing usable came out of this renderer
+
+    state.cfg.symbology.type = 'advanced';
+    state.cfg.symbology.advanced.field = renderer.field1 || renderer.field || '';
+    state.cfg.symbology.advanced.valueSymbols = valueSymbols;
+    const defaultSymbol = defaultSymbolFor(renderer.defaultSymbol);
+    if (defaultSymbol) state.cfg.symbology.advanced.defaultSymbol = defaultSymbol;
+    matched = valueSymbols.length;
+
+  } else if (type === 'classBreaks') {
+    const breaks = [];
+    for (const cb of renderer.classBreakInfos || []) {
+      if (cb.symbol && cb.symbol.type === 'esriSMS') {
+        breaks.push({
+          min: cb.classMinValue, max: cb.classMaxValue,
+          color: esriColorToHex(cb.symbol.color), label: cb.label || '',
+        });
+      }
+    }
+    if (!breaks.length) return; // esriPMS class-break icons: known gap, not auto-assigned here
+    state.cfg.symbology.type = 'classBreaks';
+    state.cfg.symbology.field = renderer.field || '';
+    state.cfg.symbology.classBreaks = breaks;
+    matched = breaks.length;
+
   } else {
-    return; // set registered but nothing usable came back to auto-assign
+    // simple / single-symbol renderer
+    if (isPms(renderer.symbol) && iconGroup && iconData.defaultFilename) {
+      state.cfg.symbology.type = 'icon';
+      state.cfg.symbology.icon = { iconset: iconGroup, icon: iconData.defaultFilename, size: 24, opacity: 1 };
+      matched = 1;
+    } else if (renderer.symbol && renderer.symbol.type === 'esriSMS') {
+      const s = shapeSymbolFromEsriSms(renderer.symbol);
+      state.cfg.symbology.type = 'simple';
+      state.cfg.symbology.simple = {
+        color: s.color,
+        outlineColor: (renderer.symbol.outline && renderer.symbol.outline.color) ? esriColorToHex(renderer.symbol.outline.color) : '#ffffff',
+        size: s.size, shape: s.shape, opacity: s.opacity,
+      };
+      matched = 1;
+    } else {
+      return;
+    }
   }
 
   renderAllTabs();
   scheduleQRRefresh();
-  showToast(`Auto-matched ${data.iconCount} icon${data.iconCount === 1 ? '' : 's'} from the layer's renderer`);
+  showToast(`Symbology auto-matched from the layer's renderer (${matched} ${type === 'uniqueValue' ? 'value' : type === 'classBreaks' ? 'range' : 'symbol'}${matched === 1 ? '' : 's'})`);
 }
 
 // ══════════════════════════════════════════
