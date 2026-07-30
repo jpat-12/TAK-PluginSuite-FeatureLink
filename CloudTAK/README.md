@@ -17,8 +17,8 @@ several ATAK-specific mechanisms don't have a direct equivalent and were adapted
 |---|---|
 | Device GPS → PLI layer (`MapView.getSelfMarker()`) | CloudTAK's own CoT self-marker position (best-effort; see **Known limitation** below) |
 | Radial (long-press) menu → "Send to Feature Layer" | **Send Item to Feature Layer** picker in the plugin panel — pick an on-screen item, pick a layer, Send |
-| QR code scan/generate (ZXing camera) | Dropped. Layer/PLI-endpoint sharing is download-`.featurelink.json` / paste-JSON / upload-`.json` instead |
-| ATAK Mission Package send-to-contact | The share button downloads a `<name>.featurelink.json` file to hand off by any channel. An in-app send to a picked TAK contact (ATAK/WinTAK/CloudTAK) is fully designed against CloudTAK's `/api/marti/package` + contacts API but not yet built — see [`docs/CLOUDTAK-SHARE-DESIGN.md`](../docs/CLOUDTAK-SHARE-DESIGN.md) |
+| QR code scan/generate (ZXing camera) | Dropped. Layer/PLI-endpoint sharing is download-`.featurelinkshare` / paste-JSON / upload-`.json` instead |
+| ATAK Mission Package send-to-contact | The share button downloads a `<name>.featurelinkshare` file to hand off by any channel. An in-app send to a picked TAK contact (ATAK/WinTAK/CloudTAK) is fully designed against CloudTAK's `/api/marti/package` + contacts API but not yet built — see [`docs/CLOUDTAK-SHARE-DESIGN.md`](../docs/CLOUDTAK-SHARE-DESIGN.md) |
 | ATAK Mission Package **received** by a CloudTAK session | Auto-ingested from CloudTAK's Import Manager — see **Receiving ATAK/WinTAK layer shares** below |
 | `featurelink://import` deep link, native OAuth WebView | Dropped |
 | OAuth PKCE sign-in, `featurelink://auth` custom-scheme redirect | Same OAuth2 PKCE flow and same ArcGIS OAuth app/client ID, redirecting to ArcGIS's hosted login page in a popup — but the redirect_uri is a fixed relay page instead of a custom URI scheme, so it works unmodified on every CloudTAK deployment (see **Authentication** below) |
@@ -39,7 +39,7 @@ ATAK Mission Package — there's no CloudTAK-aware send path. Sent to a CloudTAK
 package lands in CloudTAK's own generic **Import Manager**, which tries to build a map tileset
 from it and fails ("No features found… Cannot create tileset") since it's a small JSON config,
 not spatial data. The uploaded `.zip` survives that failure, and inside it is a
-`<name>.featurelink.json` file.
+`<name>.featurelinkshare` file.
 
 `lib/importIngest.ts` polls CloudTAK's `/api/import` every 60s for packages named like ATAK's
 share convention (`FeatureLink - <layer>`), downloads the raw zip, extracts that file

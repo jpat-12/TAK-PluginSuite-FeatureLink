@@ -87,16 +87,21 @@ async function doRefreshPrivate(): Promise<void> {
     try { await fetchUserLayers(); } finally { refreshing.value = false; }
 }
 
-// Interim share: download the config as a <name>.featurelink.json file — the same file ATAK's
+// Interim share: download the config as a <name>.featurelinkshare file — the same file ATAK's
 // LayerShareHelper produces — so it can be handed off by any channel and imported on the other
 // side (ATAK/WinTAK "Upload Pref File" or CloudTAK Add Layer → Import Config). The in-app
 // send-to-contact path (contacts via /api/marti/api/contacts/all + PUT /api/marti/package with
 // destinations) is the follow-up; this gives a working cross-platform hand-off in the meantime.
+//
+// Not ".featurelink.json" (this was plain JSON before too) — WinTAK's own Mission-Package
+// auto-import chain tries a GRG (Gridded Reference Graphic) importer against any unrecognized
+// ".json" attachment and throws an unhandled exception trying to MGRS-decode it instead of just
+// skipping it. See importIngest.ts's ENTRY_SUFFIX for the matching receive-side constant.
 function shareLayer(layer: ArcGISLayer): void {
     const json = buildShareConfigJson(layer);
     const safeName = layer.name.replace(/[^a-zA-Z0-9 _-]/g, '_');
-    downloadAsFile(json, `${safeName}.featurelink.json`);
-    shareMessage.value = `Downloaded "${safeName}.featurelink.json" — send it to any ATAK/WinTAK/CloudTAK user to import`;
+    downloadAsFile(json, `${safeName}.featurelinkshare`);
+    shareMessage.value = `Downloaded "${safeName}.featurelinkshare" — send it to any ATAK/WinTAK/CloudTAK user to import`;
     window.setTimeout(() => { shareMessage.value = ''; }, 5000);
 }
 </script>

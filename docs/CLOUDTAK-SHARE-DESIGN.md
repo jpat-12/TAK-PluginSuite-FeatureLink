@@ -1,7 +1,7 @@
 # CloudTAK In-App Share — Design & API Discovery
 
 Status: **design captured, not yet built.** The share button today downloads a
-`<name>.featurelink.json` file ([LayersTab.vue] `shareLayer()`); this document
+`<name>.featurelinkshare` file ([LayersTab.vue] `shareLayer()`); this document
 records the discovered contract for the follow-up *in-app send to a TAK contact*
 (so a CloudTAK user can push a layer config to an ATAK / WinTAK / CloudTAK
 recipient over the TAK network, the way ATAK's Mission Package share does).
@@ -14,7 +14,7 @@ and `importIngest.ts`.
 
 ## The receive side (already built, ATAK/WinTAK)
 
-- `FeatureLinkMarshal` routes any received file whose name ends `.featurelink.json`
+- `FeatureLinkMarshal` routes any received file whose name ends `.featurelinkshare`
   to `FeatureLinkImporter` — **by filename suffix only**.
 - `FeatureLinkImporter` auto-applies it **only if** the delivered Mission Package's
   MANIFEST carries `onReceiveImport=true` (ATAK's `setImportInstructions(true,…)`).
@@ -36,12 +36,12 @@ and `importIngest.ts`.
 
 ## The core problem
 
-To deliver **our raw `.featurelink.json`** (so the marshal fires) using CloudTAK's
+To deliver **our raw `.featurelinkshare`** (so the marshal fires) using CloudTAK's
 correct server-side `senderUrl`, the file must be inside the package `PUT` builds.
 `PUT` only takes `features` (→ CoT XML, wrong shape) or `assets` (pre-staged
 `ProfileFile`s). So either:
 
-- **Path A — profile-asset staging (recommended).** Upload `<name>.featurelink.json`
+- **Path A — profile-asset staging (recommended).** Upload `<name>.featurelinkshare`
   through CloudTAK's file pipeline until it's a `ProfileFile`, then
   `PUT /api/marti/package` with `assets:[{type:'profile', id}]` +
   `destinations:[{uid}]`. Server builds the package (file added verbatim via
