@@ -1,0 +1,1124 @@
+<UserControl x:Class="FeatureLink.Views.FeatureLinkView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:vm="clr-namespace:FeatureLink.ViewModels"
+             xmlns:local="clr-namespace:FeatureLink.Views"
+             mc:Ignorable="d"
+             d:DesignHeight="680" d:DesignWidth="340"
+             Background="#FF0A0A0A"
+             Foreground="#FFFFFFFF">
+
+    <!-- ════════════════════════════════════════════════════════════════════════
+         Deliberately mirrors the ATAK plugin's own layout XML 1:1 in structure and
+         color values, rather than a generic WinTAK dock-pane look:
+
+           main_layout.xml  -> root Grid: 52px header, 32px tab bar, page container,
+                                 full-panel overlay_container (Account / Add Layer)
+           page_home.xml    -> "HOME" content: Status card + collapsible Feature
+                                 Statistics card
+           page_layers.xml  -> "LAYERS" content: My ArcGIS Layers card (collapsible) +
+                                 Public Layers card (collapsible)
+           page_pli.xml     -> "PLI" content: PLI Feature Layer card (collapsible,
+                                 create/join radio pair) + Auto-Send card + QR
+                                 Configuration card (present, disabled — see README) +
+                                 Send Item to PLI Layer card (own substitute for ATAK's
+                                 radial-menu SEND_TO_LAYER — no equivalent in page_pli.xml)
+           page_account.xml -> Account overlay: sign-in status + Sign In / Sign Out
+           page_add_layer.xml -> Add Layer overlay: Scan QR (disabled) + paste-URL +
+                                 Upload Display Prefs (disabled)
+           item_layer.xml   -> per-row layer template: eye toggle, name + type badge,
+                                 share icon (public only, disabled), refresh-interval
+                                 field, sync/remove icon buttons
+
+         Colors/dimens below are copied 1:1 from res/values/colors.xml and dimens.xml
+         (fl_bg_root, fl_bg_surface, fl_border, fl_accent, fl_text_*, fl_badge_*,
+         fl_space_*, fl_radius_*, fl_text_*) rather than generic WinTAK theme colors.
+
+         Divergences from the ATAK layout (see README "Where the WinTAK UI diverges
+         from ATAK" for the full list with reasoning):
+           - Real PNGs now exist in Assets\ for eye/chevron/share/back/delete/account/header,
+             rasterized from ATAK's vector drawables rather than XAML path geometry. Still
+             glyph-only: ic_qr_scan, ic_add, ic_menu_delete's ATAK-side per-type swap (this
+             port always shows both sync+remove — see divergence #4 below), and the sync
+             action's ⬇/↻ glyph.
+           - QR share/scan (page_pli.xml's "QR Configuration" card, page_add_layer.xml's
+             "Scan Config QR") is visually present for layout parity but disabled — QR
+             encode/decode is out of scope this pass.
+           - ATAK's WebView-hosted OAuth overlay (oauth_webview_container) has no WPF
+             equivalent here; sign-in instead opens the system browser (see
+             Services/ArcGisAuthService.cs) so there is no in-panel sign-in overlay.
+    ════════════════════════════════════════════════════════════════════════ -->
+
+    <UserControl.Resources>
+
+        <!-- ── Converters ───────────────────────────────────────────────────── -->
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <local:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis"/>
+        <local:IntEqualsConverter x:Key="IntEquals"/>
+
+        <!-- ── Colors — copied from res/values/colors.xml (fl_*) ──────────────── -->
+        <SolidColorBrush x:Key="BgRoot"        Color="#FF0A0A0A"/>
+        <SolidColorBrush x:Key="BgSurface"     Color="#FF161616"/>
+        <SolidColorBrush x:Key="BgSurfaceAlt"  Color="#FF1C1C1C"/>
+        <SolidColorBrush x:Key="BgInput"       Color="#FF1C1C1C"/>
+        <SolidColorBrush x:Key="BgInputFocused" Color="#FF232323"/>
+        <SolidColorBrush x:Key="Border"        Color="#FF2A2A2A"/>
+        <SolidColorBrush x:Key="BorderFocused" Color="#FF0099CC"/>
+        <SolidColorBrush x:Key="Divider"       Color="#FF242424"/>
+
+        <SolidColorBrush x:Key="TextPrimary"   Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="TextSecondary" Color="#FFAEB4B8"/>
+        <SolidColorBrush x:Key="TextMuted"     Color="#FF7A7A7A"/>
+        <SolidColorBrush x:Key="TextHint"      Color="#FF666666"/>
+
+        <SolidColorBrush x:Key="Accent"        Color="#FF0099CC"/>
+        <SolidColorBrush x:Key="AccentPressed" Color="#FF00729B"/>
+        <SolidColorBrush x:Key="AccentDim"     Color="#FF1A3A44"/>
+
+        <SolidColorBrush x:Key="Success"       Color="#FF4CAF50"/>
+        <SolidColorBrush x:Key="Error"         Color="#FFFF5722"/>
+
+        <SolidColorBrush x:Key="BadgePrivate"  Color="#FFFF5252"/>
+        <SolidColorBrush x:Key="BadgePublic"   Color="#FF2196F3"/>
+
+        <!-- Count / config pill badges — matches ATAK's colors.xml fl_badge_count/config/no_config -->
+        <SolidColorBrush x:Key="BadgeCountBg"      Color="#FF1A3A44"/>
+        <SolidColorBrush x:Key="BadgeCountText"    Color="#FF4FC3F7"/>
+        <SolidColorBrush x:Key="BadgeConfigBg"     Color="#FF1B3A1E"/>
+        <SolidColorBrush x:Key="BadgeConfigText"   Color="#FF4CAF50"/>
+        <SolidColorBrush x:Key="BadgeNoConfigBg"   Color="#FF3A1B1B"/>
+        <SolidColorBrush x:Key="BadgeNoConfigText" Color="#FFFF5252"/>
+
+        <!-- ── Text styles — fl_text_title/section/body/small (18/14/13/11sp) ─── -->
+        <Style x:Key="TitleText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="FontSize"   Value="18"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+        </Style>
+        <Style x:Key="SectionHeaderText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="FontSize"   Value="14"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+        </Style>
+        <Style x:Key="BodyText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+            <Setter Property="FontSize"   Value="13"/>
+        </Style>
+        <Style x:Key="HintText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="FontSize"   Value="11"/>
+        </Style>
+        <Style x:Key="StatusText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+            <Setter Property="FontSize"   Value="11"/>
+        </Style>
+
+        <!-- ── Card container — bg_card / fl_radius_card(10) / fl_space_md(12) ── -->
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background"      Value="{StaticResource BgSurface}"/>
+            <Setter Property="BorderBrush"     Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius"    Value="10"/>
+            <Setter Property="Padding"         Value="12"/>
+        </Style>
+
+        <!-- ── Inputs — bg_input / fl_radius_input(8) ──────────────────────────── -->
+        <Style x:Key="FlInput" TargetType="TextBox">
+            <Setter Property="Background"      Value="{StaticResource BgInput}"/>
+            <Setter Property="Foreground"      Value="{StaticResource TextPrimary}"/>
+            <Setter Property="BorderBrush"     Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding"         Value="10"/>
+            <Setter Property="FontSize"        Value="13"/>
+            <Style.Triggers>
+                <Trigger Property="IsFocused" Value="True">
+                    <Setter Property="Background"  Value="{StaticResource BgInputFocused}"/>
+                    <Setter Property="BorderBrush" Value="{StaticResource BorderFocused}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- ── Buttons — bg_button_primary / bg_button_secondary, radius 8 ────── -->
+        <Style x:Key="ButtonBase" TargetType="Button">
+            <Setter Property="Cursor"    Value="Hand"/>
+            <Setter Property="FontSize"  Value="13"/>
+            <Setter Property="Padding"   Value="16,8"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Opacity" Value="0.8"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource ButtonBase}">
+            <Setter Property="Background"  Value="{StaticResource Accent}"/>
+            <Setter Property="Foreground"  Value="{StaticResource TextPrimary}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource ButtonBase}">
+            <Setter Property="Background"      Value="{StaticResource BgSurfaceAlt}"/>
+            <Setter Property="Foreground"      Value="{StaticResource TextSecondary}"/>
+            <Setter Property="BorderBrush"     Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding"  Value="12,4"/>
+        </Style>
+
+        <!-- Round icon-glyph buttons standing in for ImageButton + drawable icons
+             (no icon asset set bundled in this port — see divergence note above). -->
+        <Style x:Key="IconGlyphButton" TargetType="Button">
+            <Setter Property="Width"      Value="30"/>
+            <Setter Property="Height"     Value="30"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+            <Setter Property="FontSize"   Value="14"/>
+            <Setter Property="Cursor"     Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="15">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#14FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ── Tab bar button — tab_background + tab_text_selector ─────────────── -->
+        <!-- Base look; per-tab "selected" state (underline + bright text) is applied by each
+             button's own inline Style below via a DataTrigger on CurrentTabIndex, since that
+             comparison value differs per tab (0/1/2) and can't be parameterized inside a single
+             shared Style resource. -->
+        <Style x:Key="TabBarButtonBase" TargetType="Button">
+            <Setter Property="Background"  Value="Transparent"/>
+            <Setter Property="Foreground"  Value="{StaticResource TextMuted}"/>
+            <Setter Property="FontSize"    Value="11"/>
+            <Setter Property="FontWeight"  Value="SemiBold"/>
+            <Setter Property="Cursor"      Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Name="Underline" Background="{TemplateBinding Background}"
+                                BorderBrush="{StaticResource Accent}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TypeBadgePrivate" TargetType="Border">
+            <Setter Property="Background"   Value="#33FF5252"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding"      Value="5,1"/>
+        </Style>
+        <Style x:Key="TypeBadgePublic" TargetType="Border">
+            <Setter Property="Background"   Value="#332196F3"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding"      Value="5,1"/>
+        </Style>
+
+        <!-- ── Layer row — mirrors item_layer.xml's two-row card:
+             Row 1: eye-toggle, name + type badge (inline), share (disabled — see README)
+             Row 1b: Config/No Config pill + feature-count pill
+             Row 2: "Refresh every [n] seconds" + sync action + delete (private only) ─────── -->
+        <DataTemplate x:Key="LayerRowTemplateKey">
+            <Border BorderBrush="{StaticResource Divider}" BorderThickness="0,0,0,1" Padding="0,8">
+                <StackPanel>
+
+                    <!-- Row 1 -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button Grid.Column="0"
+                                Command="{Binding DataContext.ToggleLayerVisibilityCommand,
+                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                CommandParameter="{Binding}"
+                                Style="{StaticResource IconGlyphButton}" Width="28" Height="28"
+                                ToolTip="Toggle layer visibility">
+                            <Image Source="{Binding EyeIconSource}" Width="16" Height="16"/>
+                        </Button>
+
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextPrimary}"
+                                           FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                <Border VerticalAlignment="Center" Margin="6,0,0,0">
+                                    <Border.Style>
+                                        <Style TargetType="Border" BasedOn="{StaticResource TypeBadgePublic}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsPrivate}" Value="True">
+                                                    <Setter Property="Background" Value="#33FF5252"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock FontSize="10" FontWeight="Bold">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="PUBLIC"/>
+                                                <Setter Property="Foreground" Value="{StaticResource BadgePublic}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsPrivate}" Value="True">
+                                                        <Setter Property="Text" Value="PRIVATE"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource BadgePrivate}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+                            </StackPanel>
+
+                            <!-- Config/No Config + feature-count pills -->
+                            <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                <Border CornerRadius="8" Padding="7,1">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource BadgeNoConfigBg}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasDisplayConfig}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource BadgeConfigBg}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock FontSize="9" FontWeight="Bold">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="No Config"/>
+                                                <Setter Property="Foreground" Value="{StaticResource BadgeNoConfigText}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasDisplayConfig}" Value="True">
+                                                        <Setter Property="Text" Value="Config"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource BadgeConfigText}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+
+                                <Border Background="{StaticResource BadgeCountBg}" CornerRadius="8"
+                                        Padding="7,1" Margin="4,0,0,0">
+                                    <TextBlock Text="{Binding FeatureCount, StringFormat={}{0} features}"
+                                               FontSize="9" FontWeight="Bold"
+                                               Foreground="{StaticResource BadgeCountText}"/>
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Share (contact send) — sends this layer's config as a Mission
+                             Package, mirroring ATAK's sendLayerShare()/LayerShareHelper. -->
+                        <Button Grid.Column="2" Style="{StaticResource IconGlyphButton}"
+                                Command="{Binding DataContext.ShareLayerCommand,
+                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                CommandParameter="{Binding}" ToolTip="Share layer with a contact">
+                            <Image Source="pack://application:,,,/FeatureLink;component/Assets/ic_share.png"
+                                   Width="16" Height="16"/>
+                        </Button>
+                    </Grid>
+
+                    <!-- Row 2 -->
+                    <Grid Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" Text="Refresh every" Style="{StaticResource HintText}"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox Grid.Column="2" Width="52" Style="{StaticResource FlInput}" Padding="4,2"
+                                 HorizontalContentAlignment="Right"
+                                 Text="{Binding RecurrenceInterval, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Grid.Column="3" Text="seconds" Style="{StaticResource HintText}"
+                                   VerticalAlignment="Center" Margin="4,0,8,0"/>
+
+                        <Button Grid.Column="4" Style="{StaticResource IconGlyphButton}"
+                                Command="{Binding DataContext.DownloadLayerCommand,
+                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                CommandParameter="{Binding}" ToolTip="Sync now" Margin="0,0,2,0">
+                            <TextBlock Text="{Binding ActionGlyph}" FontSize="14"/>
+                        </Button>
+                        <Button Grid.Column="5" Style="{StaticResource IconGlyphButton}"
+                                Command="{Binding DataContext.RemoveLayerCommand,
+                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                CommandParameter="{Binding}" ToolTip="Remove layer from this list">
+                            <Image Source="pack://application:,,,/FeatureLink;component/Assets/ic_delete.png"
+                                   Width="15" Height="15"/>
+                        </Button>
+                    </Grid>
+
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+    </UserControl.Resources>
+
+    <Grid>
+        <!-- ══════════════════ Main layout (header + tab bar + page container) ═══ -->
+        <Grid Background="{StaticResource BgRoot}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="52"/>  <!-- app header (icon + title + tabs + account) -->
+                <RowDefinition Height="*"/>   <!-- page container -->
+            </Grid.RowDefinitions>
+
+            <!-- ── App header: icon + "FeatureLink" title + tab bar + account button,
+                 all one row — matches ATAK's merged main_layout.xml header. ─────────── -->
+            <Grid Grid.Row="0" Background="{StaticResource BgRoot}" Margin="12,0,8,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Image Grid.Column="0" Width="28" Height="28" Margin="0,0,10,0"
+                       Source="pack://application:,,,/FeatureLink;component/Assets/Small.png"
+                       ToolTip="FeatureLink"/>
+                <TextBlock Grid.Column="1" Text="FeatureLink" Style="{StaticResource TitleText}"
+                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+
+                <Grid Grid.Column="2" Height="32">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="HOME" Command="{Binding NavigateHomeCommand}" Margin="0,0,3,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TabBarButtonBase}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTabIndex}" Value="0">
+                                        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Grid.Column="1" Content="LAYERS" Command="{Binding NavigateLayersCommand}" Margin="3,0,3,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TabBarButtonBase}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTabIndex}" Value="1">
+                                        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Grid.Column="2" Content="PLI" Command="{Binding NavigatePliCommand}" Margin="3,0,0,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TabBarButtonBase}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTabIndex}" Value="2">
+                                        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </Grid>
+
+                <Button Grid.Column="3" Style="{StaticResource IconGlyphButton}"
+                        Command="{Binding ShowAccountPageCommand}"
+                        ToolTip="ArcGIS account" Margin="8,0,0,0">
+                    <!-- Recolors the account icon by its alpha channel (Account.png is a solid
+                         silhouette on transparent) rather than swapping images, so sign-in status
+                         still shows on the real icon graphic instead of a separate glyph/dot. -->
+                    <Rectangle Width="20" Height="20">
+                        <Rectangle.OpacityMask>
+                            <ImageBrush ImageSource="pack://application:,,,/FeatureLink;component/Assets/Account.png"/>
+                        </Rectangle.OpacityMask>
+                        <Rectangle.Style>
+                            <Style TargetType="Rectangle">
+                                <Setter Property="Fill" Value="{StaticResource BadgePrivate}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAuthenticated}" Value="True">
+                                        <Setter Property="Fill" Value="{StaticResource Success}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Rectangle.Style>
+                    </Rectangle>
+                </Button>
+
+                <!-- Gear menu: Click opens the ContextMenu below via code-behind (WPF only
+                     opens a ContextMenu on right-click by default). -->
+                <Button Grid.Column="4" Style="{StaticResource IconGlyphButton}"
+                        Click="GearButton_Click"
+                        ToolTip="Settings" Margin="4,0,0,0">
+                    <TextBlock Text="&#9881;" FontSize="16"/>
+                    <Button.ContextMenu>
+                        <!-- A ContextMenu's logical tree is disconnected from its placement
+                             target for DataContext inheritance — this RelativeSource Self bind
+                             pulls the DockPane view model back in via the PlacementTarget set in
+                             GearButton_Click, the standard WPF fix for this exact gap. -->
+                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                            <MenuItem Header="Clear All Layers" Command="{Binding ClearAllLayersCommand}"/>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+            </Grid>
+
+            <!-- ══════════════ Page container — one page visible at a time ═══════ -->
+            <Grid Grid.Row="1">
+
+                <!-- ── HOME (page_home.xml) ────────────────────────────────────── -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer.Style>
+                        <Style TargetType="ScrollViewer">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTabIndex}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ScrollViewer.Style>
+                    <StackPanel Margin="12">
+
+                        <!-- Status card -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="Status" Style="{StaticResource SectionHeaderText}" Margin="0,0,0,8"/>
+
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="ArcGIS Account" Style="{StaticResource BodyText}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding StatusAccountText}" FontWeight="Bold" FontSize="13">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource Error}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsAuthenticated}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource Success}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="PLI Endpoint" Style="{StaticResource BodyText}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding StatusPliText}" FontWeight="Bold" FontSize="13">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource Error}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsPliConnected}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource Success}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Auto-Send PLI" Style="{StaticResource BodyText}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding StatusAutoSendText}" FontWeight="Bold" FontSize="13">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding PliAutoSendEnabled}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource Success}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Layers" Style="{StaticResource BodyText}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding StatusLayersText}"
+                                               Foreground="{StaticResource TextSecondary}" FontSize="13"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Feature Statistics card (collapsible) -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Feature Statistics"
+                                               Style="{StaticResource SectionHeaderText}" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" Content="Set PLI Endpoint" Style="{StaticResource SmallButton}"
+                                            Command="{Binding SetPliEndpointCommand}" Margin="0,0,8,0"
+                                            Visibility="{Binding ShowSetPliEndpointButton, Converter={StaticResource BoolToVis}}"/>
+                                    <Button Grid.Column="2" Content="Refresh" Style="{StaticResource SmallButton}"
+                                            Command="{Binding RefreshLayersCommand}" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="3" Style="{StaticResource IconGlyphButton}"
+                                            Command="{Binding ToggleStatsCommand}" ToolTip="Toggle statistics section">
+                                        <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding StatsExpanded}" Value="False">
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                        </Image>
+                                    </Button>
+                                </Grid>
+
+                                <StackPanel Margin="0,8,0,0" Visibility="{Binding StatsExpanded, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="{Binding TotalFeatureCount, StringFormat='Total Features: {0}'}"
+                                               Foreground="{StaticResource Accent}" FontSize="16" FontWeight="Bold"
+                                               Margin="0,0,0,8"/>
+                                    <ItemsControl ItemsSource="{Binding LayerStats}" MaxHeight="150">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{StaticResource Divider}" BorderThickness="0,0,0,1" Padding="0,4">
+                                                    <TextBlock Text="{Binding}" Style="{StaticResource BodyText}"/>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- ── LAYERS (page_layers.xml) ────────────────────────────────── -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer.Style>
+                        <Style TargetType="ScrollViewer">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTabIndex}" Value="1">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ScrollViewer.Style>
+                    <StackPanel Margin="12">
+
+                        <!-- My ArcGIS Layers card — browse list, only shown while signed in -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12"
+                                Visibility="{Binding IsAuthenticated, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="My ArcGIS Layers"
+                                               Style="{StaticResource SectionHeaderText}" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" Content="Refresh" Style="{StaticResource SmallButton}"
+                                            Command="{Binding RefreshLayersCommand}" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="2" Style="{StaticResource IconGlyphButton}"
+                                            Command="{Binding TogglePrivateLayersCommand}"
+                                            ToolTip="Toggle My ArcGIS Layers section">
+                                        <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding PrivateLayersExpanded}" Value="False">
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                        </Image>
+                                    </Button>
+                                </Grid>
+
+                                <ItemsControl ItemsSource="{Binding PrivateLayers}" Margin="0,8,0,0"
+                                              ItemTemplate="{StaticResource LayerRowTemplateKey}"
+                                              Visibility="{Binding PrivateLayersExpanded, Converter={StaticResource BoolToVis}}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Private Layers card — on-device layers not shared to Everyone (received
+                             via a share, or moved here from "My ArcGIS Layers"); hidden entirely
+                             when empty. -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12"
+                                Visibility="{Binding ShowSharedPrivateLayersCard, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="Private Layers" Style="{StaticResource SectionHeaderText}"/>
+                                        <Border Background="{StaticResource BadgeCountBg}" CornerRadius="8"
+                                                Padding="6,1" Margin="6,0,0,0">
+                                            <TextBlock Text="{Binding SharedPrivateLayers.Count}"
+                                                       Foreground="{StaticResource BadgeCountText}"
+                                                       FontSize="10" FontWeight="Bold"/>
+                                        </Border>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Style="{StaticResource IconGlyphButton}"
+                                            Command="{Binding ToggleSharedPrivateLayersCommand}"
+                                            ToolTip="Toggle Private Layers section">
+                                        <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding SharedPrivateLayersExpanded}" Value="False">
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                        </Image>
+                                    </Button>
+                                </Grid>
+
+                                <ItemsControl ItemsSource="{Binding SharedPrivateLayers}" Margin="0,8,0,0"
+                                              ItemTemplate="{StaticResource LayerRowTemplateKey}"
+                                              Visibility="{Binding SharedPrivateLayersExpanded, Converter={StaticResource BoolToVis}}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Public Layers card (collapsible) -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="Public Layers" Style="{StaticResource SectionHeaderText}"/>
+                                        <Border Background="{StaticResource BadgeCountBg}" CornerRadius="8"
+                                                Padding="6,1" Margin="6,0,0,0">
+                                            <TextBlock Text="{Binding PublicLayers.Count}"
+                                                       Foreground="{StaticResource BadgeCountText}"
+                                                       FontSize="10" FontWeight="Bold"/>
+                                        </Border>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="+ Add Layer" Style="{StaticResource SmallButton}"
+                                            Command="{Binding ShowAddLayerPageCommand}" Margin="0,0,8,0"/>
+                                    <Button Grid.Column="2" Style="{StaticResource IconGlyphButton}"
+                                            Command="{Binding TogglePublicLayersCommand}"
+                                            ToolTip="Toggle Public Layers section">
+                                        <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding PublicLayersExpanded}" Value="False">
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                        </Image>
+                                    </Button>
+                                </Grid>
+
+                                <ItemsControl ItemsSource="{Binding PublicLayers}" Margin="0,8,0,0"
+                                              ItemTemplate="{StaticResource LayerRowTemplateKey}"
+                                              Visibility="{Binding PublicLayersExpanded, Converter={StaticResource BoolToVis}}"/>
+                            </StackPanel>
+                        </Border>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- ── PLI (page_pli.xml) ──────────────────────────────────────── -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer.Style>
+                        <Style TargetType="ScrollViewer">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTabIndex}" Value="2">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ScrollViewer.Style>
+                    <StackPanel Margin="12">
+
+                        <TextBlock Text="Sign in on the Home tab to configure PLI."
+                                   TextWrapping="Wrap"
+                                   HorizontalAlignment="Center" Margin="0,24,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource HintText}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsAuthenticated}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+
+                        <StackPanel Visibility="{Binding IsAuthenticated, Converter={StaticResource BoolToVis}}">
+
+                            <!-- PLI Feature Layer card (collapsible) -->
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="PLI Feature Layer" VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource SectionHeaderText}">
+                                                    <Setter Property="Foreground" Value="{StaticResource Error}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsPliConnected}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource Success}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <Button Grid.Column="1" Style="{StaticResource IconGlyphButton}"
+                                                Command="{Binding TogglePliLayerCommand}"
+                                                ToolTip="Toggle PLI Feature Layer section">
+                                            <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding PliLayerExpanded}" Value="False">
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                        </Image>
+                                        </Button>
+                                    </Grid>
+
+                                    <StackPanel Margin="0,8,0,0" Visibility="{Binding PliLayerExpanded, Converter={StaticResource BoolToVis}}">
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <RadioButton Content="Create New Layer" GroupName="PliMode"
+                                                         IsChecked="{Binding IsPliCreateMode, Mode=TwoWay}"
+                                                         Foreground="{StaticResource TextSecondary}" Margin="0,0,16,0"/>
+                                            <RadioButton Content="Join Existing Layer" GroupName="PliMode"
+                                                         IsChecked="{Binding IsPliJoinMode, Mode=TwoWay}"
+                                                         Foreground="{StaticResource TextSecondary}"/>
+                                        </StackPanel>
+
+                                        <TextBox Margin="0,0,0,8"
+                                                 Text="{Binding NewPliLayerName, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="Layer name (e.g. Alpha Team PLI)">
+                                            <TextBox.Style>
+                                                <Style TargetType="TextBox" BasedOn="{StaticResource FlInput}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsPliJoinMode}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBox.Style>
+                                        </TextBox>
+
+                                        <Grid Margin="0,0,0,8">
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsPliJoinMode}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox Style="{StaticResource FlInput}"
+                                                     Text="{Binding NewPliJoinUrl, UpdateSourceTrigger=PropertyChanged}"/>
+                                        </Grid>
+
+                                        <Button Content="{Binding PliActionButtonText}" Style="{StaticResource PrimaryButton}"
+                                                Command="{Binding PliActionCommand}" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+
+                                        <TextBlock Text="{Binding PliStatusText}" Style="{StaticResource StatusText}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Auto-Send card -->
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                                <CheckBox Content="Auto-send PLI every 30 seconds"
+                                          IsChecked="{Binding PliAutoSendEnabled, Mode=TwoWay}"
+                                          IsEnabled="{Binding IsPliConfigured}"
+                                          Foreground="{StaticResource TextSecondary}" FontSize="13"/>
+                            </Border>
+
+                            <!-- QR Configuration card — present for layout parity, disabled:
+                                 QR sharing is out of scope for this port (see README). -->
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="QR Configuration" Style="{StaticResource SectionHeaderText}" Margin="0,0,0,8"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="8"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="Share Config QR" Style="{StaticResource SecondaryButton}"
+                                                IsEnabled="False" ToolTip="Deferred in this WinTAK port — see README"/>
+                                        <Button Grid.Column="2" Content="Scan Config QR" Style="{StaticResource SecondaryButton}"
+                                                IsEnabled="False" ToolTip="Deferred in this WinTAK port — see README"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Send Item to Layer — own substitute for ATAK's radial-menu
+                                 "Send to Feature Layer" (SEND_TO_LAYER). No context-menu/map-item
+                                 selection extension point exists in the reviewed WinTAK SDK, so
+                                 instead of right-clicking a map item, pick one from everything
+                                 recently observed going out over the network (via
+                                 ICommunicationService.PreviewCotBroadcast) and send it here. -->
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Send Item to PLI Layer" Style="{StaticResource SectionHeaderText}" Margin="0,0,0,4"/>
+                                    <TextBlock Text="Recently seen map items — pick one to send to the configured PLI layer."
+                                               Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                    <ItemsControl ItemsSource="{Binding RecentCotItems}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{StaticResource Divider}" BorderThickness="0,0,0,1" Padding="0,6">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Grid.Column="0">
+                                                            <TextBlock Text="{Binding Callsign}" Foreground="{StaticResource TextPrimary}" FontSize="13"/>
+                                                            <TextBlock FontSize="10" Foreground="{StaticResource TextMuted}">
+                                                                <Run Text="{Binding CotType, Mode=OneWay}"/>
+                                                                <Run Text=" · "/>
+                                                                <Run Text="{Binding LastSeenLabel, Mode=OneWay}"/>
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                        <Button Grid.Column="1" Content="Send" Style="{StaticResource SmallButton}"
+                                                                Command="{Binding DataContext.SendItemToLayerCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock Text="Nothing observed yet."
+                                               HorizontalAlignment="Center" Margin="0,8,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource HintText}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding RecentCotItems.Count}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+
+            </Grid>
+        </Grid>
+
+        <!-- ══════════════ Overlay container — Account / Add Layer pushed pages ══ -->
+        <Border Background="{StaticResource BgRoot}"
+                Visibility="{Binding IsOverlayVisible, Converter={StaticResource BoolToVis}}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="52"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Overlay header: back button + page title -->
+                <Grid Grid.Row="0" Margin="4,0,12,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Style="{StaticResource IconGlyphButton}" Width="40" Height="40"
+                            Command="{Binding HideOverlayCommand}" ToolTip="Back">
+                        <Image Source="pack://application:,,,/FeatureLink;component/Assets/ic_back.png"
+                               Width="20" Height="20"/>
+                    </Button>
+                    <TextBlock Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource TitleText}">
+                                <Setter Property="Text" Value="ArcGIS Account"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding OverlayPageIndex}" Value="1">
+                                        <Setter Property="Text" Value="Add Layer"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+
+                <!-- ── Account page (page_account.xml) ─────────────────────────── -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer.Style>
+                        <Style TargetType="ScrollViewer">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding OverlayPageIndex}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ScrollViewer.Style>
+                    <StackPanel Margin="12">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{Binding AuthStatusText}" Margin="0,0,0,12">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource StatusText}">
+                                            <Setter Property="Foreground" Value="{StaticResource Error}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsAuthenticated}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource Success}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <Button Content="Sign in with ArcGIS" Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding SignInCommand}" MinHeight="40"
+                                        Visibility="{Binding IsAuthenticated, Converter={StaticResource InverseBoolToVis}}"/>
+                                <Button Content="Sign Out" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding SignOutCommand}" MinHeight="40" Margin="0,8,0,0"
+                                        Visibility="{Binding IsAuthenticated, Converter={StaticResource BoolToVis}}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- ── Add Layer page (page_add_layer.xml) ─────────────────────── -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer.Style>
+                        <Style TargetType="ScrollViewer">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding OverlayPageIndex}" Value="1">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ScrollViewer.Style>
+                    <StackPanel Margin="12">
+
+                        <!-- Scan QR card — disabled, deferred (see README) -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="Scan a layer&#8217;s config QR code to add it automatically."
+                                           Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <Button Content="Scan Config QR" Style="{StaticResource PrimaryButton}"
+                                        MinHeight="44" IsEnabled="False"
+                                        ToolTip="Deferred in this WinTAK port — see README"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Paste URL card — functional -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="Or paste a Feature Service URL"
+                                           Style="{StaticResource SectionHeaderText}" Margin="0,0,0,8"/>
+                                <TextBox Style="{StaticResource FlInput}" Margin="0,0,0,8"
+                                         Text="{Binding NewPublicLayerUrl, UpdateSourceTrigger=PropertyChanged}"/>
+                                <Button Content="Add" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding AddPublicLayerCommand}" MinHeight="40"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Upload Display Prefs — same file a Share button/QR export produces
+                             (.featurelinkshare JSON); this is the manual counterpart to the
+                             Mission Package folder watcher's automatic import. -->
+                        <Button Content="Upload Display Prefs (JSON)" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding UploadDisplayPrefsCommand}" MinHeight="40"/>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+            </Grid>
+        </Border>
+
+    </Grid>
+</UserControl>

@@ -1,0 +1,119 @@
+<%- include("partials/header") %>
+<%- include("partials/sidebar") %>
+
+<main class="main">
+  <h1>FeatureLink</h1>
+  <p class="muted">
+    On the device running ATAK, tap <strong>Open in ATAK</strong> to load a
+    config with its styling directly into the FeatureLink plugin — no QR scan
+    needed. On WinTAK (or any other device), use <strong>Download</strong> and
+    import the file into the plugin manually. You're already signed in to TAK
+    Portal, so no separate login is needed on the device.
+  </p>
+
+  <div class="card">
+    <div id="configsMsg" class="msg"></div>
+    <div id="configsLoading" class="muted">Loading...</div>
+    <div id="configCards" class="fl-cards" style="display: none;"></div>
+    <div id="configsEmpty" class="muted" style="display: none; margin-top: 16px;">
+      No configs are available yet — check back once your admin has added some.
+    </div>
+  </div>
+</main>
+
+<style>
+  .fl-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .fl-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .fl-card .fl-card-name { font-weight: 600; font-size: 15px; }
+  .fl-card .fl-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+  .openAtakBtn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+</style>
+
+<script>
+(function () {
+  const msgEl = document.getElementById('configsMsg');
+  const loadingEl = document.getElementById('configsLoading');
+  const cardsEl = document.getElementById('configCards');
+  const emptyEl = document.getElementById('configsEmpty');
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // Confirmed via `adb shell am start -a android.intent.action.VIEW -d
+  // "featurelink://import?..."` that Android resolves and launches
+  // ImportConfigActivity cleanly — the plugin side was never the problem.
+  // Tried nesting under tak:// instead (matching the enrollment flow's
+  // pattern) — confirmed via adb that ATAK core claims the entire "tak"
+  // scheme centrally regardless of host and swallows it before our plugin
+  // ever sees it, so that's a dead end. Reverted to featurelink://, but as a
+  // BARE link (no intent:// wrapper) — the real-tap fix so far was only
+  // tested with the intent:// wrapped form, not this exact combination.
+  function buildImportUri(config) {
+    return 'featurelink://import?config=' + encodeURIComponent(JSON.stringify(config));
+  }
+
+  function renderCard(c) {
+    const div = document.createElement('div');
+    div.className = 'fl-card';
+    const actions = c.hasLiveLayer
+      ? '<a class="btn openAtakBtn" data-id="' + c.id + '" href="#" aria-disabled="true">Loading...</a>' +
+        '<a class="btn" href="/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download">Download</a>'
+      : '<span class="muted">No live FeatureLayer configured yet</span>';
+    div.innerHTML =
+      '<span class="fl-card-name">' + escapeHtml(c.name) + '</span>' +
+      '<span class="muted">' + (c.fieldCount || 0) + ' fields · ' + (c.featureCount || 0).toLocaleString() + ' features</span>' +
+      '<span class="muted">Updated ' + (c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—') + '</span>' +
+      '<div class="fl-card-actions">' + actions + '</div>';
+
+    const openLink = div.querySelector('.openAtakBtn');
+    if (openLink) {
+      openLink.addEventListener('click', (e) => {
+        if (openLink.getAttribute('aria-disabled') === 'true') e.preventDefault();
+      });
+      // Pre-fetch now, so the link is a real, already-live href by the time the
+      // user can tap it — no async work happens inside the click itself.
+      fetch('/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download', { credentials: 'same-origin' })
+        .then((r) => r.json())
+        .then((config) => {
+          openLink.href = buildImportUri(config);
+          openLink.textContent = 'Open in ATAK';
+          openLink.removeAttribute('aria-disabled');
+        })
+        .catch(() => { openLink.textContent = 'Failed to load'; });
+    }
+    return div;
+  }
+
+  fetch('/api/featurelink/configs', { credentials: 'same-origin' })
+    .then((r) => r.json())
+    .then((d) => {
+      loadingEl.style.display = 'none';
+      const configs = (d && d.configs) || [];
+      if (!configs.length) {
+        emptyEl.style.display = '';
+        return;
+      }
+      configs.forEach((c) => cardsEl.appendChild(renderCard(c)));
+      cardsEl.style.display = 'grid';
+    })
+    .catch(() => {
+      loadingEl.style.display = 'none';
+      msgEl.textContent = 'Failed to load configs.';
+    });
+})();
+</script>

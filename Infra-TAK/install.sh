@@ -8,10 +8,14 @@
 #      monorepo checkout rather than a standalone module repo).
 #   2. Copies featurelink_displayconfig.py + featurelink_displayconfig_assets/
 #      (index.html + bundled iconsets) into the infra-TAK install directory.
-#   3. Patches app.py (idempotent — safe to re-run) to:
+#   3. Patches app.py (idempotent — safe to re-run; also migrates any
+#      pre-v1.2.0 patches to the current route/icon) to:
 #        a. register the module's routes at startup, same convention as
 #           esri.py's register_routes(app, login_required, ...)
-#        b. add a "FeatureLink Display Config" link to the console sidebar
+#        b. add a "FeatureLink" link to the console sidebar, pointing at the
+#           /featurelink hub (saved configs list + Display Configurator)
+#        c. add a module card for it on the console home page (detect_modules()),
+#           sorted last (priority 999)
 #   4. Restarts the takwerx-console systemd service so the link appears
 #      immediately.
 #
@@ -29,7 +33,10 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # --- 1. Self-update, if this checkout tracks a git remote -----------------
-if [ -d "$MODULE_DIR/.git" ]; then
+# Checked via `git -C` rather than a literal `.git` directory test: with the
+# recommended sparse-checkout install, .git lives at the TAK-PluginSuite-FeatureLink
+# root, not inside Infra-TAK/ itself — `git -C` still finds it by walking up.
+if git -C "$MODULE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "==> Updating module checkout at $MODULE_DIR..."
     git -C "$MODULE_DIR" pull --ff-only || echo "    ⚠ git pull failed — continuing with the files on disk" >&2
 fi
@@ -62,11 +69,47 @@ echo "==> Synced featurelink_displayconfig.py (v${MODULE_VERSION:-unknown}) + fe
 
 # --- 4. Patch app.py (idempotent) ---------------------------------------
 python3 - "$CONSOLE_DIR/app.py" <<'PYEOF'
+import re
 import sys
 
 path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
+
+# --- Migrate any pre-v1.2.0 patches (old route /featurelink-display-config,
+# old tak.gov-logo icon_url) before applying the current ones below. ---------
+_OLD_ICON_CONST = "FEATURELINK_DISPLAYCONFIG_ICON_URL = 'https://tak.gov/assets/logos/brand-06b80939.svg'\n"
+if _OLD_ICON_CONST in src:
+    src = src.replace(_OLD_ICON_CONST, '')
+    print("    - migrated: removed old icon_url constant")
+
+_OLD_NAV_LINK = (
+    "    parts.append(link('/featurelink-display-config', "
+    "f'<img src=\"{html.escape(FEATURELINK_DISPLAYCONFIG_ICON_URL)}\" alt=\"FeatureLink Display Config\" "
+    "class=\"nav-icon\" style=\"height:24px;width:auto;max-width:48px;object-fit:contain;display:block\">"
+    "<span>FeatureLink Display Config</span>', 'FeatureLink Display Config'))\n"
+)
+if _OLD_NAV_LINK in src:
+    src = src.replace(_OLD_NAV_LINK, '')
+    print("    - migrated: removed old sidebar nav link")
+
+_OLD_MODULE_ENTRY = (
+    "    # FeatureLink Display Config — static configurator page; installed once\n"
+    "    # this module's routes are registered (no separate deploy/running state)\n"
+    "    modules['featurelink_displayconfig'] = {\n"
+    "        'name': 'FeatureLink Display Config',\n"
+    "        'installed': True,\n"
+    "        'running': True,\n"
+    "        'description': 'Build & save FeatureLink display configs — symbology, labels, popups, QR export',\n"
+    "        'icon': '\\U0001f3a8',\n"
+    "        'icon_url': FEATURELINK_DISPLAYCONFIG_ICON_URL,\n"
+    "        'route': '/featurelink-display-config',\n"
+    "        'priority': 2,\n"
+    "    }\n"
+)
+if _OLD_MODULE_ENTRY in src:
+    src = src.replace(_OLD_MODULE_ENTRY, '')
+    print("    - migrated: removed old home page module card entry")
 
 MARKER = '[featurelink_displayconfig] Failed to register'
 if MARKER not in src:
@@ -86,7 +129,23 @@ if MARKER not in src:
 else:
     print("    = module registration already present")
 
-NAV_LINK = '    parts.append(link(\'/featurelink-display-config\', \'<span class="nav-icon material-symbols-outlined">palette</span><span>FeatureLink Display Config</span>\'))\n'
+# FeatureLink's own icon (same layered-map mark as the ATAK plugin's launcher
+# icon) as an inline SVG data URI — no external asset/network dependency,
+# same convention infra-TAK uses for other modules' icon_data (e.g. CloudTAK).
+ICON_DATA = (
+    'data:image/svg+xml;base64,'
+    'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+'
+    'PHBhdGggZmlsbD0iIzAwOTlDQyIgZD0iTTI0LDQwIEw0LDMyIEwyNCwyNCBMNDQsMzIgWiIvPjxwYXRo'
+    'IGZpbGw9IiMwMEJCRUUiIGQ9Ik0yNCwzMiBMNCwyNCBMMjQsMTYgTDQ0LDI0IFoiLz48cGF0aCBmaWxs'
+    'PSIjRkZGRkZGIiBkPSJNMjQsMjQgTDQsMTYgTDI0LDggTDQ0LDE2IFoiLz48L3N2Zz4='
+)
+
+NAV_LINK = (
+    "    parts.append(link('/featurelink', "
+    "f'<img src=\"{FEATURELINK_ICON_DATA}\" alt=\"FeatureLink\" "
+    "class=\"nav-icon\" style=\"height:24px;width:auto;max-width:48px;object-fit:contain;display:block\">"
+    "<span>FeatureLink</span>', 'FeatureLink'))\n"
+)
 ANCHOR_LINE = '    parts.append(link(\'/marketplace\', \'<span class="nav-icon material-symbols-outlined">shopping_cart</span>Marketplace\'))\n'
 if NAV_LINK not in src:
     if ANCHOR_LINE not in src:
@@ -96,6 +155,53 @@ if NAV_LINK not in src:
     print("    + injected sidebar nav link")
 else:
     print("    = sidebar nav link already present")
+
+ICON_CONST = f"FEATURELINK_ICON_DATA = '{ICON_DATA}'\n"
+if ICON_CONST not in src:
+    TAK_LOGO_ANCHOR = "TAK_LOGO_URL = \"https://tak.gov/assets/logos/brand-06b80939.svg\"\n"
+    if TAK_LOGO_ANCHOR not in src:
+        print("ERROR: could not find TAK_LOGO_URL constant in app.py — icon constant NOT added", file=sys.stderr)
+        sys.exit(1)
+    src = src.replace(TAK_LOGO_ANCHOR, TAK_LOGO_ANCHOR + ICON_CONST, 1)
+    print("    + added FEATURELINK_ICON_DATA constant")
+else:
+    print("    = icon constant already present")
+
+MODULE_ENTRY_MARKER = "modules['featurelink_displayconfig']"
+if MODULE_ENTRY_MARKER not in src:
+    # Anchor on the TAK Server entry rather than esri_cot_bridge: it's a
+    # simple, stable dict assignment (`modules['takserver'] = {...}`, no
+    # extra keys/comments) present in every detect_modules(), so it's far
+    # less likely to drift across infra-TAK versions than a multi-line block
+    # whose interior keys/comments change more often. Non-greedy + DOTALL
+    # since the literal itself may wrap across a couple of lines.
+    m = re.search(r"modules\['takserver'\] = \{.*?\}\n", src, re.S)
+    if not m:
+        print("ERROR: could not find modules['takserver'] entry in detect_modules() — home page module card NOT added", file=sys.stderr)
+        sys.exit(1)
+    MODULE_ENTRY = (
+        "    # FeatureLink — hub page (saved dataset configs + Display Configurator);\n"
+        "    # installed once this module's routes are registered (no separate\n"
+        "    # deploy/running state). priority 999 = always last on the home page.\n"
+        "    modules['featurelink_displayconfig'] = {\n"
+        "        'name': 'FeatureLink',\n"
+        "        'installed': True,\n"
+        "        'running': True,\n"
+        "        'description': 'Build & save FeatureLink display configs — symbology, labels, popups, QR export',\n"
+        "        'icon': '\\U0001f3a8',\n"
+        "        'icon_data': FEATURELINK_ICON_DATA,\n"
+        "        'route': '/featurelink',\n"
+        "        'priority': 999,\n"
+        "    }\n"
+    )
+    src = src[:m.end()] + MODULE_ENTRY + src[m.end():]
+    print("    + added home page module card entry")
+else:
+    print("    = home page module card entry already present")
+
+# Note: no name-label whitelist patch needed — that template conditional only
+# hides the name for modules using icon_url; ours uses icon_data (like
+# CloudTAK), which always shows the name label already.
 
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)

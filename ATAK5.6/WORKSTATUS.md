@@ -44,11 +44,23 @@ app/src/main/java/com/atakmap/android/featurelink/
 
 app/src/main/res/
 ├── layout/
-│   ├── main_layout.xml       — Tab bar + FrameLayout page container
-│   ├── page_home.xml         — Feature statistics + scan-QR icon
-│   ├── page_private.xml      — ArcGIS auth + layer list + PLI controls + QR buttons
-│   └── page_public.xml       — Public layer URL entry + list
+│   ├── main_layout.xml       — App header (icon/title/account btn) + tab bar (Home/Layers/PLI)
+│   │                           + page container + overlay_container (pushed pages) + OAuth overlay
+│   ├── page_home.xml         — Feature statistics card only (collapsible); account moved out
+│   ├── page_account.xml      — Pushed page: ArcGIS sign-in/out, opened via header account button
+│   ├── page_layers.xml       — "My ArcGIS Layers" + "Public Layers" cards, no sub-tabs
+│   ├── page_add_layer.xml    — Pushed page: scan-QR (primary) or paste-URL (fallback) + upload prefs
+│   ├── page_pli.xml          — PLI feature layer / auto-send / QR config cards
+│   └── item_layer.xml        — Single layer row (eye icon, name, interval spinners, action btn)
+├── values/
+│   ├── colors.xml            — fl_* design-system colors (surfaces, text, accent, status)
+│   ├── dimens.xml            — fl_* spacing/radius/text-size scale
+│   └── styles.xml            — FL.Text.*, FL.Button.*, FL.Input, FL.Card styles
 └── drawable/
+    ├── bg_card.xml           — Rounded card surface (used by FL.Card)
+    ├── bg_input.xml          — Rounded input bg w/ focused-state border
+    ├── bg_button_primary.xml / bg_button_secondary.xml — Filled/outline button states
+    ├── ic_account.xml / ic_back.xml / ic_add.xml — Header/overlay-page icons
     └── ic_qr_scan.xml        — Vector drawable (4 corner brackets + centre square)
 
 app/src/main/AndroidManifest.xml      — Permissions (INTERNET, CAMERA) + QrScanActivity
@@ -225,6 +237,7 @@ The takdev plugin finds `main.jar` and `atak.apk` via the `../../` relative path
 | Background networking | Always use `ExecutorService`; methods in `ArcGISRestClient` are blocking |
 | ATAK credential storage | `AtakAuthenticationDatabase.getCredentials(key, "")` |
 | `onActivityResult` | Does NOT exist on `MapComponent`/`DropDownReceiver` in ATAK 5.6.0 |
+| System back button in a drop-down | Override `protected boolean onBackButtonPressed()` on `DropDownReceiver`; return `true` to consume (e.g. close an overlay page instead of the whole drop-down), `false` to fall through to default (closes the drop-down) |
 
 ---
 
@@ -238,3 +251,4 @@ The takdev plugin finds `main.jar` and `atak.apk` via the `../../` relative path
 - [ ] **`source_layer` / `source_objectid`** — always written as empty; intended to track which ATAK layer / objectid the feature originated from
 - [ ] **Upload display prefs** — `showPrefFileDialog()` opens a file picker but does not actually parse or upload the JSON; implementation is a stub
 - [ ] **Release build signing** — `proguard-gradle.txt` / repackage config exists but release keystore management is not documented
+- [ ] **Mode 3 Esri renderer mapping unverified** — `SymConfig.fromEsriRenderer()` (`DisplayConfig.java`) translates `_v`-schema `symbology` JSON assuming the *standard* Esri REST renderer/symbol format (simple/uniqueValue/classBreaks over esriSMS/esriPMS, `color` as `[r,g,b,a]` 0-255 arrays). This was never checked against a real payload from the FeatureLink Display Configurator console — if it emits a custom shape instead, get a sample payload and correct the mapping.

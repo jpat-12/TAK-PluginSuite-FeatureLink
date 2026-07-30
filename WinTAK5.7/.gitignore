@@ -1,0 +1,24 @@
+# Build output
+bin/
+obj/
+
+# WinTAK SDK DLLs — populate from your local WinTAK install
+# See README for which files go here
+libs/
+
+# NuGet restore output
+packages/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store

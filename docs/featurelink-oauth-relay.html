@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FeatureLink Sign-In</title>
+</head>
+<body>
+<p id="msg">Signing you in&hellip;</p>
+<script>
+// Fixed OAuth redirect_uri for every FeatureLink CloudTAK deployment. ArcGIS only allows
+// pre-registered exact redirect URIs (no wildcards), so instead of every CloudTAK hostname
+// needing its own registered redirect URI, they all point here — this single page — and this
+// page forwards the result back to whichever CloudTAK origin actually opened it. That origin
+// travels round-trip inside the OAuth `state` param (untouched by ArcGIS) as `origin::nonce`.
+(function () {
+    var params = new URLSearchParams(window.location.search);
+    var state = params.get('state') || '';
+    var targetOrigin = state.split('::')[0];
+
+    var payload = {
+        source: 'featurelink-oauth-relay',
+        code: params.get('code'),
+        error: params.get('error'),
+        errorDescription: params.get('error_description'),
+        state: state,
+    };
+
+    if (window.opener && targetOrigin) {
+        try {
+            window.opener.postMessage(payload, targetOrigin);
+            document.getElementById('msg').textContent = 'Signed in — you can close this window.';
+        } catch (e) {
+            document.getElementById('msg').textContent = 'Sign-in could not be completed automatically. Close this window and try again.';
+        }
+    } else {
+        document.getElementById('msg').textContent = 'This page must be opened as part of FeatureLink sign-in.';
+    }
+
+    window.setTimeout(function () { window.close(); }, 800);
+})();
+</script>
+</body>
+</html>

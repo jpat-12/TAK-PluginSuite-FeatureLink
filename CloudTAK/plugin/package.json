@@ -1,0 +1,23 @@
+{
+    "name": "cloudtak-plugin-featurelink",
+    "version": "0.1.0",
+    "type": "module",
+    "description": "CloudTAK plugin — bridges CloudTAK to ArcGIS Feature Services (auth, layer browse/download, PLI streaming, send-to-layer)",
+    "scripts": {
+        "lint":  "eslint .",
+        "check": "vue-tsc --noEmit"
+    },
+    "//": "Dev-only deps so the plugin can typecheck/lint against CloudTAK's web types in isolation. At build time the plugin is compiled INSIDE CloudTAK, which provides the real versions. '@tak-ps/cloudtak' points at your local CloudTAK checkout's api/web — adjust the relative path to where your CloudTAK lives, or use the published package.",
+    "devDependencies": {
+        "@eslint/js":                        "^10.0.1",
+        "@tak-ps/cloudtak":                  "file:../../../../../CloudTAK/api/web",
+        "@tabler/icons-vue":                 "^3.31.0",
+        "@typescript-eslint/eslint-plugin":  "^8.52.0",
+        "@typescript-eslint/parser":         "^8.52.0",
+        "eslint":                            "^10.0.1",
+        "globals":                           "^17.3.0",
+        "typescript":                        "^6.0.2",
+        "vue":                               "^3.5.26",
+        "vue-tsc":                           "^3.2.2"
+    }
+}

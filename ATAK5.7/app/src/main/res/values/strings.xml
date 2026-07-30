@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FeatureLink</string>
+    <string name="app_desc">ArcGIS Feature Layer manager for ATAK — sync private and public layers, send PLI to hosted feature services.</string>
+
+    <!-- Recurrence spinner options (used by item_layer.xml) -->
+    <string-array name="recurrence_options">
+        <item>never</item>
+        <item>daily</item>
+        <item>weekly</item>
+    </string-array>
+</resources>

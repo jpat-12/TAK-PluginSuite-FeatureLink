@@ -2,12 +2,19 @@
 # uninstall.sh — remove the FeatureLink Display Configurator module from an
 # infra-TAK console.
 #
-# Reverses exactly what install.sh applied:
+# Reverses exactly what install.sh applied (any version — old or new
+# route/icon format):
 #   1. Removes the featurelink_displayconfig.register_routes() block from app.py
-#   2. Removes the "FeatureLink Display Config" sidebar link
-#   3. Deletes featurelink_displayconfig.py and featurelink_displayconfig_assets/
+#   2. Removes the "FeatureLink" sidebar link and its icon constant
+#   3. Removes its home page module card entry (detect_modules()) and (if
+#      present from a pre-v1.2.0 install) its entry in the module-card
+#      name-label whitelist
+#   4. Deletes featurelink_displayconfig.py and featurelink_displayconfig_assets/
 #      from the console install
-#   4. Restarts takwerx-console so the removal takes effect immediately
+#   5. Restarts takwerx-console so the removal takes effect immediately
+#
+# Saved dataset configs under CONFIG_DIR/featurelink_displayconfig/datasets/
+# are left in place — they're user data, not part of the console integration.
 #
 # Safe to run even if the module was never installed (no-ops cleanly).
 #
@@ -39,6 +46,7 @@ fi
 echo "==> infra-TAK console: $CONSOLE_DIR"
 
 python3 - "$CONSOLE_DIR/app.py" <<'PYEOF'
+import re
 import sys
 
 path = sys.argv[1]
@@ -58,12 +66,92 @@ if REG_BLOCK in src:
 else:
     print("    = module registration not present, nothing to remove")
 
-NAV_LINK = '    parts.append(link(\'/featurelink-display-config\', \'<span class="nav-icon material-symbols-outlined">palette</span><span>FeatureLink Display Config</span>\'))\n'
-if NAV_LINK in src:
-    src = src.replace(NAV_LINK, '')
-    print("    - removed sidebar nav link")
-else:
+# v1.1.x format (route /featurelink-display-config, tak.gov-logo icon_url)
+NAV_LINK_OLD = (
+    "    parts.append(link('/featurelink-display-config', "
+    "f'<img src=\"{html.escape(FEATURELINK_DISPLAYCONFIG_ICON_URL)}\" alt=\"FeatureLink Display Config\" "
+    "class=\"nav-icon\" style=\"height:24px;width:auto;max-width:48px;object-fit:contain;display:block\">"
+    "<span>FeatureLink Display Config</span>', 'FeatureLink Display Config'))\n"
+)
+# v1.2.0+ format (route /featurelink, FeatureLink icon_data)
+NAV_LINK_NEW = (
+    "    parts.append(link('/featurelink', "
+    "f'<img src=\"{FEATURELINK_ICON_DATA}\" alt=\"FeatureLink\" "
+    "class=\"nav-icon\" style=\"height:24px;width:auto;max-width:48px;object-fit:contain;display:block\">"
+    "<span>FeatureLink</span>', 'FeatureLink'))\n"
+)
+removed = False
+for label, link_text in (('old', NAV_LINK_OLD), ('new', NAV_LINK_NEW)):
+    if link_text in src:
+        src = src.replace(link_text, '')
+        print(f"    - removed sidebar nav link ({label} format)")
+        removed = True
+if not removed:
     print("    = sidebar nav link not present, nothing to remove")
+
+ICON_CONST_OLD = "FEATURELINK_DISPLAYCONFIG_ICON_URL = 'https://tak.gov/assets/logos/brand-06b80939.svg'\n"
+ICON_CONST_NEW_PREFIX = "FEATURELINK_ICON_DATA = 'data:image/svg+xml;base64,"
+removed = False
+if ICON_CONST_OLD in src:
+    src = src.replace(ICON_CONST_OLD, '')
+    print("    - removed icon constant (old format)")
+    removed = True
+m = re.search(r"FEATURELINK_ICON_DATA = '[^'\n]*'\n", src)
+if m:
+    src = src[:m.start()] + src[m.end():]
+    print("    - removed icon constant (new format)")
+    removed = True
+if not removed:
+    print("    = icon constant not present, nothing to remove")
+
+MODULE_ENTRY_OLD = (
+    "    # FeatureLink Display Config — static configurator page; installed once\n"
+    "    # this module's routes are registered (no separate deploy/running state)\n"
+    "    modules['featurelink_displayconfig'] = {\n"
+    "        'name': 'FeatureLink Display Config',\n"
+    "        'installed': True,\n"
+    "        'running': True,\n"
+    "        'description': 'Build & save FeatureLink display configs — symbology, labels, popups, QR export',\n"
+    "        'icon': '\\U0001f3a8',\n"
+    "        'icon_url': FEATURELINK_DISPLAYCONFIG_ICON_URL,\n"
+    "        'route': '/featurelink-display-config',\n"
+    "        'priority': 2,\n"
+    "    }\n"
+)
+MODULE_ENTRY_NEW = (
+    "    # FeatureLink — hub page (saved dataset configs + Display Configurator);\n"
+    "    # installed once this module's routes are registered (no separate\n"
+    "    # deploy/running state). priority 999 = always last on the home page.\n"
+    "    modules['featurelink_displayconfig'] = {\n"
+    "        'name': 'FeatureLink',\n"
+    "        'installed': True,\n"
+    "        'running': True,\n"
+    "        'description': 'Build & save FeatureLink display configs — symbology, labels, popups, QR export',\n"
+    "        'icon': '\\U0001f3a8',\n"
+    "        'icon_data': FEATURELINK_ICON_DATA,\n"
+    "        'route': '/featurelink',\n"
+    "        'priority': 999,\n"
+    "    }\n"
+)
+removed = False
+for label, entry in (('old', MODULE_ENTRY_OLD), ('new', MODULE_ENTRY_NEW)):
+    if entry in src:
+        src = src.replace(entry, '')
+        print(f"    - removed home page module card entry ({label} format)")
+        removed = True
+if not removed:
+    print("    = home page module card entry not present, nothing to remove")
+
+# Only ever added by pre-v1.2.0 install.sh — harmless if left, but clean up
+# if present.
+CARD_WHITELIST_OLD = "'takportal', 'fedhub', 'emailrelay', 'fail2ban', 'webodm', 'tak_video_restreamer', 'netbird'"
+CARD_WHITELIST_WITH_US = CARD_WHITELIST_OLD + ", 'featurelink_displayconfig'"
+n = src.count(CARD_WHITELIST_WITH_US)
+if n:
+    src = src.replace(CARD_WHITELIST_WITH_US, CARD_WHITELIST_OLD)
+    print(f"    - removed from module-card name-label whitelist ({n} occurrence(s))")
+else:
+    print("    = module-card name-label whitelist unchanged, nothing to remove")
 
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)

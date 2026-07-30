@@ -1,0 +1,173 @@
+<%- include("partials/header") %>
+<%- include("partials/sidebar") %>
+
+<main class="main">
+  <div class="row" style="justify-content: space-between; align-items: center;">
+    <div>
+      <h1 style="margin-bottom: 4px;">FeatureLink Configs</h1>
+      <p class="muted" style="margin: 0;">
+        Saved display configs for FeatureLayer exports — symbology, labels, popups, and QR
+        sharing for the FeatureLink ATAK plugin. Field users browse the finished configs at
+        <a href="/featurelink">FeatureLink</a> under Onboarding.
+      </p>
+    </div>
+    <a class="btn" href="/featurelink-configs/configurator" style="font-size: 20px; font-weight: 700; padding: 18px 32px; line-height: 1;">+ Add Data Layer(s)</a>
+  </div>
+
+  <div class="card" style="margin-top: 16px;">
+    <div id="configsMsg" class="msg"></div>
+    <div id="configsLoading" class="muted">Loading...</div>
+    <table id="configsTable" class="table" style="display: none;">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Group</th>
+          <th>Source</th>
+          <th>Fields</th>
+          <th>Features</th>
+          <th>Updated</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="configsBody"></tbody>
+    </table>
+    <div id="configsEmpty" class="muted" style="display: none; margin-top: 16px;">
+      No saved dataset configs yet. <a href="/featurelink-configs/configurator">Open the Display Configurator</a>
+      to upload a dataset, set up its display config, and click Save — it'll show up here.
+    </div>
+  </div>
+</main>
+
+<div class="modalOverlay" id="qrModalOverlay" style="display: none;" onclick="if(event.target===this) closeQrModal()">
+  <div class="modal" style="width: 320px; max-width: 90vw; text-align: center;">
+    <div class="modalHeader">
+      <h2 id="qrModalName" style="margin: 0; font-size: 14px; word-break: break-word;"></h2>
+      <button class="btn" type="button" onclick="closeQrModal()">Close</button>
+    </div>
+    <div class="modalBody">
+      <div id="qrCanvasWrap" style="display: flex; justify-content: center; margin-bottom: 16px; min-height: 220px; align-items: center;"></div>
+      <div id="qrLinkText" class="muted" style="font-size: 11px; word-break: break-all; margin-bottom: 12px;"></div>
+      <button class="btn" type="button" onclick="copyQrLink()">Copy link</button>
+    </div>
+  </div>
+</div>
+
+<!-- QR code generation. Pinned to 1.4.4 — same version Infra-TAK's hub uses (1.5.x's build/
+     isn't a standalone browser bundle). -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
+<script>
+(function () {
+  const msgEl = document.getElementById('configsMsg');
+  const loadingEl = document.getElementById('configsLoading');
+  const tableEl = document.getElementById('configsTable');
+  const bodyEl = document.getElementById('configsBody');
+  const emptyEl = document.getElementById('configsEmpty');
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function datasetLink(id) {
+    return window.location.origin + '/featurelink-configs/configurator?load=' + encodeURIComponent(id);
+  }
+
+  let qrLinkId = null;
+  window.showQr = function (id, name) {
+    qrLinkId = id;
+    document.getElementById('qrModalName').textContent = name || 'Saved Dataset Config';
+    document.getElementById('qrLinkText').textContent = datasetLink(id);
+    const wrap = document.getElementById('qrCanvasWrap');
+    wrap.innerHTML = '';
+    const canvas = document.createElement('canvas');
+    wrap.appendChild(canvas);
+    QRCode.toCanvas(canvas, datasetLink(id), { width: 220, margin: 1, errorCorrectionLevel: 'M' }, function (err) {
+      if (err) wrap.innerHTML = '<span class="muted">QR generation failed</span>';
+    });
+    document.getElementById('qrModalOverlay').style.display = 'flex';
+  };
+  window.closeQrModal = function () {
+    document.getElementById('qrModalOverlay').style.display = 'none';
+    qrLinkId = null;
+  };
+  window.copyQrLink = function () {
+    if (!qrLinkId) return;
+    navigator.clipboard.writeText(datasetLink(qrLinkId)).then(
+      () => { msgEl.textContent = 'Link copied.'; },
+      () => { msgEl.textContent = datasetLink(qrLinkId); }
+    );
+  };
+  window.copyLink = function (id) {
+    navigator.clipboard.writeText(datasetLink(id)).then(
+      () => { msgEl.textContent = 'Link copied.'; },
+      () => { msgEl.textContent = datasetLink(id); }
+    );
+  };
+
+  function renderRow(d) {
+    const source = d.source_type === 'url'
+      ? '<span class="muted">URL</span> <span style="word-break: break-all;">' + escapeHtml(d.source_url) + '</span>'
+      : '<span class="muted">File</span> ' + escapeHtml(d.file_name);
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + escapeHtml(d.name) + '</td>' +
+      '<td>' + (d.group
+        ? '<span style="white-space: nowrap; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; background: var(--accent, #0078d4); color: #fff;">' + escapeHtml(d.group) + '</span>'
+        : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + source + '</td>' +
+      '<td>' + d.field_count + '</td>' +
+      '<td>' + d.feature_count.toLocaleString() + '</td>' +
+      '<td>' + (d.updated_at ? new Date(d.updated_at).toLocaleString() : '') + '</td>' +
+      '<td>' +
+      '<div class="row" style="gap: 6px; justify-content: flex-end;">' +
+      '<a class="btn" href="/featurelink-configs/configurator?load=' + encodeURIComponent(d.id) + '">Open</a>' +
+      '<button class="btn" type="button" onclick="showQr(\'' + d.id + '\', ' + JSON.stringify(d.name) + ')">QR</button>' +
+      '<button class="btn" type="button" onclick="copyLink(\'' + d.id + '\')">Copy link</button>' +
+      '<button class="btn danger deleteBtn" data-id="' + d.id + '">Delete</button>' +
+      '</div></td>';
+    return tr;
+  }
+
+  function loadConfigs() {
+    loadingEl.style.display = '';
+    tableEl.style.display = 'none';
+    emptyEl.style.display = 'none';
+    fetch('/api/featurelink/admin/datasets', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((d) => {
+        loadingEl.style.display = 'none';
+        const datasets = (d && d.datasets) || [];
+        if (!datasets.length) {
+          emptyEl.style.display = '';
+          return;
+        }
+        // Datasets already arrive newest-first; re-sort so grouped ones (from a "keep
+        // together" Web Map import) sit adjacent instead of interleaved by update time,
+        // while everything ungrouped keeps its newest-first order.
+        const sorted = datasets.slice().sort((a, b) => {
+          if (a.group && b.group) return a.group === b.group ? 0 : a.group.localeCompare(b.group);
+          if (a.group !== b.group) return a.group ? -1 : 1;
+          return 0;
+        });
+        bodyEl.innerHTML = '';
+        sorted.forEach((ds) => bodyEl.appendChild(renderRow(ds)));
+        tableEl.style.display = '';
+        bodyEl.querySelectorAll('.deleteBtn').forEach((btn) => {
+          btn.addEventListener('click', function () {
+            if (!confirm('Delete this saved dataset config? This cannot be undone.')) return;
+            fetch('/api/featurelink/admin/datasets/' + btn.dataset.id, { method: 'DELETE', credentials: 'same-origin' })
+              .then((r) => r.json())
+              .then((dd) => {
+                if (dd && dd.ok) loadConfigs();
+                else msgEl.textContent = (dd && dd.error) || 'Delete failed.';
+              });
+          });
+        });
+      })
+      .catch(() => { loadingEl.style.display = 'none'; msgEl.textContent = 'Failed to load configs.'; });
+  }
+
+  loadConfigs();
+})();
+</script>
