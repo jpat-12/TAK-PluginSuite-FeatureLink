@@ -22,7 +22,9 @@
                                  Public Layers card (collapsible)
            page_pli.xml     -> "PLI" content: PLI Feature Layer card (collapsible,
                                  create/join radio pair) + Auto-Send card + QR
-                                 Configuration card (present, disabled — see README)
+                                 Configuration card (present, disabled — see README) +
+                                 Send Item to PLI Layer card (own substitute for ATAK's
+                                 radial-menu SEND_TO_LAYER — no equivalent in page_pli.xml)
            page_account.xml -> Account overlay: sign-in status + Sign In / Sign Out
            page_add_layer.xml -> Add Layer overlay: Scan QR (disabled) + paste-URL +
                                  Upload Display Prefs (disabled)
@@ -36,12 +38,14 @@
 
          Divergences from the ATAK layout (see README "Where the WinTAK UI diverges
          from ATAK" for the full list with reasoning):
-           - No bundled vector icon set (ic_eye/ic_chevron/ic_share/ic_qr_scan/ic_back/
-             ic_add/ic_account/ic_menu_delete) exists in this port's Assets\ yet, so
-             icon buttons are approximated with Unicode glyph text instead of drawables.
+           - Real PNGs now exist in Assets\ for eye/chevron/share/back/delete/account/header,
+             rasterized from ATAK's vector drawables rather than XAML path geometry. Still
+             glyph-only: ic_qr_scan, ic_add, ic_menu_delete's ATAK-side per-type swap (this
+             port always shows both sync+remove — see divergence #4 below), and the sync
+             action's ⬇/↻ glyph.
            - QR share/scan (page_pli.xml's "QR Configuration" card, page_add_layer.xml's
-             "Scan Config QR") and "Upload Display Prefs (JSON)" are visually present for
-             layout parity but disabled — QR + DisplayConfig are out of scope this pass.
+             "Scan Config QR") is visually present for layout parity but disabled — QR
+             encode/decode is out of scope this pass.
            - ATAK's WebView-hosted OAuth overlay (oauth_webview_container) has no WPF
              equivalent here; sign-in instead opens the system browser (see
              Services/ArcGisAuthService.cs) so there is no in-panel sign-in overlay.
@@ -265,7 +269,7 @@
                                 CommandParameter="{Binding}"
                                 Style="{StaticResource IconGlyphButton}" Width="28" Height="28"
                                 ToolTip="Toggle layer visibility">
-                            <TextBlock Text="{Binding EyeGlyph}" FontSize="14"/>
+                            <Image Source="{Binding EyeIconSource}" Width="16" Height="16"/>
                         </Button>
 
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
@@ -337,10 +341,14 @@
                             </StackPanel>
                         </StackPanel>
 
-                        <!-- Share (contact send) — disabled, deferred (see README) -->
+                        <!-- Share (contact send) — sends this layer's config as a Mission
+                             Package, mirroring ATAK's sendLayerShare()/LayerShareHelper. -->
                         <Button Grid.Column="2" Style="{StaticResource IconGlyphButton}"
-                                IsEnabled="False" ToolTip="Deferred in this WinTAK port — see README">
-                            <TextBlock Text="&#8663;" FontSize="14"/>
+                                Command="{Binding DataContext.ShareLayerCommand,
+                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                CommandParameter="{Binding}" ToolTip="Share layer with a contact">
+                            <Image Source="pack://application:,,,/FeatureLink;component/Assets/ic_share.png"
+                                   Width="16" Height="16"/>
                         </Button>
                     </Grid>
 
@@ -373,7 +381,8 @@
                                 Command="{Binding DataContext.RemoveLayerCommand,
                                           RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                 CommandParameter="{Binding}" ToolTip="Remove layer from this list">
-                            <TextBlock Text="&#128465;" FontSize="12"/>
+                            <Image Source="pack://application:,,,/FeatureLink;component/Assets/ic_delete.png"
+                                   Width="15" Height="15"/>
                         </Button>
                     </Grid>
 
@@ -398,6 +407,7 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <Image Grid.Column="0" Width="28" Height="28" Margin="0,0,10,0"
@@ -471,6 +481,23 @@
                             </Style>
                         </Rectangle.Style>
                     </Rectangle>
+                </Button>
+
+                <!-- Gear menu: Click opens the ContextMenu below via code-behind (WPF only
+                     opens a ContextMenu on right-click by default). -->
+                <Button Grid.Column="4" Style="{StaticResource IconGlyphButton}"
+                        Click="GearButton_Click"
+                        ToolTip="Settings" Margin="4,0,0,0">
+                    <TextBlock Text="&#9881;" FontSize="16"/>
+                    <Button.ContextMenu>
+                        <!-- A ContextMenu's logical tree is disconnected from its placement
+                             target for DataContext inheritance — this RelativeSource Self bind
+                             pulls the DockPane view model back in via the PlacementTarget set in
+                             GearButton_Click, the standard WPF fix for this exact gap. -->
+                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                            <MenuItem Header="Clear All Layers" Command="{Binding ClearAllLayersCommand}"/>
+                        </ContextMenu>
+                    </Button.ContextMenu>
                 </Button>
             </Grid>
 
@@ -587,18 +614,18 @@
                                             Command="{Binding RefreshLayersCommand}" Margin="0,0,8,0"/>
                                     <Button Grid.Column="3" Style="{StaticResource IconGlyphButton}"
                                             Command="{Binding ToggleStatsCommand}" ToolTip="Toggle statistics section">
-                                        <TextBlock FontSize="12">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Text" Value="&#9650;"/>
+                                        <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding StatsExpanded}" Value="False">
-                                                            <Setter Property="Text" Value="&#9660;"/>
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                            </Image.Style>
+                                        </Image>
                                     </Button>
                                 </Grid>
 
@@ -653,18 +680,18 @@
                                     <Button Grid.Column="2" Style="{StaticResource IconGlyphButton}"
                                             Command="{Binding TogglePrivateLayersCommand}"
                                             ToolTip="Toggle My ArcGIS Layers section">
-                                        <TextBlock FontSize="12">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Text" Value="&#9650;"/>
+                                        <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding PrivateLayersExpanded}" Value="False">
-                                                            <Setter Property="Text" Value="&#9660;"/>
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                            </Image.Style>
+                                        </Image>
                                     </Button>
                                 </Grid>
 
@@ -697,18 +724,18 @@
                                     <Button Grid.Column="1" Style="{StaticResource IconGlyphButton}"
                                             Command="{Binding ToggleSharedPrivateLayersCommand}"
                                             ToolTip="Toggle Private Layers section">
-                                        <TextBlock FontSize="12">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Text" Value="&#9650;"/>
+                                        <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding SharedPrivateLayersExpanded}" Value="False">
-                                                            <Setter Property="Text" Value="&#9660;"/>
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                            </Image.Style>
+                                        </Image>
                                     </Button>
                                 </Grid>
 
@@ -741,18 +768,18 @@
                                     <Button Grid.Column="2" Style="{StaticResource IconGlyphButton}"
                                             Command="{Binding TogglePublicLayersCommand}"
                                             ToolTip="Toggle Public Layers section">
-                                        <TextBlock FontSize="12">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Text" Value="&#9650;"/>
+                                        <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding PublicLayersExpanded}" Value="False">
-                                                            <Setter Property="Text" Value="&#9660;"/>
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                            </Image.Style>
+                                        </Image>
                                     </Button>
                                 </Grid>
 
@@ -819,18 +846,18 @@
                                         <Button Grid.Column="1" Style="{StaticResource IconGlyphButton}"
                                                 Command="{Binding TogglePliLayerCommand}"
                                                 ToolTip="Toggle PLI Feature Layer section">
-                                            <TextBlock FontSize="12">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Text" Value="&#9650;"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding PliLayerExpanded}" Value="False">
-                                                                <Setter Property="Text" Value="&#9660;"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
+                                            <Image Width="14" Height="14">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding PliLayerExpanded}" Value="False">
+                                                            <Setter Property="Source" Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                        </Image>
                                         </Button>
                                     </Grid>
 
@@ -912,6 +939,59 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- Send Item to Layer — own substitute for ATAK's radial-menu
+                                 "Send to Feature Layer" (SEND_TO_LAYER). No context-menu/map-item
+                                 selection extension point exists in the reviewed WinTAK SDK, so
+                                 instead of right-clicking a map item, pick one from everything
+                                 recently observed going out over the network (via
+                                 ICommunicationService.PreviewCotBroadcast) and send it here. -->
+                            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Send Item to PLI Layer" Style="{StaticResource SectionHeaderText}" Margin="0,0,0,4"/>
+                                    <TextBlock Text="Recently seen map items — pick one to send to the configured PLI layer."
+                                               Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                    <ItemsControl ItemsSource="{Binding RecentCotItems}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{StaticResource Divider}" BorderThickness="0,0,0,1" Padding="0,6">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Grid.Column="0">
+                                                            <TextBlock Text="{Binding Callsign}" Foreground="{StaticResource TextPrimary}" FontSize="13"/>
+                                                            <TextBlock FontSize="10" Foreground="{StaticResource TextMuted}">
+                                                                <Run Text="{Binding CotType, Mode=OneWay}"/>
+                                                                <Run Text=" · "/>
+                                                                <Run Text="{Binding LastSeenLabel, Mode=OneWay}"/>
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                        <Button Grid.Column="1" Content="Send" Style="{StaticResource SmallButton}"
+                                                                Command="{Binding DataContext.SendItemToLayerCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock Text="Nothing observed yet."
+                                               HorizontalAlignment="Center" Margin="0,8,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource HintText}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding RecentCotItems.Count}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
@@ -936,7 +1016,8 @@
                     </Grid.ColumnDefinitions>
                     <Button Grid.Column="0" Style="{StaticResource IconGlyphButton}" Width="40" Height="40"
                             Command="{Binding HideOverlayCommand}" ToolTip="Back">
-                        <TextBlock Text="&#8249;" FontSize="20"/>
+                        <Image Source="pack://application:,,,/FeatureLink;component/Assets/ic_back.png"
+                               Width="20" Height="20"/>
                     </Button>
                     <TextBlock Grid.Column="1" VerticalAlignment="Center">
                         <TextBlock.Style>
@@ -1027,10 +1108,11 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Upload Display Prefs — disabled, DisplayConfig deferred (see README) -->
+                        <!-- Upload Display Prefs — same file a Share button/QR export produces
+                             (.featurelinkshare JSON); this is the manual counterpart to the
+                             Mission Package folder watcher's automatic import. -->
                         <Button Content="Upload Display Prefs (JSON)" Style="{StaticResource SecondaryButton}"
-                                MinHeight="40" IsEnabled="False"
-                                ToolTip="Deferred in this WinTAK port — see README"/>
+                                Command="{Binding UploadDisplayPrefsCommand}" MinHeight="40"/>
 
                     </StackPanel>
                 </ScrollViewer>

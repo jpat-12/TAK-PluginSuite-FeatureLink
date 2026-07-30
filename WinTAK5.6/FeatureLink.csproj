@@ -85,6 +85,11 @@
       <HintPath>libs\WinTak.Net.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!-- MapItem (RemoveLayerMarkers' Dispose() call) lives here -->
+    <Reference Include="WinTak.Graphics">
+      <HintPath>libs\WinTak.Graphics.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <!-- Prism 6.3 shipped with WinTAK 5.6 -->
     <Reference Include="Prism">
       <HintPath>libs\Prism.dll</HintPath>
@@ -115,18 +120,27 @@
     <Compile Include="Models\DownloadedFeature.cs" />
     <Compile Include="Models\OAuthTokens.cs" />
     <Compile Include="Models\PliSettings.cs" />
+    <Compile Include="Models\RecentCotItem.cs" />
     <Compile Include="Services\ArcGisAuthService.cs" />
     <Compile Include="Services\ArcGisFeatureService.cs" />
+    <Compile Include="Services\DisplayStyleResolver.cs" />
     <Compile Include="Services\SettingsStore.cs" />
     <Compile Include="ViewModels\FeatureLinkDockPane.cs" />
     <Compile Include="Views\Converters.cs" />
     <Compile Include="Views\FeatureLinkView.xaml.cs">
       <DependentUpon>FeatureLinkView.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Views\ContactPickerWindow.xaml.cs">
+      <DependentUpon>ContactPickerWindow.xaml</DependentUpon>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup>
     <Page Include="Views\FeatureLinkView.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\ContactPickerWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
@@ -146,6 +160,13 @@
     <Resource Include="Assets\Large.png" />
     <Resource Include="Assets\Small.png" />
     <Resource Include="Assets\Account.png" />
+    <Resource Include="Assets\ic_eye_open.png" />
+    <Resource Include="Assets\ic_eye_closed.png" />
+    <Resource Include="Assets\ic_chevron_up.png" />
+    <Resource Include="Assets\ic_chevron_down.png" />
+    <Resource Include="Assets\ic_share.png" />
+    <Resource Include="Assets\ic_back.png" />
+    <Resource Include="Assets\ic_delete.png" />
   </ItemGroup>
 
   <!--
@@ -175,7 +196,7 @@
     Bump WpkVersion in the PropertyGroup below when releasing a new version.
   -->
   <PropertyGroup>
-    <WpkVersion>2.6.1</WpkVersion>
+    <WpkVersion>2.6.9</WpkVersion>
     <WpkName>FeatureLink-$(WpkVersion)-5.6.0.151</WpkName>
     <WpkOut>$(OutputPath)$(WpkName).wpk</WpkOut>
   </PropertyGroup>

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.ComponentModel.Composition;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -16,6 +17,7 @@ using WinTak.Common.Location;
 using WinTak.Common.Services;
 using WinTak.Common.Time;
 using WinTak.CursorOnTarget.Services;
+using WinTak.Net.Contacts;
 using WinTak.Framework.Docking;
 using WinTak.Framework.Docking.Attributes;
 using FeatureLink.Models;
@@ -57,6 +59,8 @@ namespace FeatureLink.ViewModels
         private readonly ICotMessageSender _cotSender;
         private readonly ILocationService _locationService;
         private readonly ICommunicationService _communicationService;
+        private readonly IMapItemFinderService _mapItemFinder;
+        private readonly WinTak.Net.Contacts.IContactService _contactService;
         private readonly ArcGisAuthService _authService = new ArcGisAuthService();
         private readonly ArcGisFeatureService _restClient = new ArcGisFeatureService();
 
@@ -172,6 +176,13 @@ namespace FeatureLink.ViewModels
         /// <summary>Formatted "name [type] — N features" rows — mirrors buildStatStrings().</summary>
         public ObservableCollection<string> LayerStats { get; } = new ObservableCollection<string>();
 
+        /// <summary>FeatureLink's own substitute for ATAK's radial-menu "Send to Feature Layer"
+        /// — see RecentCotItem's summary for why. Populated from
+        /// ICommunicationService.PreviewCotBroadcast, capped at RecentCotItemsCap.</summary>
+        public ObservableCollection<RecentCotItem> RecentCotItems { get; } = new ObservableCollection<RecentCotItem>();
+        public ICommand SendItemToLayerCommand { get; }
+        private const int RecentCotItemsCap = 30;
+
         // -------------------------------------------------------------------------
         // Layers tab — page_layers.xml
         // -------------------------------------------------------------------------
@@ -216,6 +227,9 @@ namespace FeatureLink.ViewModels
         }
         public ICommand TogglePublicLayersCommand { get; }
         private void TogglePublicLayers() => PublicLayersExpanded = !PublicLayersExpanded;
+
+        /// <summary>Gear menu (top-right header) — "Clear All Layers".</summary>
+        public ICommand ClearAllLayersCommand { get; }
 
         private void RefreshLayerCollapsedHints() { /* placeholder parity hook — ATAK re-renders lists on tab entry */ }
 
@@ -337,8 +351,10 @@ namespace FeatureLink.ViewModels
         public ICommand SignOutCommand { get; }
         public ICommand RefreshLayersCommand { get; }
         public ICommand AddPublicLayerCommand { get; }
+        public ICommand UploadDisplayPrefsCommand { get; }
         public ICommand DownloadLayerCommand { get; }
         public ICommand RemoveLayerCommand { get; }
+        public ICommand ShareLayerCommand { get; }
         public ICommand ToggleLayerVisibilityCommand { get; }
         public ICommand PliActionCommand { get; }
 
@@ -346,12 +362,16 @@ namespace FeatureLink.ViewModels
 
         [ImportingConstructor]
         public FeatureLinkDockPane(ICotMessageSender cotSender, ILocationService locationService,
-            ICommunicationService communicationService)
+            ICommunicationService communicationService, IMapItemFinderService mapItemFinder,
+            WinTak.Net.Contacts.IContactService contactService)
         {
             _cotSender = cotSender;
             _locationService = locationService;
             _communicationService = communicationService;
+            _mapItemFinder = mapItemFinder;
+            _contactService = contactService;
             StartShareFileWatcher();
+            _communicationService.PreviewCotBroadcast += OnPreviewCotBroadcast;
 
             NavigateHomeCommand = new DelegateCommand(() => NavigatePage(0));
             NavigateLayersCommand = new DelegateCommand(() => NavigatePage(1));
@@ -366,14 +386,18 @@ namespace FeatureLink.ViewModels
             TogglePrivateLayersCommand = new DelegateCommand(TogglePrivateLayers);
             ToggleSharedPrivateLayersCommand = new DelegateCommand(ToggleSharedPrivateLayers);
             TogglePublicLayersCommand = new DelegateCommand(TogglePublicLayers);
+            ClearAllLayersCommand = new DelegateCommand(OnClearAllLayers);
             TogglePliLayerCommand = new DelegateCommand(TogglePliLayer);
 
             SignInCommand = new DelegateCommand(async () => await OnSignInAsync(), () => !IsAuthenticated);
             SignOutCommand = new DelegateCommand(OnSignOut, () => IsAuthenticated);
             RefreshLayersCommand = new DelegateCommand(async () => await OnRefreshLayersAsync());
             AddPublicLayerCommand = new DelegateCommand(async () => await OnAddPublicLayerAsync());
+            UploadDisplayPrefsCommand = new DelegateCommand(OnUploadDisplayPrefs);
+            SendItemToLayerCommand = new DelegateCommand<RecentCotItem>(async item => await OnSendItemToLayerAsync(item));
             DownloadLayerCommand = new DelegateCommand<ArcGisLayer>(async layer => await OnDownloadLayerAsync(layer));
             RemoveLayerCommand = new DelegateCommand<ArcGisLayer>(OnRemoveLayer);
+            ShareLayerCommand = new DelegateCommand<ArcGisLayer>(OnShareLayer);
             ToggleLayerVisibilityCommand = new DelegateCommand<ArcGisLayer>(OnToggleLayerVisibility);
             PliActionCommand = new DelegateCommand(async () =>
             {
@@ -487,7 +511,11 @@ namespace FeatureLink.ViewModels
             string token = await _authService.GetTokenAsync().ConfigureAwait(false);
             long total = 0;
             var stats = new List<string>();
-            foreach (var layer in PrivateLayers.Concat(SharedPrivateLayers).Concat(PublicLayers).ToList())
+            // PrivateLayers ("My ArcGIS Layers") is excluded — it's a pure browse list of items
+            // not yet downloaded onto this device (see MoveMyArcGisLayerOnDownload), so querying
+            // and reporting a feature count for something the user hasn't asked to sync yet would
+            // be misleading in the Home tab's stats. Only on-device layers count here.
+            foreach (var layer in SharedPrivateLayers.Concat(PublicLayers).ToList())
             {
                 try
                 {
@@ -539,15 +567,34 @@ namespace FeatureLink.ViewModels
             await DownloadLayerAsync(layer).ConfigureAwait(false);
         }
 
+        /// <summary>Add Layer page's "Upload Display Prefs (JSON)" — manual counterpart to the
+        /// Mission Package folder watcher (StartShareFileWatcher/ImportFeatureLinkShareAsync):
+        /// same file shape, just picked from disk instead of arriving via a Mission Package.</summary>
+        private void OnUploadDisplayPrefs()
+        {
+            var dialog = new System.Windows.Forms.OpenFileDialog
+            {
+                Filter = "FeatureLink share (*.featurelinkshare;*.json)|*.featurelinkshare;*.json|All files (*.*)|*.*",
+                Title = "Upload Display Prefs",
+            };
+            if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            _ = ImportFeatureLinkShareAsync(dialog.FileName);
+        }
+
         /// <summary>
         /// Watches WinTAK's own Mission Package extraction folder for an incoming
-        /// ".featurelink.json" share (ATAK's sendLayerShare() naming). WinTAK's core handles the
-        /// accept-prompt/extraction/GDAL-import-attempt chain itself — there's no plugin hook for
+        /// ".featurelinkshare" share (ATAK's sendLayerShare() naming). WinTAK's core handles the
+        /// accept-prompt/extraction/auto-import-attempt chain itself — there's no plugin hook for
         /// that step the way ATAK's FeatureLinkMarshal/FeatureLinkImporter register into ATAK's
         /// own import pipeline, and ICommunicationService.FileTransferred (tried first) turned
-        /// out not to fire for server-relayed Mission Package content in a live test — WinTAK
-        /// just logs a "GDAL: not recognized as a supported file format" warning and moves on.
-        /// Watching the real extraction folder directly sidesteps needing that event at all.
+        /// out not to fire for server-relayed Mission Package content in a live test. Watching the
+        /// real extraction folder directly sidesteps needing that event at all.
+        ///
+        /// Not ".featurelink.json" (the original naming, still plain JSON either way) — WinTAK's
+        /// own auto-import chain tries a GRG (Gridded Reference Graphic) importer against any
+        /// unrecognized ".json" attachment inside an accepted package, which throws an unhandled
+        /// NullReferenceException in WinTak.Common.Coords.MGRSPoint.decodeString on our payload
+        /// instead of just skipping it. A non-geo-looking extension keeps that importer away.
         /// </summary>
         private void StartShareFileWatcher()
         {
@@ -558,7 +605,7 @@ namespace FeatureLink.ViewModels
                     "WinTAK", "attachments");
                 Directory.CreateDirectory(root);
 
-                _shareFileWatcher = new FileSystemWatcher(root, "*.featurelink.json")
+                _shareFileWatcher = new FileSystemWatcher(root, "*.featurelinkshare")
                 {
                     IncludeSubdirectories = true,
                     NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime,
@@ -622,8 +669,11 @@ namespace FeatureLink.ViewModels
                 string name = (string)o["layer"]?["name"];
                 int freqInterval = (int?)o["freq"]?["iv"] ?? 0;
                 string freqUnit = (string)o["freq"]?["u"] ?? "s";
-                bool hasDisplayConfig = o["sym"] != null || o["lbl"] != null
-                    || o["popup"] != null || o["cm"] != null;
+                var symObj = o["sym"] as Newtonsoft.Json.Linq.JObject;
+                var lblObj = o["lbl"] as Newtonsoft.Json.Linq.JObject;
+                var popupObj = o["popup"] as Newtonsoft.Json.Linq.JObject;
+                bool hasDisplayConfig = symObj != null || lblObj != null
+                    || popupObj != null || o["cm"] != null;
 
                 if (SharedPrivateLayers.Any(l => l.Url == url) || PublicLayers.Any(l => l.Url == url))
                 {
@@ -645,6 +695,9 @@ namespace FeatureLink.ViewModels
                 layer.RecurrenceInterval = freqInterval;
                 layer.RecurrenceUnit = freqUnit;
                 layer.HasDisplayConfig = hasDisplayConfig;
+                layer.SymJson = symObj?.ToString();
+                layer.LblJson = lblObj?.ToString();
+                layer.PopupJson = popupObj?.ToString();
 
                 RunOnUi(() =>
                 {
@@ -662,6 +715,92 @@ namespace FeatureLink.ViewModels
             {
                 RunOnUi(() => StatusText = $"Failed to import shared layer: {ex.Message}");
             }
+        }
+
+        /// <summary>Share button — mirrors ATAK's onLayerShare()/sendLayerShare(). Picks a
+        /// contact via ContactPickerWindow, builds the same ".featurelinkshare" JSON shape
+        /// LayerShareHelper.java produces (reusing this layer's own SymJson/LblJson/PopupJson
+        /// verbatim, so styling round-trips the same way ATAK's share does), and sends it as a
+        /// Mission Package via ICommunicationService.SendMissionPackage — found reflecting the
+        /// SDK assemblies (no reviewed sample exercises it, same as the receive-side folder
+        /// watcher this mirrors).</summary>
+        private void OnShareLayer(ArcGisLayer layer)
+        {
+            if (layer == null || _contactService == null) return;
+
+            var contacts = new List<ContactPickerWindow.ContactRow>();
+            foreach (var c in _contactService.AllContacts ?? Enumerable.Empty<Contact>())
+            {
+                if (c == null || string.IsNullOrEmpty(c.Uid)) continue;
+                contacts.Add(new ContactPickerWindow.ContactRow(c.Name ?? c.Uid, c.Uid));
+            }
+            if (contacts.Count == 0)
+            {
+                StatusText = "No contacts available to share with.";
+                return;
+            }
+
+            var picker = new ContactPickerWindow(contacts) { Owner = Application.Current?.MainWindow };
+            if (picker.ShowDialog() != true || string.IsNullOrEmpty(picker.SelectedUid)) return;
+
+            try
+            {
+                string json = BuildShareConfigJson(layer);
+                string safeName = System.Text.RegularExpressions.Regex.Replace(layer.Name ?? "layer", "[^a-zA-Z0-9 _-]", "_");
+
+                string dir = Path.Combine(Path.GetTempPath(), "FeatureLinkShare");
+                Directory.CreateDirectory(dir);
+                string filePath = Path.Combine(dir, safeName + ".featurelinkshare");
+                File.WriteAllText(filePath, json);
+
+                _communicationService.SendMissionPackage(
+                    new List<string> { picker.SelectedUid },
+                    new FileInfo(filePath),
+                    "FeatureLink - " + safeName,
+                    false);
+
+                StatusText = $"Sent \"{layer.Name}\" to contact.";
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Failed to share layer: {ex.Message}";
+            }
+        }
+
+        /// <summary>Same compact ".featurelinkshare" shape LayerShareHelper.java produces —
+        /// v/url/layer{name,opacity,visible}/private/freq, plus this layer's own sym/lbl/popup
+        /// JSON merged in verbatim if present (already in the exact wire shape, since it either
+        /// came from a received share or — not yet possible on this port — a config source).</summary>
+        private string BuildShareConfigJson(ArcGisLayer layer)
+        {
+            var layerObj = new Newtonsoft.Json.Linq.JObject
+            {
+                ["name"] = layer.Name,
+                ["opacity"] = 1.0,
+                ["visible"] = true,
+            };
+            var o = new Newtonsoft.Json.Linq.JObject
+            {
+                ["v"] = 2,
+                ["url"] = layer.Url,
+                ["layer"] = layerObj,
+                ["private"] = layer.Type == "private",
+            };
+            if (layer.RecurrenceInterval > 0)
+            {
+                o["freq"] = new Newtonsoft.Json.Linq.JObject
+                {
+                    ["iv"] = layer.RecurrenceInterval,
+                    ["u"] = layer.RecurrenceUnit,
+                };
+            }
+            var sym = ParseJsonOrNull(layer.SymJson, "sym");
+            if (sym != null) o["sym"] = sym;
+            var lbl = ParseJsonOrNull(layer.LblJson, "lbl");
+            if (lbl != null) o["lbl"] = lbl;
+            var popup = ParseJsonOrNull(layer.PopupJson, "popup");
+            if (popup != null) o["popup"] = popup;
+            return o.ToString();
         }
 
         /// <summary>Mirrors confirmRemovePublicLayer()/onLayerDelete()'s AlertDialog confirmation —
@@ -697,12 +836,61 @@ namespace FeatureLink.ViewModels
             SaveSettings();
         }
 
+        /// <summary>Gear menu's "Clear All Layers" — wipes all three sections (My ArcGIS Layers
+        /// browse list, Private Layers, Public Layers), removes every layer's markers from the
+        /// map, and clears the excluded-URL list so a subsequent sign-in/Refresh repopulates "My
+        /// ArcGIS Layers" from scratch rather than still hiding previously-removed items.</summary>
+        private void OnClearAllLayers()
+        {
+            var result = MessageBox.Show(
+                "Remove every layer from My ArcGIS Layers, Private Layers, and Public Layers, and "
+                    + "clear their markers from the map? This only affects this device — nothing "
+                    + "in your ArcGIS account is deleted.",
+                "Clear All Layers?", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+
+            foreach (var url in _layerMarkerUids.Keys.ToList()) RemoveLayerMarkers(url);
+
+            PrivateLayers.Clear();
+            SharedPrivateLayers.Clear();
+            PublicLayers.Clear();
+            _excludedPrivateLayerUrls.Clear();
+
+            RaisePropertyChanged(nameof(StatusLayersText));
+            RaisePropertyChanged(nameof(ShowSharedPrivateLayersCard));
+            StatusText = "Cleared all layers.";
+            SaveSettings();
+        }
+
         /// <summary>item_layer.xml's layer_eye_icon toggle — mirrors toggleLayerVisibility().</summary>
+        /// <summary>item_layer.xml's layer_eye_icon toggle — mirrors toggleLayerVisibility().
+        /// Now flips already-posted markers live via WinTak.Graphics.MapItem.Visible (found
+        /// reflecting the SDK assemblies for the marker-removal fix — see RemoveLayerMarkers()),
+        /// instead of only gating whether a feature gets (re-)posted on the next download.</summary>
         private void OnToggleLayerVisibility(ArcGisLayer layer)
         {
             if (layer == null) return;
             layer.Visible = !layer.Visible;
+            SetLayerMarkersVisible(layer.Url, layer.Visible);
             SaveSettings();
+        }
+
+        private void SetLayerMarkersVisible(string url, bool visible)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            if (!_layerMarkerUids.TryGetValue(url, out var uids)) return;
+            foreach (var uid in uids)
+            {
+                try
+                {
+                    var item = _mapItemFinder?.GetMapItem(uid);
+                    if (item != null && !item.IsDisposed) item.Visible = visible;
+                }
+                catch (Exception ex)
+                {
+                    RunOnUi(() => StatusText = $"Could not set visibility for {uid}: {ex.Message}");
+                }
+            }
         }
 
         /// <summary>Download/sync button handler — mirrors onLayerAction()'s private branch.
@@ -748,13 +936,38 @@ namespace FeatureLink.ViewModels
                 var features = await _restClient.DownloadLayerAsCotAsync(layer.Url, token).ConfigureAwait(false);
                 layer.LastSync = DateTime.UtcNow;
 
+                Newtonsoft.Json.Linq.JObject sym = ParseJsonOrNull(layer.SymJson, "sym");
+                Newtonsoft.Json.Linq.JObject lbl = ParseJsonOrNull(layer.LblJson, "lbl");
+                Newtonsoft.Json.Linq.JObject popup = ParseJsonOrNull(layer.PopupJson, "popup");
+
+                // Uids present last download but not this one — the source feature disappeared
+                // server-side. Diffed here (rather than just overwriting _layerMarkerUids) so
+                // their markers get removed instead of lingering on the map forever.
+                var previousUids = _layerMarkerUids.TryGetValue(layer.Url, out var prev)
+                    ? new HashSet<string>(prev) : new HashSet<string>();
+
                 var uids = new List<string>(features.Count);
                 foreach (var f in features)
                 {
-                    PostFeatureAsCot(f, layer.Visible);
+                    string iconsetPath = sym != null ? DisplayStyleResolver.ResolveIconsetPath(sym, f.Attributes) : null;
+                    Color? color = sym != null ? DisplayStyleResolver.ResolveColor(sym, f.Attributes) : (Color?)null;
+                    string label = lbl != null ? DisplayStyleResolver.ResolveLabel(lbl, f.Attributes, f.Callsign) : f.Callsign;
+                    string remarks = popup != null ? DisplayStyleResolver.BuildRemarks(popup, f.Attributes) : f.Remarks;
+                    PostFeatureAsCot(f, layer.Visible, iconsetPath, color, label, remarks);
                     uids.Add(f.Uid);
+                    previousUids.Remove(f.Uid);
                 }
                 _layerMarkerUids[layer.Url] = uids;
+
+                foreach (var vanishedUid in previousUids)
+                {
+                    try
+                    {
+                        var item = _mapItemFinder?.GetMapItem(vanishedUid);
+                        if (item != null && !item.IsDisposed) item.Dispose();
+                    }
+                    catch { /* best-effort cleanup */ }
+                }
 
                 RunOnUi(() =>
                 {
@@ -768,10 +981,23 @@ namespace FeatureLink.ViewModels
             }
         }
 
+        private static Newtonsoft.Json.Linq.JObject ParseJsonOrNull(string json, string label)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return Newtonsoft.Json.Linq.JObject.Parse(json); }
+            catch { return null; } // corrupt/old persisted JSON — fall back to no styling for this piece
+        }
+
         /// <summary>Converts one downloaded ArcGIS feature into a CoT event and injects it onto
         /// the WinTAK map — the CoT-building/Process() pattern here mirrors
-        /// ImageSyncDockPane.PostCotMarker in the ImageFolderSync sample.</summary>
-        private void PostFeatureAsCot(DownloadedFeature f, bool visible)
+        /// ImageSyncDockPane.PostCotMarker in the ImageFolderSync sample. label/remarks override
+        /// f.Callsign/f.Remarks when a DisplayStyleResolver.ResolveLabel()/BuildRemarks() result
+        /// is available; color is applied post-creation via WinTak.Graphics.MapMarker.Color
+        /// (found reflecting the SDK for the marker-removal/visibility fixes — there's no CoT
+        /// wire-detail equivalent to ATAK's Marker.setColor(), so this mutates the live map item
+        /// directly instead, the same pattern as RemoveLayerMarkers()/SetLayerMarkersVisible()).</summary>
+        private void PostFeatureAsCot(DownloadedFeature f, bool visible, string iconsetPath = null,
+            Color? color = null, string label = null, string remarks = null)
         {
             var now = DateTime.UtcNow;
             // Long staleness — these are periodically re-synced/re-posted on the layer's own
@@ -786,12 +1012,25 @@ namespace FeatureLink.ViewModels
 
             var detail = new CotDetail();
             var contact = new CotItem("contact");
-            contact.SetAttribute("callsign", f.Callsign);
+            contact.SetAttribute("callsign", label ?? f.Callsign);
             detail.AddChild(contact);
-            if (!string.IsNullOrEmpty(f.Remarks))
+            string remarksText = remarks ?? f.Remarks;
+            if (!string.IsNullOrEmpty(remarksText))
             {
-                var remarks = new CotItem("remarks") { InnerText = f.Remarks };
-                detail.AddChild(remarks);
+                var remarksItem = new CotItem("remarks") { InnerText = remarksText };
+                detail.AddChild(remarksItem);
+            }
+            if (!string.IsNullOrEmpty(iconsetPath))
+            {
+                // Standard ATAK/WinTAK custom-icon CoT detail — matches
+                // com.atakmap.android.icons.UserIcon.IconsetPath's serialized shape on the ATAK
+                // side (FeatureLinkDropDownReceiver.downloadLayer()). Requires the referenced
+                // iconset to already be installed on this device (e.g. bundled alongside the
+                // share Mission Package, or via AUTO-ICONSET-SPEC.md's federated generation) —
+                // if it isn't, WinTAK falls back to the default CoT-type icon, same as ATAK would.
+                var usericon = new CotItem("usericon");
+                usericon.SetAttribute("iconsetpath", iconsetPath);
+                detail.AddChild(usericon);
             }
 
             var cotEvent = new CotEvent(
@@ -808,50 +1047,61 @@ namespace FeatureLink.ViewModels
                 qos: null,
                 access: null);
 
-            // NOTE: unlike ATAK's Marker.setVisible(), there is no documented per-item visibility
-            // toggle for a CoT-sourced map item in this SDK's samples — "Visible" here only
-            // controls whether the item is (re-)posted at all on the next download/refresh.
-            // TODO: revisit if/when a WinTAK item-visibility API is confirmed.
-            if (visible) _cotSender.Process(cotEvent);
+            // Always post (create) the marker, then set its live Visible via
+            // IMapItemFinderService — previously this skipped Process() entirely when hidden,
+            // which meant a layer downloaded while hidden had nothing for a later "show" toggle
+            // to reveal. WinTak.Graphics.MapItem.Visible (found for the marker-removal fix) lets
+            // us create-then-hide instead.
+            _cotSender.Process(cotEvent);
+            if (!visible || color.HasValue)
+            {
+                try
+                {
+                    var item = _mapItemFinder?.GetMapItem(f.Uid);
+                    if (item != null && !item.IsDisposed)
+                    {
+                        if (!visible) item.Visible = false;
+                        if (color.HasValue && item is WinTak.Graphics.MapMarker marker) marker.Color = color.Value;
+                    }
+                }
+                catch { /* best-effort — marker still exists, just may keep default visibility/color */ }
+            }
         }
 
         /// <summary>
-        /// Removes a layer's markers from the map. There's no documented "remove map item by
-        /// uid" call in any reviewed SDK sample (see README "Known limitations" — this is the
-        /// same gap noted for shrinking feature sets), so instead of removing the item directly
-        /// this re-posts each of the layer's known uids with an already-past stale time — the
-        /// standard CoT-protocol expiry convention, which any compliant CoT consumer (including
-        /// WinTAK's own map engine, which ingests self-posted events through the same pipeline as
-        /// ATAK/WinTAK/CloudTAK
-        /// devices' events) treats as "expire this immediately." Avoids needing an unconfirmed
-        /// item-removal API at all.
+        /// Removes a layer's markers from the map, via WinTak.Common.Services.
+        /// IMapItemFinderService.GetMapItem(uid) → WinTak.Graphics.MapItem.Dispose() — the actual
+        /// "remove this item" call (found by reflecting the SDK's assemblies; no reviewed SDK
+        /// sample exercises it, but the type shape is unambiguous: MapItem implements IDisposable
+        /// specifically for this). Replaces an earlier attempt that re-posted each uid with an
+        /// already-past stale time hoping WinTAK's own staleness sweep would clean it up — that
+        /// didn't reliably remove markers in a live test, so this calls the direct API instead.
         /// </summary>
         private void RemoveLayerMarkers(ArcGisLayer layer)
         {
             if (layer == null) return;
-            if (_layerMarkerUids.TryGetValue(layer.Url, out var uids))
+            RemoveLayerMarkers(layer.Url);
+        }
+
+        private void RemoveLayerMarkers(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            if (_layerMarkerUids.TryGetValue(url, out var uids))
             {
-                var now = DateTime.UtcNow;
-                var expired = new CoordinatedTime(now.AddMinutes(-1));
                 foreach (var uid in uids)
                 {
-                    var cotEvent = new CotEvent(
-                        uid: uid,
-                        type: "a-f-G",
-                        vers: CotEvent.VERSION_2_0,
-                        point: new CotPoint(new GeoPoint(0, 0)),
-                        time: new CoordinatedTime(now),
-                        start: new CoordinatedTime(now),
-                        stale: expired,
-                        how: CotEvent.HOW_MACHINE_GENERATED,
-                        detail: null,
-                        opex: null,
-                        qos: null,
-                        access: null);
-                    _cotSender.Process(cotEvent);
+                    try
+                    {
+                        var item = _mapItemFinder?.GetMapItem(uid);
+                        if (item != null && !item.IsDisposed) item.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        RunOnUi(() => StatusText = $"Could not remove marker {uid}: {ex.Message}");
+                    }
                 }
             }
-            _layerMarkerUids.Remove(layer.Url);
+            _layerMarkerUids.Remove(url);
         }
 
         // -------------------------------------------------------------------------
@@ -927,13 +1177,14 @@ namespace FeatureLink.ViewModels
 
             try
             {
-                // TODO(confirmed-but-partial): ILocationService (WinTak.Common.Services) is the
-                // real WinTAK GPS/self-position service — its shape here (PositionChanged event,
-                // GetGpsPosition(), HasConnections, GetPositionDocument()) is inferred from the
-                // VideoStream SDK sample (VideoStreamDockPane.cs), which is the only sample that
-                // touches self-location. No sample exposes team/group-color or "how" the way
-                // ATAK's self marker meta strings do, so those PLI fields are left blank below
-                // rather than guessed at.
+                // ILocationService (WinTak.Common.Services) is the real WinTAK GPS/self-position
+                // service — its shape here (PositionChanged event, GetGpsPosition(),
+                // HasConnections, GetPositionDocument()) is inferred from the VideoStream SDK
+                // sample (VideoStreamDockPane.cs), which is the only sample that touches
+                // self-location. It exposes no team/group-color or "how" directly, but
+                // GetSelfCotEvent() returns WinTAK's own actual self CoT event — its <__group>
+                // detail and How carry the same information ATAK's self marker meta strings do,
+                // so those are pulled from there instead of being left blank.
                 var pos = _locationService.GetGpsPosition();
                 if (pos == null) return;
 
@@ -944,6 +1195,11 @@ namespace FeatureLink.ViewModels
                 if (string.IsNullOrEmpty(uid)) return;
                 if (string.IsNullOrEmpty(callsign)) callsign = uid;
 
+                var selfEvent = _locationService.GetSelfCotEvent();
+                string how = !string.IsNullOrEmpty(selfEvent?.How) ? selfEvent.How : "m-g";
+                string groupName = selfEvent?.Detail?.GetDetailAttribute("__group", "name") ?? string.Empty;
+                string groupRole = selfEvent?.Detail?.GetDetailAttribute("__group", "role") ?? string.Empty;
+
                 long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 string username = _authService.Username;
 
@@ -952,8 +1208,8 @@ namespace FeatureLink.ViewModels
                     long objectId = await _restClient.AddPliFeatureAsync(
                         PliLayerUrl, token,
                         uid, "a-f-G-U-C", callsign,
-                        string.Empty, string.Empty, "m-g", username,
-                        string.Empty, string.Empty,
+                        string.Empty, string.Empty, how, username,
+                        groupName, groupRole,
                         pos.Latitude, pos.Longitude, pos.Altitude, 0, 0,
                         now, now, now + 30_000L, string.Empty).ConfigureAwait(false);
                     if (objectId >= 0)
@@ -967,8 +1223,8 @@ namespace FeatureLink.ViewModels
                     bool updated = await _restClient.UpdatePliFeatureAsync(
                         PliLayerUrl, token, _pliObjectId,
                         uid, "a-f-G-U-C", callsign,
-                        string.Empty, string.Empty, "m-g", username,
-                        string.Empty, string.Empty,
+                        string.Empty, string.Empty, how, username,
+                        groupName, groupRole,
                         pos.Latitude, pos.Longitude, pos.Altitude, 0, 0,
                         now, now, now + 30_000L, string.Empty).ConfigureAwait(false);
                     if (!updated)
@@ -982,6 +1238,105 @@ namespace FeatureLink.ViewModels
             {
                 // Non-fatal — same tolerance as ATAK's sendPliUpdate() catch-and-log; next tick
                 // retries on its own.
+            }
+        }
+
+        // -------------------------------------------------------------------------
+        // "Send Item to Layer" — own substitute for ATAK's radial-menu SEND_TO_LAYER
+        // -------------------------------------------------------------------------
+
+        /// <summary>Observes every CoT message this WinTAK instance is about to broadcast — self
+        /// position updates, user-placed markers, anything — and keeps a capped recent-items list
+        /// so the user can pick one to send to the PLI layer from our own panel instead of a
+        /// native radial menu (see RecentCotItem's summary for why this exists).</summary>
+        private void OnPreviewCotBroadcast(object sender, CoTMessageArgument e)
+        {
+            var evt = e?.CotEvent;
+            if (evt == null || string.IsNullOrEmpty(evt.Uid)) return;
+            // Skip our own layer-downloaded markers — sending one of those back to the PLI layer
+            // would just be a noisy, pointless round-trip of data that already came from ArcGIS.
+            if (_layerMarkerUids.Values.Any(list => list.Contains(evt.Uid))) return;
+            // Skip this device's own self-position track — it re-broadcasts frequently and would
+            // dominate/clutter this list, and it already has its own dedicated path (PLI
+            // Auto-Send, straight to the layer every 30s with no user action needed). This list
+            // is for arbitrary plotted points, mirroring what ATAK's radial-menu "Send to Feature
+            // Layer" is actually for.
+            string selfUid = null;
+            try { selfUid = _locationService.GetSelfCotEvent()?.Uid; } catch { /* GPS not ready yet */ }
+            if (!string.IsNullOrEmpty(selfUid) && evt.Uid == selfUid) return;
+
+            string callsign = evt.Detail?.GetFirstChildByName("contact")?.GetAttribute("callsign");
+            if (string.IsNullOrEmpty(callsign)) callsign = evt.Uid;
+
+            RunOnUi(() =>
+            {
+                var existing = RecentCotItems.FirstOrDefault(i => i.Uid == evt.Uid);
+                if (existing != null)
+                {
+                    existing.Callsign = callsign;
+                    existing.CotType = evt.Type;
+                    existing.LastSeen = DateTime.Now;
+                    existing.LastEvent = evt;
+                    // Bump to the top so the most recently active items surface first.
+                    RecentCotItems.Move(RecentCotItems.IndexOf(existing), 0);
+                }
+                else
+                {
+                    RecentCotItems.Insert(0, new RecentCotItem
+                    {
+                        Uid = evt.Uid,
+                        Callsign = callsign,
+                        CotType = evt.Type,
+                        LastSeen = DateTime.Now,
+                        LastEvent = evt,
+                    });
+                    while (RecentCotItems.Count > RecentCotItemsCap)
+                        RecentCotItems.RemoveAt(RecentCotItems.Count - 1);
+                }
+            });
+        }
+
+        /// <summary>Sends a recently-observed item's current position/attributes to the
+        /// configured PLI layer — mirrors handleSendToLayer()'s addPliFeature() call exactly
+        /// (always a plain add, never tracked for update, since this is a one-time snapshot of
+        /// someone else's item rather than this device's own continuously-updated position).</summary>
+        private async Task OnSendItemToLayerAsync(RecentCotItem item)
+        {
+            if (item?.LastEvent == null) return;
+            if (string.IsNullOrEmpty(PliLayerUrl))
+            {
+                StatusText = "Configure a PLI Feature Layer on the Home tab first.";
+                return;
+            }
+
+            string token = await _authService.GetTokenAsync().ConfigureAwait(false);
+            var evt = item.LastEvent;
+            var pt = evt.Point;
+            if (pt == null) return;
+
+            string icon = evt.Detail?.GetDetailAttribute("usericon", "iconsetpath") ?? "";
+            string remarks = evt.Detail?.GetFirstChildByName("remarks")?.InnerText ?? "";
+            string how = !string.IsNullOrEmpty(evt.How) ? evt.How : "h-g-i-g-o";
+            string groupName = evt.Detail?.GetDetailAttribute("__group", "name") ?? "";
+            string groupRole = evt.Detail?.GetDetailAttribute("__group", "role") ?? "";
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            try
+            {
+                long objectId = await _restClient.AddPliFeatureAsync(
+                    PliLayerUrl, token,
+                    evt.Uid, evt.Type, item.Callsign,
+                    icon, remarks, how, _authService.Username,
+                    groupName, groupRole,
+                    pt.Latitude, pt.Longitude, pt.Altitude, pt.CE90, pt.LE90,
+                    now, now, now + 7 * 24 * 60 * 60 * 1000L, string.Empty).ConfigureAwait(false);
+                RunOnUi(() => StatusText = objectId >= 0
+                    ? $"Sent to Feature Layer: {item.Callsign}"
+                    : "Failed to send to Feature Layer.");
+            }
+            catch (Exception ex)
+            {
+                RunOnUi(() => StatusText = $"Failed to send to Feature Layer: {ex.Message}");
             }
         }
 
@@ -1094,6 +1449,7 @@ namespace FeatureLink.ViewModels
                 _shareFileWatcher.Dispose();
                 _shareFileWatcher = null;
             }
+            _communicationService.PreviewCotBroadcast -= OnPreviewCotBroadcast;
         }
     }
 }

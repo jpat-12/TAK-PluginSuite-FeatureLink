@@ -52,10 +52,25 @@ namespace FeatureLink.Models
 
         private bool _hasDisplayConfig;
         /// <summary>Whether a display config (icons/colors/labels/popups) is attached — set from
-        /// a received share's sym/lbl/popup/cm keys. WinTAK doesn't apply this styling (out of
-        /// scope per the porting brief — see README), so this only drives the Config/No Config
-        /// badge, matching what the layer actually carries rather than claiming it renders.</summary>
+        /// a received share's sym/lbl/popup/cm keys. Drives the Config/No Config badge.</summary>
         public bool HasDisplayConfig { get => _hasDisplayConfig; set { _hasDisplayConfig = value; RaisePropertyChanged(); } }
+
+        private string _symJson;
+        /// <summary>Raw compact "sym" JSON from a received share (DisplayConfig.java's schema —
+        /// see CONFIG-FORMAT.md), kept as-is rather than parsed into a model class. Resolved
+        /// per-feature at download time by DisplayStyleResolver.ResolveIconsetPath()/
+        /// ResolveColor(). Null when the share carried no icon/color styling.</summary>
+        public string SymJson { get => _symJson; set { _symJson = value; RaisePropertyChanged(); } }
+
+        private string _lblJson;
+        /// <summary>Raw compact "lbl" JSON (field/size/color/bold/italic — only "f" is currently
+        /// resolved, see DisplayStyleResolver.ResolveLabel()). Null when absent.</summary>
+        public string LblJson { get => _lblJson; set { _lblJson = value; RaisePropertyChanged(); } }
+
+        private string _popupJson;
+        /// <summary>Raw compact "popup" JSON (titleField + flds — see
+        /// DisplayStyleResolver.BuildRemarks()). Null when absent.</summary>
+        public string PopupJson { get => _popupJson; set { _popupJson = value; RaisePropertyChanged(); } }
 
         private long _featureCount;
         public long FeatureCount { get => _featureCount; set { _featureCount = value; RaisePropertyChanged(); } }
@@ -92,12 +107,15 @@ namespace FeatureLink.Models
         public bool Visible
         {
             get => _visible;
-            set { _visible = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(EyeGlyph)); }
+            set { _visible = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(EyeIconSource)); }
         }
 
-        /// <summary>Text-glyph stand-in for item_layer.xml's ic_eye / ic_eye_off drawable — see
-        /// README "Where the WinTAK UI diverges from ATAK" (no bundled icon set in this port).</summary>
-        public string EyeGlyph => Visible ? "◉" : "○"; // ◉ / ○
+        /// <summary>Real icon (ported from item_layer.xml's ic_eye_open/ic_eye_closed) rather than
+        /// the Unicode-glyph placeholder this port started with — see README "Where the WinTAK UI
+        /// diverges from ATAK".</summary>
+        public string EyeIconSource => Visible
+            ? "pack://application:,,,/FeatureLink;component/Assets/ic_eye_open.png"
+            : "pack://application:,,,/FeatureLink;component/Assets/ic_eye_closed.png";
 
         public ArcGisLayer() { }
 
@@ -134,6 +152,9 @@ namespace FeatureLink.Models
                 new XElement("Type", Type ?? "public"),
                 new XElement("Access", Access ?? "org"),
                 new XElement("HasDisplayConfig", HasDisplayConfig),
+                new XElement("SymJson", SymJson ?? string.Empty),
+                new XElement("LblJson", LblJson ?? string.Empty),
+                new XElement("PopupJson", PopupJson ?? string.Empty),
                 new XElement("FeatureCount", FeatureCount),
                 new XElement("LastSyncTicks", LastSyncTicks),
                 new XElement("DownloadEnabled", DownloadEnabled),
@@ -152,6 +173,9 @@ namespace FeatureLink.Models
                 Type = (string)el.Element("Type") ?? "public",
                 Access = (string)el.Element("Access") ?? "org",
                 HasDisplayConfig = (bool?)el.Element("HasDisplayConfig") ?? false,
+                SymJson = string.IsNullOrEmpty((string)el.Element("SymJson")) ? null : (string)el.Element("SymJson"),
+                LblJson = string.IsNullOrEmpty((string)el.Element("LblJson")) ? null : (string)el.Element("LblJson"),
+                PopupJson = string.IsNullOrEmpty((string)el.Element("PopupJson")) ? null : (string)el.Element("PopupJson"),
                 FeatureCount = (long?)el.Element("FeatureCount") ?? 0,
                 LastSyncTicks = (long?)el.Element("LastSyncTicks") ?? 0,
                 DownloadEnabled = (bool?)el.Element("DownloadEnabled") ?? false,

@@ -47,28 +47,46 @@ layout stays recognizable without pretending the feature works:
   `ArcGisFeatureService`'s URL/JSON shapes, and reuse `SettingsStore.FeatureLinkSettings` for the
   round-trip payload — most of the plumbing (`applyScannedConfig`, `buildPliPayload` in
   `QrHelper.java`) is a fairly direct port once QR encode/decode exists on the .NET side.
-- **Radial-menu "send to layer"** (`FeatureLinkMenuFactory`, `SEND_TO_LAYER` intent,
-  `handleSendToLayer()`) — WinTAK's map-item context-menu extension point wasn't present in any
-  of the three SDK samples reviewed (ImageFolderSync, OpenAtlas, VideoStream), so there's no
-  confirmed pattern to port this against yet. Start by searching the full WinTAK SDK docs for a
-  `IMapItemContextMenu`/`IMapMenuFactory`-shaped extension point before attempting this.
+- **Radial-menu "send to layer" — built via a different entry point.** No native context-menu
+  extension point or scene-wide "item selected" service exists anywhere in the reviewed WinTAK
+  SDK assemblies (checked `WinTak.Framework.dll`/`WinTak.Common.dll`/`WinTak.Graphics.dll`/
+  `WinTak.CursorOnTarget.dll` — the `[Button]`/`[MenuButton]` attributes only cover the ribbon,
+  not per-item map actions, and `MapMarker.IsSelected`/`IsSelectedChanged` only fire for items
+  this plugin itself creates). Rather than right-clicking a map item, the PLI tab's new "Send
+  Item to PLI Layer" card lists everything recently observed going out over the network — via
+  `ICommunicationService.PreviewCotBroadcast`, which fires for every outgoing CoT message
+  regardless of origin (`Models/RecentCotItem.cs`) — and sends the picked one to the configured
+  PLI layer via the same `AddPliFeatureAsync()` call `handleSendToLayer()` uses on the ATAK side
+  (always a plain add, matching ATAK's one-time-snapshot semantics, never tracked for update the
+  way this device's own PLI position is).
 - **Deep-link import from TAK Portal** (`OAuthCallbackActivity`, `ImportConfigActivity`,
-  `IMPORT_CONFIG` intent) — ATAK's version relies on Android's `featurelink://` intent-filter
-  activation, which has no WinTAK equivalent. The OAuth piece of this is superseded by the
-  loopback-listener flow already implemented; the "import a shared display config by tapping a
-  link" piece would need its own investigation into whether WinTAK supports any URI-scheme
-  registration at all.
-- **`DisplayConfig` symbology mapping** (`DisplayConfig.java` — sym/lbl/popup/cotMapping per
-  layer) — out of scope per the porting brief. `Models/DownloadedFeature.cs` already carries the
-  full raw ArcGIS `attributes` dictionary per feature specifically so this can be layered in later
-  without re-touching `ArcGisFeatureService.DownloadLayerAsCotAsync`.
-- **Layer share via Mission Package** (`LayerShareHelper`, `sendLayerShare()`) — the per-row
-  "share" icon button in the Layers tab is present (mirroring `item_layer.xml`'s
-  `layer_share_btn`) but disabled. ATAK's version packages a layer's config as a `.featurelink.json`
-  Mission Package sent to a contact; WinTAK's contact/Mission Package APIs weren't exercised in
-  the reviewed SDK samples, so this needs the same investigation as radial-menu send-to-layer.
-- **"Upload Display Prefs (JSON)"** on the Add Layer page — depends on `DisplayConfig` (above),
-  so it's disabled for the same reason.
+  `IMPORT_CONFIG` intent) — **investigated and blocked.** Reflected `WinTAK.exe` itself (not
+  just the plugin SDK) looking for a single-instance/URI-activation mechanism a registered
+  `featurelink://` protocol handler could hand off to; found `MainWindow.HandleStartupArguments()`
+  but no named-pipe/mutex/second-instance-forwarding logic anywhere in the executable. Registering
+  the protocol without that would just launch a second, separate `WinTAK.exe` process per click
+  rather than delivering the link to an already-running session — not worth building as-is.
+- **`DisplayConfig` symbology mapping — icon/color/label/popup now ported.** `Services/
+  DisplayStyleResolver.cs` mirrors `DisplayConfig.resolveIconsetPath()`/`resolveColor()`/
+  `resolveLabel()`/`buildRemarks()` against the compact `sym`/`lbl`/`popup` JSON a received share
+  carries (`ArcGisLayer.SymJson`/`LblJson`/`PopupJson`). Icon resolution posts a `<usericon
+  iconsetpath="...">` CoT detail (matching ATAK's wire shape exactly); color has no CoT-detail
+  equivalent so it's applied directly via `WinTak.Graphics.MapMarker.Color` post-creation (found
+  reflecting the SDK, same technique as the marker-removal/visibility fixes below).
+  `cotMapping` (custom uid/type/callsign/remarks field mapping) is still not ported.
+- **Layer share via Mission Package — now built both ways.** `ICommunicationService.
+  SendMissionPackage(List&lt;string&gt; contactUids, FileInfo, string name, bool)` (found
+  reflecting `WinTak.Common.dll`, no reviewed sample exercises it) sends a layer's
+  `.featurelinkshare` JSON — built by `BuildShareConfigJson()`, the same compact shape
+  `LayerShareHelper.java` produces, reusing this layer's own `SymJson`/`LblJson`/`PopupJson`
+  verbatim — to a contact picked via `WinTak.Net.Contacts.IContactService.AllContacts` and a new
+  `Views/ContactPickerWindow.xaml` (WinTAK has no built-in list-selection dialog equivalent to
+  `AlertDialog.setItems()`). Receiving was already built earlier (the Mission Package folder
+  watcher in `FeatureLinkDockPane`).
+- **"Upload Display Prefs (JSON)"** on the Add Layer page — built. Opens a
+  `System.Windows.Forms.OpenFileDialog` and runs the picked file through the same
+  `ImportFeatureLinkShareAsync()` the receive-side folder watcher uses — the manual counterpart
+  to that automatic path.
 
 ## Where the WinTAK UI diverges from ATAK
 
@@ -81,11 +99,11 @@ full-panel overlay" navigation for Account and Add Layer (rather than popup dial
 `#FF5722`, badge colors, etc.) reproduced as WPF `SolidColorBrush` resources. Specific places it
 still diverges:
 
-1. **No bundled icon set.** ATAK's layout references `ic_eye`, `ic_chevron_up/down`, `ic_share`,
-   `ic_qr_scan`, `ic_back`, `ic_add`, `ic_account`, and `ic_menu_delete` drawables. This port has
-   no equivalent vector/PNG icon set yet, so every icon button uses a Unicode glyph
-   (`◉`/`○`, `▲`/`▼`, `⇗`, `‹`, `🗑`, a colored dot for account status) instead. Swapping these
-   for real icons is a pure XAML change once icon assets exist — see "Assets" below.
+1. **Bundled icon set — mostly done.** `Assets\` now has real PNGs (rasterized from ATAK's vector
+   drawables via `System.Drawing`) for `ic_eye_open`/`ic_eye_closed`, `ic_chevron_up`/`down`,
+   `ic_share`, `ic_back`, `ic_delete`, `ic_account`, and the header logo. Still glyph-only:
+   `ic_qr_scan`, `ic_add`, and the sync action's ⬇/↻ glyph — those are a pure XAML change once/if
+   they're needed, same pattern as the ones already done.
 2. **No in-panel OAuth WebView.** ATAK hosts the ArcGIS sign-in page in an in-app WebView overlay
    (`oauth_webview_container` in `main_layout.xml`). WinTAK has no first-party embedded browser
    control available under this project's constraints (.NET Framework 4.8, no extra NuGet
@@ -113,20 +131,23 @@ still diverges:
 
 ## Known limitations
 
-- **No per-item map visibility toggle.** ATAK's `Marker.setVisible()` lets a layer's markers be
-  hidden without removing them. No equivalent per-CoT-item visibility API turned up in any of the
-  three reviewed WinTAK SDK samples — `ArcGisLayer.Visible` currently only gates whether a feature
-  is (re-)posted on the *next* download, not live visibility of already-posted markers. Revisit if
-  a WinTAK item-visibility API is confirmed to exist.
-- **No marker removal on shrinking feature sets.** Re-downloading a layer that has fewer features
-  than before does not remove the map items for features that disappeared server-side — there is
-  no documented "remove CoT item by uid" call in the reviewed samples either.
 - **`ILocationService` shape is inferred, not fully documented.** Its use here (`PositionChanged`
   event, `GetGpsPosition()`, `HasConnections`, `GetPositionDocument()`) is copied from the one SDK
   sample that touches self-location (`VideoStream/VideoStreamDockPane.cs`). It exposes no
-  team/group-color or CoT `how` the way ATAK's self-marker meta strings do, so the PLI payload
-  sends empty strings for `group_name`/`group_role` and a hardcoded `"m-g"` for `how` — see the
-  `TODO` comment in `SendPliUpdate()`.
+  team/group-color or CoT `how` directly, but `GetSelfCotEvent()` returns WinTAK's own actual self
+  CoT event — its `<__group>` detail (`GetDetailAttribute("__group","name"/"role")`) and `How`
+  carry the same information ATAK's self-marker meta strings do, so `SendPliUpdate()` now pulls
+  `group_name`/`group_role`/`how` from there instead of sending blanks/a hardcoded `"m-g"`.
+
+### Resolved this pass (previously listed here)
+
+Per-item map visibility, marker removal on shrinking feature sets, and marker color/icon/label/
+popup styling were all previously blocked on "no confirmed WinTAK API." Reflecting the SDK
+assemblies (`WinTak.Graphics.dll` in particular) turned up real, usable APIs for all of them:
+`IMapItemFinderService.GetMapItem(uid)` returns a `WinTak.Graphics.MapItem`/`MapMarker`, whose
+`.Visible`, `.Dispose()`, and `.Color` properties are exactly what ATAK's `Marker.setVisible()`/
+`removeItem()`/`setColor()` do. No reviewed SDK sample exercises any of these three — same caveat
+as the Mission Package APIs above — but the type shapes are unambiguous.
 
 ---
 
@@ -159,6 +180,7 @@ WinTak.Framework.dll
 WinTak.Common.dll
 WinTak.CursorOnTarget.dll
 WinTak.Net.dll
+WinTak.Graphics.dll
 Prism.dll
 Prism.Mef.Wpf.dll
 Prism.Wpf.dll
