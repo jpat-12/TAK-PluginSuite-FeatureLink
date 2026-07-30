@@ -12,12 +12,43 @@ FeatureLink component in one place.
 
 <div align="center">
 
-<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="80" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="80" alt="Configuration & Install"></a>&nbsp;&nbsp;<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="80" alt="Buy Me A Coffee"></a>
+<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="20" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="20" alt="Configuration & Install"></a>&nbsp;&nbsp;<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="20" alt="Buy Me A Coffee"></a>
 
 </div>
 
-<!-- TODO: diagram/visual explaining how the FeatureLink pieces (config sources + plugins) fit together -->
-<p align="center"><em>(visual - how the whole FeatureLink suite fits together - coming soon)</em></p>
+## How It All Fits Together
+
+```mermaid
+flowchart LR
+    ESRI["<b>Esri ArcGIS</b><br/>hosted feature layer<br/>or saved web map"]
+    CFG["<b>Configuration</b><br/>TAK Portal Display Configurator,<br/>ArcGIS sign-in, or a pasted URL"]
+    DELIVER["<b>Delivery</b><br/>QR scan - TAK Portal link - paste URL"]
+    TAK["<b>FeatureLink Plugin</b><br/>ATAK - WinTAK - CloudTAK"]
+    FIELD["<b>On the Map</b><br/>styled layers + auto-generated icons"]
+    PLI["<b>PLI &amp; Share</b><br/>shared position layer, CoT to the team"]
+    WB["<b>Edits + PLI Write Back</b><br/>map items and position history<br/>pushed to the hosted layer"]
+
+    ESRI --> CFG --> DELIVER --> TAK
+    TAK --> FIELD
+    TAK --> PLI
+    TAK -.-> WB
+    WB -.-> ESRI
+
+    classDef esri fill:#DBEAFE,stroke:#2563EB,color:#0B1220;
+    classDef cfg fill:#EDE9FE,stroke:#7C3AED,color:#0B1220;
+    classDef tak fill:#FEF3C7,stroke:#D97706,color:#0B1220;
+    classDef field fill:#DCFCE7,stroke:#16A34A,color:#0B1220;
+    classDef wb fill:#FFE4E6,stroke:#E11D48,color:#0B1220;
+
+    class ESRI esri;
+    class CFG,DELIVER cfg;
+    class TAK tak;
+    class FIELD,PLI field;
+    class WB wb;
+```
+
+<p align="center"><em>Esri holds the data - a config says how it should look - the plugin puts it on
+the EUD - edits and PLI flow back to the same layer.</em></p>
 
 ## Supported Modules
 
@@ -26,10 +57,10 @@ FeatureLink component in one place.
 | [`ATAK5.6/`](ATAK5.6/) | FeatureLink ATAK plugin, built against ATAK-CIV 5.6.0 | Available - see [`ATAK5.6/README.md`](ATAK5.6/README.md) |
 | `ATAK5.7/` | FeatureLink ATAK plugin, ATAK-CIV 5.7.x port | Planned |
 | [`CloudTAK/`](CloudTAK/) | FeatureLink CloudTAK plugin | In development - see [`CloudTAK/README.md`](CloudTAK/README.md) |
-| [`Infra-TAK/`](Infra-TAK/) | Display Configurator - infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | **Deprecated & not supported** - see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
 | [`TAKPortal/`](TAKPortal/) | FeatureLink Configs - TAK Portal module: full Display Configurator (ported from Infra-TAK) for admins, any logged-in field user browses/downloads the results | Available - see [`TAKPortal/README.md`](TAKPortal/README.md) |
 | [`WinTAK5.6/`](WinTAK5.6/) | FeatureLink WinTAK plugin, WinTAK 5.6.x port | In development - see [`WinTAK5.6/README.md`](WinTAK5.6/README.md) |
 | `WinTAK5.7/` | FeatureLink WinTAK plugin, WinTAK 5.7.x port | Planned |
+| [`Infra-TAK/`](Infra-TAK/) | Display Configurator - infra-TAK console module for building FeatureLink display configs (symbology/labels/popups) with QR export | **Deprecated & not supported** - see [`Infra-TAK/README.md`](Infra-TAK/README.md) |
 
 ## Configuration & Install
 
@@ -173,7 +204,7 @@ is the same ArcGIS OAuth2 PKCE flow as the ATAK plugin, opening ArcGIS's hosted 
 popup - it redirects to a single fixed relay page rather than this deployment's own origin, so it
 works unmodified on any CloudTAK install with no per-deployment ArcGIS app setup (see
 [`CloudTAK/README.md`](CloudTAK/README.md) for how). QR scanning is replaced by paste/upload
-config JSON, and the share button downloads a `.featurelink.json` file, since a desktop browser
+config JSON, and the share button downloads a `.featurelinkshare` file, since a desktop browser
 has no camera-scan equivalent. UI mirrors the ATAK plugin's tabs, section layout, and collapse
 behavior rather than being redesigned.
 
