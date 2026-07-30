@@ -130,6 +130,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private FrameLayout overlayContainer;
     private View accountPageView, addLayerPageView;
     private android.widget.ImageButton accountBtn;
+    private android.widget.ImageButton settingsBtn;
 
     // Account page — credentials
     private Button ssoLoginBtn, logoutBtn;
@@ -225,11 +226,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         tabLayers = mainView.findViewById(R.id.tab_layers);
         tabPli    = mainView.findViewById(R.id.tab_pli);
         accountBtn = mainView.findViewById(R.id.account_btn);
+        settingsBtn = mainView.findViewById(R.id.settings_btn);
 
         tabHome.setOnClickListener(v   -> navigatePage(0));
         tabLayers.setOnClickListener(v -> navigatePage(1));
         tabPli.setOnClickListener(v    -> navigatePage(2));
         accountBtn.setOnClickListener(v -> showAccountPage());
+        settingsBtn.setOnClickListener(this::showSettingsMenu);
 
         setupSwipeGesture(pageContainer);
         wireHomePageViews();
@@ -268,6 +271,59 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void hideOverlay() {
         overlayContainer.removeAllViews();
         overlayContainer.setVisibility(View.GONE);
+    }
+
+    // -------------------------------------------------------------------------
+    // Settings menu (gear icon, top right)
+    // -------------------------------------------------------------------------
+
+    private void showSettingsMenu(View anchor) {
+        android.widget.PopupMenu menu = new android.widget.PopupMenu(getMapView().getContext(), anchor);
+        menu.getMenu().add("Clear All Layers");
+        menu.setOnMenuItemClickListener(item -> {
+            confirmClearAllLayers();
+            return true;
+        });
+        menu.show();
+    }
+
+    private void confirmClearAllLayers() {
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Clear All Layers?")
+                .setMessage("Removes every layer from My ArcGIS Layers, Private Layers, and "
+                        + "Public Layers on this device, along with any markers and display "
+                        + "configs they added. Layers stay in your ArcGIS account — this only "
+                        + "clears this device's list.")
+                .setPositiveButton("Clear All", (d, w) -> clearAllLayers())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** Wipes every layer from all three Layers-page sections — the browse list ("My ArcGIS
+     * Layers") repopulates on the next Refresh/sign-in since nothing here is excluded, but
+     * downloaded private/public layers and their markers/display configs are gone for good on
+     * this device (they still exist server-side). */
+    private void clearAllLayers() {
+        List<ArcGISLayer> all = new ArrayList<>();
+        all.addAll(privateLayers);
+        all.addAll(sharedPrivateLayers);
+        all.addAll(publicLayers);
+        for (ArcGISLayer layer : all) removeLayerMarkers(layer);
+
+        privateLayers.clear();
+        sharedPrivateLayers.clear();
+        publicLayers.clear();
+        layerDisplayConfigs.clear();
+
+        savePrivateLayers();
+        saveSharedPrivateLayers();
+        savePublicLayers();
+        saveDisplayConfigs();
+
+        refreshHomeStats();
+        refreshHomeStatusCard();
+        if (currentPage == 1) refreshLayersList();
+        Toast.makeText(pluginContext, "All layers cleared", Toast.LENGTH_SHORT).show();
     }
 
     // -------------------------------------------------------------------------
@@ -1000,10 +1056,23 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void sendLayerShare(ArcGISLayer layer, Contact recipient) {
-        String configJson = LayerShareHelper.buildShareConfigJson(layer, layerDisplayConfigs.get(layer.url));
+        DisplayConfig displayConfig = layerDisplayConfigs.get(layer.url);
+        String configJson = LayerShareHelper.buildShareConfigJson(layer, displayConfig);
         if (configJson == null) {
             Toast.makeText(pluginContext, "Could not build share file", Toast.LENGTH_SHORT).show();
             return;
+        }
+        // Bundle this device's already-installed custom iconset(s) (see AutoIconset) alongside
+        // the config JSON, so the recipient gets the actual icons in the same package instead of
+        // just a usericonPath reference they may not have installed — avoids the "missing icon
+        // set" prompt entirely for layers styled via the auto-iconset feature.
+        List<File> iconsetZips = new ArrayList<>();
+        if (displayConfig != null) {
+            File iconsetsDir = new File(android.os.Environment.getExternalStorageDirectory(), "atak/iconsets");
+            for (String group : displayConfig.referencedIconsetGroups()) {
+                File zip = new File(iconsetsDir, group + ".zip");
+                if (zip.exists()) iconsetZips.add(zip);
+            }
         }
         executor.submit(() -> {
             try {
@@ -1015,7 +1084,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 File dir = new File(getMapView().getContext().getCacheDir(), "featurelink_share");
                 dir.mkdirs();
                 String safeName = layer.name.replaceAll("[^a-zA-Z0-9 _-]", "_");
-                File file = new File(dir, safeName + ".featurelink.json");
+                // Deliberately NOT ".featurelink.json" — WinTAK's own Mission-Package content
+                // auto-import chain tries a GRG (Gridded Reference Graphic) importer against any
+                // unrecognized ".json" attachment, which throws an unhandled
+                // NullReferenceException in WinTak.Common.Coords.MGRSPoint.decodeString on our
+                // payload instead of just skipping it (GDAL's own probe fails gracefully first).
+                // A non-geo-looking extension avoids that importer picking the file up at all.
+                File file = new File(dir, safeName + ".featurelinkshare");
                 try (FileWriter w = new FileWriter(file)) {
                     w.write(configJson);
                 }
@@ -1027,10 +1102,19 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 MissionPackageManifest manifest = MissionPackageApi.CreateTempManifest(
                         "FeatureLink - " + safeName, true, true, null);
                 manifest.addFile(file, "FeatureLink Layer Config");
-                // Tells ATAK to automatically run the received file through its normal import
+                // Iconset zip(s) ride along in the same package — ATAK's own built-in iconset
+                // importer already recognizes this exact format (iconset.xml at the zip root,
+                // the same shape a manual Import Manager iconset install uses), so
+                // setImportInstructions below picks these up automatically too, no
+                // FeatureLink-specific handling needed for them.
+                for (File iconsetZip : iconsetZips) {
+                    manifest.addFile(iconsetZip, "FeatureLink Iconset: " + iconsetZip.getName());
+                }
+                // Tells ATAK to automatically run the received file(s) through its normal import
                 // system (FeatureLinkMarshal/FeatureLinkImporter, registered in
-                // FeatureLinkMapComponent) once the recipient accepts the package, instead of
-                // just extracting it and leaving it for a manual "Upload Pref File" pick.
+                // FeatureLinkMapComponent, plus ATAK's own iconset importer for the zip(s) above)
+                // once the recipient accepts the package, instead of just extracting it and
+                // leaving it for a manual "Upload Pref File" pick.
                 manifest.getConfiguration().setImportInstructions(true, false, null);
 
                 boolean started = MissionPackageApi.Send(
@@ -1038,8 +1122,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         ToastSaveCallback.class,
                         new Contact[]{recipient});
 
+                String iconsetNote = iconsetZips.isEmpty() ? ""
+                        : " (+ " + iconsetZips.size() + " iconset" + (iconsetZips.size() > 1 ? "s" : "") + ")";
                 mainHandler.post(() -> Toast.makeText(pluginContext,
-                        started ? "Sending \"" + layer.name + "\" to " + recipient.getName() + "…"
+                        started ? "Sending \"" + layer.name + "\"" + iconsetNote + " to " + recipient.getName() + "…"
                                 : "Could not start send to " + recipient.getName(),
                         Toast.LENGTH_SHORT).show());
             } catch (Exception e) {

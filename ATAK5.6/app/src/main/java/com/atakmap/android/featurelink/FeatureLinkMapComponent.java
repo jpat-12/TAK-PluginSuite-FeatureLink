@@ -69,7 +69,7 @@ public class FeatureLinkMapComponent extends DropDownMapComponent {
         MarshalManager.registerMarshal(FeatureLinkMarshal.INSTANCE);
         ImportExportMapComponent.getInstance().addImporterClass(
                 ImportInPlaceResolver.fromMarshal(FeatureLinkMarshal.INSTANCE));
-        ImportFilesTask.registerExtension(".featurelink.json");
+        ImportFilesTask.registerExtension(".featurelinkshare");
 
         Log.d(TAG, "FeatureLink component created");
     }

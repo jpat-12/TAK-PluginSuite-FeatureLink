@@ -12,11 +12,16 @@ import java.util.Locale;
 
 /**
  * Identifies an incoming file as a FeatureLink layer-share config (see
- * LayerShareHelper.buildShareConfigJson()) by its ".featurelink.json" naming convention, so an
+ * LayerShareHelper.buildShareConfigJson()) by its ".featurelinkshare" naming convention, so an
  * ATAK Mission Package containing one — accepted via ATAK's own native "X wants to send you a
  * file" prompt — gets automatically routed to FeatureLinkImporter instead of just sitting on
  * disk waiting for a manual "Upload Pref File" pick. Pattern matches the SDK's own
  * importexportexample sample (ExFmtMarshal).
+ *
+ * Deliberately not ".featurelink.json" (this used to be plain JSON) — WinTAK's own Mission-
+ * Package content auto-import chain treats any unrecognized ".json" attachment as a possible GRG
+ * and throws an unhandled NullReferenceException trying to MGRS-decode it. The extension is
+ * otherwise arbitrary; the file's actual contents are still plain JSON either way.
  */
 final class FeatureLinkMarshal extends AbstractMarshal {
 
@@ -37,7 +42,7 @@ final class FeatureLinkMarshal extends AbstractMarshal {
     @Override
     public String marshal(Uri uri) throws IOException {
         String path = uri.getPath();
-        if (path == null || !path.toLowerCase(Locale.US).endsWith(".featurelink.json")) return null;
+        if (path == null || !path.toLowerCase(Locale.US).endsWith(".featurelinkshare")) return null;
         File f = new File(path);
         return f.exists() ? CONTENT_TYPE : null;
     }

@@ -94,6 +94,15 @@
                 android:background="?android:attr/selectableItemBackgroundBorderless"
                 android:contentDescription="ArcGIS account" />
 
+            <ImageButton
+                android:id="@+id/settings_btn"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginStart="4dp"
+                android:src="@drawable/ic_gear"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Settings" />
+
         </LinearLayout>
 
         <!-- Page content container - pages are swapped here -->

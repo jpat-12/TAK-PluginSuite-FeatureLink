@@ -230,6 +230,32 @@ final class DisplayConfig {
         if (iconset != null && !iconset.isEmpty()) uids.add(iconset);
     }
 
+    /**
+     * Iconset "group" folder names — the middle segment of a resolved
+     * "<iconset-uid>/<group>/<filename>" usericonPath — that this config's symbology
+     * references. AutoIconset.buildAndInstall() names its installed zip "atak/iconsets/
+     * {group}.zip", so this is how FeatureLinkDropDownReceiver.sendLayerShare() locates this
+     * device's already-installed iconset zip(s) to bundle into the share instead of just a
+     * path reference the recipient may not have. Deliberately separate from
+     * referencedIconsetUids(), which reads the legacy "iconset" name field that auto-generated
+     * configs (forAutoIcons()) never populate — only usericonPath is set there.
+     */
+    Set<String> referencedIconsetGroups() {
+        Set<String> groups = new HashSet<>();
+        if (sym == null) return groups;
+        addIconsetGroup(groups, sym.usericonPath);
+        for (UvEntry e : sym.uvEntries)  addIconsetGroup(groups, e.usericonPath);
+        for (UvEntry e : sym.advValues)  addIconsetGroup(groups, e.usericonPath);
+        for (RbRule r : sym.rbRules)     addIconsetGroup(groups, r.usericonPath);
+        return groups;
+    }
+
+    private static void addIconsetGroup(Set<String> groups, String usericonPath) {
+        if (usericonPath == null || usericonPath.isEmpty()) return;
+        String[] parts = usericonPath.split("/");
+        if (parts.length >= 2) groups.add(parts[1]);
+    }
+
     // -------------------------------------------------------------------------
     // Runtime resolution helpers — called per-feature at download time
     // -------------------------------------------------------------------------
