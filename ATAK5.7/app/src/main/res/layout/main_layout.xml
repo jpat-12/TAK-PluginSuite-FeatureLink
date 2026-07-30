@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/fl_bg_root">
+
+        <!-- App header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@color/fl_bg_root"
+            android:paddingStart="@dimen/fl_space_md"
+            android:paddingEnd="@dimen/fl_space_sm">
+
+            <ImageView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:src="@drawable/ic_launcher"
+                android:contentDescription="FeatureLink icon"
+                android:layout_marginEnd="10dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="@dimen/fl_space_md"
+                android:text="FeatureLink"
+                style="@style/FL.Text.Title" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/tab_home"
+                    style="@style/FL.Button"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="6dp"
+                    android:minHeight="0dp"
+                    android:paddingLeft="0dp"
+                    android:paddingRight="0dp"
+                    android:text="HOME"
+                    android:textSize="11sp"
+                    android:textColor="@color/tab_text_selector"
+                    android:background="@drawable/tab_background" />
+
+                <Button
+                    android:id="@+id/tab_layers"
+                    style="@style/FL.Button"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="6dp"
+                    android:minHeight="0dp"
+                    android:paddingLeft="0dp"
+                    android:paddingRight="0dp"
+                    android:text="LAYERS"
+                    android:textSize="11sp"
+                    android:textColor="@color/tab_text_selector"
+                    android:background="@drawable/tab_background" />
+
+                <Button
+                    android:id="@+id/tab_pli"
+                    style="@style/FL.Button"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:minHeight="0dp"
+                    android:paddingLeft="0dp"
+                    android:paddingRight="0dp"
+                    android:text="PLI"
+                    android:textSize="11sp"
+                    android:textColor="@color/tab_text_selector"
+                    android:background="@drawable/tab_background" />
+
+            </LinearLayout>
+
+            <ImageButton
+                android:id="@+id/account_btn"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginStart="@dimen/fl_space_sm"
+                android:src="@drawable/ic_account"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="ArcGIS account" />
+
+            <ImageButton
+                android:id="@+id/settings_btn"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_marginStart="4dp"
+                android:src="@drawable/ic_gear"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Settings" />
+
+        </LinearLayout>
+
+        <!-- Page content container - pages are swapped here -->
+        <FrameLayout
+            android:id="@+id/page_container"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+    </LinearLayout>
+
+    <!-- Overlay container — full-screen pushed pages (Account, Add Layer) with their own back button -->
+    <FrameLayout
+        android:id="@+id/overlay_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:background="@color/fl_bg_root" />
+
+    <!-- OAuth sign-in overlay — covers the whole panel during the login flow -->
+    <FrameLayout
+        android:id="@+id/oauth_webview_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:background="@android:color/white" />
+
+</FrameLayout>

@@ -1,0 +1,76 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="GoogleAppIndexingWarning">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature android:name="android.hardware.camera2" android:required="false" />
+
+    <!-- Android 11+ package-visibility: required for ImportConfigActivity's
+         getPackageManager().getLaunchIntentForPackage("com.atakmap.app.civ") to resolve
+         anything (it's a separate app/package from this plugin's own). -->
+    <queries>
+        <package android:name="com.atakmap.app.civ" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:description="@string/app_desc"
+        android:theme="@style/AppTheme">
+
+        <meta-data android:name="plugin-api" android:value="${atakApiVersion}"/>
+        <meta-data android:name="app_desc" android:value="@string/app_desc"/>
+
+        <!-- Required for plugin discovery in ATAK 4.6.0.2+ -->
+        <activity
+            android:name="com.atakmap.app.component"
+            android:exported="true"
+            tools:ignore="MissingClass">
+            <intent-filter android:label="@string/app_name">
+                <action android:name="com.atakmap.app.component" />
+            </intent-filter>
+        </activity>
+
+        <!-- Catches the featurelink://auth redirect from the browser after Esri SSO -->
+        <activity
+            android:name="com.atakmap.android.featurelink.OAuthCallbackActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="featurelink" android:host="auth" />
+            </intent-filter>
+        </activity>
+
+        <!-- Catches featurelink://import?config=... from TAK Portal's "Open in ATAK" button.
+             Tried nesting this under the "tak" scheme instead (host = our own package name)
+             on the theory that ATAK's enrollment flow's tak://com.atakmap.app/enroll links
+             hand off from Chrome more reliably than a plugin-invented scheme — confirmed via
+             adb that this doesn't work: ATAK core claims the entire "tak" scheme centrally
+             (ATAKActivity's own intent-filter matches ANY tak:// host) and swallows it into
+             its own internal URI processor before Android's normal per-app dispatch ever
+             gets a chance, regardless of what host/path we declare. "featurelink" is the
+             correct scheme — it's the one that's confirmed to actually reach this activity. -->
+        <activity
+            android:name="com.atakmap.android.featurelink.ImportConfigActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="featurelink" android:host="import" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

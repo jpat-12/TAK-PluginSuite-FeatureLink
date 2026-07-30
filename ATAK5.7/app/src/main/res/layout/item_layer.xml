@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="@dimen/fl_space_sm"
+    android:paddingBottom="@dimen/fl_space_sm">
+
+    <!-- Row 1: visibility toggle, name + type badge, share -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <ImageButton
+            android:id="@+id/layer_eye_icon"
+            android:layout_width="28dp"
+            android:layout_height="match_parent"
+            android:scaleType="centerInside"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:layout_marginEnd="@dimen/fl_space_sm"
+            android:contentDescription="Toggle layer visibility" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/layer_name_text"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/fl_text_primary"
+                    android:textSize="@dimen/fl_text_body"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/layer_type_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="1dp">
+
+                <!-- Always-visible bubble: whether this layer has a display config
+                     (icons/colors/labels/popups) attached — see FeatureLinkDropDownReceiver's
+                     layerDisplayConfigs. Text/background set in LayerListAdapter. -->
+                <TextView
+                    android:id="@+id/layer_config_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="7dp"
+                    android:paddingEnd="7dp"
+                    android:paddingTop="1dp"
+                    android:paddingBottom="1dp"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
+
+                <!-- Feature count bubble — ArcGISLayer.featureCount, kept up to date by the
+                     Home tab's periodic stats refresh. -->
+                <TextView
+                    android:id="@+id/layer_feature_count_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_pill_count"
+                    android:paddingStart="7dp"
+                    android:paddingEnd="7dp"
+                    android:paddingTop="1dp"
+                    android:paddingBottom="1dp"
+                    android:textSize="9sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/fl_badge_count_text" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Share button: opens a contact picker to send the layer (public or private) -->
+        <ImageButton
+            android:id="@+id/layer_share_btn"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:padding="4dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_share"
+            android:contentDescription="Share layer with a contact" />
+
+    </LinearLayout>
+
+    <!-- Row 2: refresh interval + action button, same line (private and public layers) -->
+    <LinearLayout
+        android:id="@+id/layer_interval_row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical|end"
+        android:layout_marginTop="2dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Refresh every"
+            android:layout_marginEnd="@dimen/fl_space_sm"
+            style="@style/FL.Text.Hint" />
+
+        <EditText
+            android:id="@+id/layer_interval_seconds_edit"
+            android:layout_width="56dp"
+            android:layout_height="wrap_content"
+            android:minHeight="0dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:gravity="end"
+            android:inputType="number"
+            android:maxLength="5"
+            android:singleLine="true"
+            android:layout_marginEnd="4dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="seconds"
+            style="@style/FL.Text.Hint" />
+
+        <!-- Action button: ic_download → ic_refresh_circle for private; ic_menu_delete for public -->
+        <ImageButton
+            android:id="@+id/layer_action_btn"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:padding="4dp"
+            android:layout_marginStart="@dimen/fl_space_sm"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Layer action" />
+
+        <!-- Delete button: private layers only — public layers already use the action button
+             above for delete. Removes the layer from this device's list; it stays in ArcGIS. -->
+        <ImageButton
+            android:id="@+id/layer_delete_btn"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:padding="4dp"
+            android:layout_marginStart="4dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_delete"
+            android:contentDescription="Remove layer from this list" />
+
+    </LinearLayout>
+
+</LinearLayout>

@@ -1,0 +1,25 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.6.11806.211 stable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FeatureLink", "FeatureLink.csproj", "{C8F2A3B4-D5E6-4F70-AB1C-2D3E4F5A6B7C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C8F2A3B4-D5E6-4F70-AB1C-2D3E4F5A6B7C}.Debug|x64.ActiveCfg = Debug|x64
+		{C8F2A3B4-D5E6-4F70-AB1C-2D3E4F5A6B7C}.Debug|x64.Build.0 = Debug|x64
+		{C8F2A3B4-D5E6-4F70-AB1C-2D3E4F5A6B7C}.Release|x64.ActiveCfg = Release|x64
+		{C8F2A3B4-D5E6-4F70-AB1C-2D3E4F5A6B7C}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {4E0C3F39-FBC7-543F-A0AA-105952693B22}
+	EndGlobalSection
+EndGlobal
