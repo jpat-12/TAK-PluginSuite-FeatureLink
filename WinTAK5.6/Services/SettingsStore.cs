@@ -87,12 +87,48 @@ namespace FeatureLink.Services
                     settings.ExcludedPrivateLayerUrls = excludedEl.Elements("Url")
                         .Select(e => e.Value).ToList();
             }
-            catch
+            catch (Exception ex)
             {
-                // Corrupt/unreadable settings file — start clean rather than crash the plugin.
+                // Corrupt/unreadable settings file. This used to discard the operator's entire
+                // configuration silently, with no backup, no log and no message. Now the bad file
+                // is preserved so it can be recovered or diagnosed, and the failure is reported.
+                Log.Error("settings.xml could not be read — starting with an empty configuration.", ex);
+                TryBackupCorruptSettings();
                 return new FeatureLinkSettings();
             }
             return settings;
+        }
+
+        private static void TryBackupCorruptSettings()
+        {
+            try
+            {
+                if (!File.Exists(SettingsPath)) return;
+                string backup = SettingsPath + ".corrupt-"
+                    + DateTime.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
+                File.Copy(SettingsPath, backup, true);
+                Log.Warn("Unreadable settings backed up to " + backup);
+            }
+            catch (Exception ex) { Log.Warn("Could not back up the unreadable settings file: " + ex.Message); }
+        }
+
+        /// <summary>Saves without throwing. <see cref="Save"/> had no try/catch at all and is
+        /// called from WPF property setters, command handlers and the background PLI timer, so a
+        /// read-only profile, a full disk or an AV lock on the temp file produced either a WinTAK
+        /// crash dialog or an unobserved timer exception.</summary>
+        public static bool TrySave(FeatureLinkSettings settings, out Exception error)
+        {
+            try
+            {
+                Save(settings);
+                error = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                return false;
+            }
         }
 
         public static void Save(FeatureLinkSettings settings)
@@ -110,31 +146,64 @@ namespace FeatureLink.Services
 
             var doc = new XDocument(new XDeclaration("1.0", "utf-8", null), root);
 
-            // Write to a temp file then move — avoids a half-written settings.xml if WinTAK is
-            // killed mid-save (e.g. force-close while a PLI tick is writing LastSyncTicks).
+            // Write to a temp file then replace atomically. The previous Delete-then-Move was NOT
+            // atomic: a crash or power loss in the window between the two left NO settings file at
+            // all — total loss of every layer, exclusion and PLI setting. File.Replace is atomic
+            // on NTFS and keeps a backup copy of the previous file.
             var tempPath = SettingsPath + ".tmp";
-            doc.Save(tempPath);
-            if (File.Exists(SettingsPath)) File.Delete(SettingsPath);
-            File.Move(tempPath, SettingsPath);
+            var backupPath = SettingsPath + ".bak";
+            try
+            {
+                doc.Save(tempPath);
+                if (File.Exists(SettingsPath))
+                    File.Replace(tempPath, SettingsPath, backupPath, true);
+                else
+                    File.Move(tempPath, SettingsPath);
+            }
+            catch
+            {
+                // Never leave a stale .tmp accumulating on a failed save.
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                throw;
+            }
         }
 
         // -------------------------------------------------------------------------
         // DPAPI-protected token storage
         // -------------------------------------------------------------------------
 
-        public static void SaveTokenState(StoredTokenState state)
+        /// <summary>Returns false (rather than throwing out of <c>ApplyTokens</c> → <c>SignInAsync</c>)
+        /// when the blob cannot be written: <c>ProtectedData.Protect</c> throws
+        /// <c>CryptographicException</c> on some domain/profile configurations, and a read-only
+        /// profile fails the write. The caller stays signed in for this session and reports
+        /// "signed in but not persisted" rather than "sign-in failed".</summary>
+        public static bool SaveTokenState(StoredTokenState state)
         {
-            Directory.CreateDirectory(RootDir);
-            if (state == null)
+            try
             {
-                if (File.Exists(TokensPath)) File.Delete(TokensPath);
-                return;
-            }
+                Directory.CreateDirectory(RootDir);
+                if (state == null)
+                {
+                    if (File.Exists(TokensPath)) File.Delete(TokensPath);
+                    return true;
+                }
 
-            var json = JsonConvert.SerializeObject(state);
-            var plainBytes = System.Text.Encoding.UTF8.GetBytes(json);
-            var protectedBytes = ProtectedData.Protect(plainBytes, Entropy, DataProtectionScope.CurrentUser);
-            File.WriteAllBytes(TokensPath, protectedBytes);
+                var json = JsonConvert.SerializeObject(state);
+                var plainBytes = System.Text.Encoding.UTF8.GetBytes(json);
+                var protectedBytes = ProtectedData.Protect(plainBytes, Entropy, DataProtectionScope.CurrentUser);
+
+                // Atomic replace for the token blob too.
+                var tempPath = TokensPath + ".tmp";
+                File.WriteAllBytes(tempPath, protectedBytes);
+                if (File.Exists(TokensPath)) File.Replace(tempPath, TokensPath, null, true);
+                else File.Move(tempPath, TokensPath);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not persist the ArcGIS session — you will need to sign in again next launch.", ex);
+                return false;
+            }
         }
 
         public static StoredTokenState LoadTokenState()
@@ -145,19 +214,30 @@ namespace FeatureLink.Services
                 var protectedBytes = File.ReadAllBytes(TokensPath);
                 var plainBytes = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.CurrentUser);
                 var json = System.Text.Encoding.UTF8.GetString(plainBytes);
-                return JsonConvert.DeserializeObject<StoredTokenState>(json);
+                // Explicit settings pin TypeNameHandling.None: JsonConvert.DefaultSettings is
+                // process-wide and every WinTAK plugin shares one AppDomain, so another plugin
+                // enabling TypeNameHandling would otherwise turn this into a deserialization sink.
+                return SafeJson.Deserialize<StoredTokenState>(json);
             }
-            catch
+            catch (Exception ex)
             {
                 // Blob unreadable (different user account, corrupted, or DPAPI key rotated) —
                 // treat as logged out rather than throw; user just signs in again.
+                Log.Warn("Stored ArcGIS session could not be read: " + ex.Message);
                 return null;
             }
         }
 
         public static void ClearTokenState()
         {
-            if (File.Exists(TokensPath)) File.Delete(TokensPath);
+            try
+            {
+                if (File.Exists(TokensPath)) File.Delete(TokensPath);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not delete the stored ArcGIS session on sign-out.", ex);
+            }
         }
     }
 }

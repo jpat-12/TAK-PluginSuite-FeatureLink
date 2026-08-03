@@ -1782,7 +1782,14 @@ namespace FeatureLink.ViewModels
                 // left the row stale before its replacement arrived.
                 long stale = now + (long)(PliSendInterval.TotalMilliseconds * StaleIntervalMultiplier);
                 string username = _authService.Username;
-                double ce = pos.CE90, le = pos.LE90;
+                // Real CE/LE instead of the hardcoded 0,0 the old code sent (a fabricated 0 m
+                // error is worse than a null for a downstream consumer assessing position
+                // quality). Sourced from WinTAK's own self CoT point — the same CotPoint type the
+                // send-item path already reads CE90/LE90 from — because ILocationService's GPS
+                // position struct exposes no accuracy fields in any reviewed SDK sample. NaN when
+                // unavailable, which BuildPliAttributes serialises as JSON null.
+                double ce = selfEvent?.Point?.CE90 ?? double.NaN;
+                double le = selfEvent?.Point?.LE90 ?? double.NaN;
 
                 long currentObjectId;
                 lock (_pliObjectIdLock) currentObjectId = _pliObjectId;
