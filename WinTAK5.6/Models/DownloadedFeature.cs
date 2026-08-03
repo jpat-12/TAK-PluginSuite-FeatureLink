@@ -16,14 +16,22 @@ namespace FeatureLink.Models
         public double Lon { get; }
         public double Hae { get; }
 
-        /// <summary>All ArcGIS attributes as strings, keyed by field name — kept around for any
-        /// future display-config / symbology resolution (see DisplayConfig.java, out of scope
-        /// for this pass).</summary>
+        /// <summary>All ArcGIS attributes as strings (culture-invariant), keyed by field name —
+        /// the input to <see cref="Services.DisplayStyleResolver"/>'s icon/colour/label/remarks
+        /// and shape-style resolution.</summary>
         public IReadOnlyDictionary<string, string> Attributes { get; }
 
+        /// <summary>"point" | "polyline" | "polygon" | "multipoint" — which esri geometry the
+        /// feature came from. Needed so shape styling (esriSLS/esriSFS) is applied only to the
+        /// features it actually describes; the coordinate itself is still the first vertex, the
+        /// same simplification the ATAK plugin makes.</summary>
+        public string GeometryKind { get; }
+
         public DownloadedFeature(string uid, string cotType, string callsign, string remarks,
-            double lat, double lon, double hae, IReadOnlyDictionary<string, string> attributes)
+            double lat, double lon, double hae, IReadOnlyDictionary<string, string> attributes,
+            string geometryKind = "point")
         {
+            GeometryKind = string.IsNullOrEmpty(geometryKind) ? "point" : geometryKind;
             Uid = uid;
             CotType = cotType;
             Callsign = callsign;
