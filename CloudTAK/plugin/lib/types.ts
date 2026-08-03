@@ -24,6 +24,10 @@ export interface ArcGISLayer {
     // it's only fetched once per layer. Empty until resolved — layerActions.downloadLayer()
     // lazily backfills it for layers added before this field existed.
     geometryType: string;
+    // Sublayer index within the parent FeatureServer/MapServer. Before C-08 the model could not
+    // represent "layer 2 of this service" at all — every layer was pinned to 0 by
+    // `ensureLayerIndex`, so a service exposing layers 0/1/2 collapsed to one unreachable row.
+    layerId: number;
     featureCount: number;
     lastSync: number;               // epoch ms; 0 = never synced
     downloadEnabled: boolean;
@@ -31,12 +35,20 @@ export interface ArcGISLayer {
     recurrenceUnit: 's' | 'min' | 'hr';
     isPliLayer: boolean;
     visible: boolean;
+    // True when the last download hit MAX_DOWNLOAD_FEATURES — the row must not present a
+    // truncated count as the whole layer (C-06).
+    truncated: boolean;
+    // Outcome of auto-symbology resolution on the download path, so the operator can tell
+    // "this renderer has no symbology" from "icon registration failed" (FIX-7).
+    stylingStatus: 'unknown' | 'ok' | 'none' | 'failed';
+    stylingMessage: string;
 }
 
 export function newLayer(name: string, url: string, type: LayerKind, access: LayerAccess = 'org', ownedByMe = false): ArcGISLayer {
     return {
         name, url, type, access, ownedByMe,
         geometryType: '',
+        layerId: 0,
         featureCount: 0,
         lastSync: 0,
         downloadEnabled: false,
@@ -44,7 +56,49 @@ export function newLayer(name: string, url: string, type: LayerKind, access: Lay
         recurrenceUnit: 's',
         isPliLayer: false,
         visible: true,
+        truncated: false,
+        stylingStatus: 'unknown',
+        stylingMessage: '',
     };
+}
+
+// Fills in fields absent from a layer persisted by an older build. The store's `{...defaults(),
+// ...JSON.parse(raw)}` merge is shallow, so legacy layer objects arrived with `undefined` fields:
+// `visible === undefined` is falsy, which silently rendered every legacy layer as hidden
+// (Appendix B §7.2).
+export function migrateLayer(raw: Partial<ArcGISLayer> & { name?: string; url?: string }): ArcGISLayer | null {
+    if (typeof raw?.url !== 'string' || raw.url === '') return null;
+    const base = newLayer(raw.name ?? 'Unnamed', raw.url, raw.type === 'public' ? 'public' : 'private', raw.access ?? 'org', raw.ownedByMe === true);
+    return {
+        ...base,
+        ...raw,
+        name: typeof raw.name === 'string' && raw.name !== '' ? raw.name : base.name,
+        geometryType: typeof raw.geometryType === 'string' ? raw.geometryType : '',
+        layerId: typeof raw.layerId === 'number' ? raw.layerId : 0,
+        featureCount: typeof raw.featureCount === 'number' ? raw.featureCount : 0,
+        lastSync: typeof raw.lastSync === 'number' ? raw.lastSync : 0,
+        recurrenceInterval: clampRecurrenceSeconds(raw.recurrenceInterval),
+        recurrenceUnit: raw.recurrenceUnit === 'min' || raw.recurrenceUnit === 'hr' ? raw.recurrenceUnit : 's',
+        visible: raw.visible !== false,
+        truncated: raw.truncated === true,
+        stylingStatus: raw.stylingStatus ?? 'unknown',
+        stylingMessage: typeof raw.stylingMessage === 'string' ? raw.stylingMessage : '',
+    };
+}
+
+// Minimum auto-refresh period. A shared config could previously carry `{iv: 1, u: 's'}` and install
+// a 1-second refresh loop against the org's ArcGIS service — a self-inflicted DoS and a fast route
+// to API-credit exhaustion (Appendix B §8.2). 0 still means "off".
+export const MIN_RECURRENCE_SECONDS = 30;
+export const MAX_RECURRENCE_SECONDS = 86_400;
+
+export function clampRecurrenceSeconds(v: unknown): number {
+    const n = typeof v === 'number' ? v : Number(v);
+    // NaN reached the store unvalidated, persisted as `null` (JSON.stringify(NaN) === 'null'), and
+    // on reload `null <= 0` is true — auto-refresh turned itself permanently off while the UI still
+    // showed the bogus value (Appendix B §5.2).
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.min(MAX_RECURRENCE_SECONDS, Math.max(MIN_RECURRENCE_SECONDS, Math.round(n)));
 }
 
 // Auto-refresh period in ms, or 0 if disabled. Ported from ArcGISLayer.recurrenceMillis() —
@@ -141,6 +195,17 @@ export interface DisplayConfig {
     singleShapeStyle?: ShapeStyle;
     // uniqueValue renderer: field VALUE -> stroke/fill style.
     shapeStyleByValue?: Record<string, ShapeStyle>;
+    // Renderer/uid/group carried by a TAK Portal Web Map export (commit 25dd6f3, "Embed Web Map
+    // renderer override in exported config for ATAK's icon self-heal"). Honoring these is what
+    // makes CloudTAK derive the SAME {uid}/{group}/{file} strings the exporter published; without
+    // them CloudTAK self-derives a different uid and the shared icons resolve to nothing (FIX-4).
+    rendererOverride?: unknown;
+    iconsetUid?: string;
+    iconsetGroup?: string;
+    // SHA-256 of the renderer this styling was derived from. The iconset UID is stable by design
+    // across symbol edits, so renderer drift is otherwise invisible; the server-side hot-load
+    // design (Appendix B N.2) compares this to detect it.
+    rendererHash?: string;
 }
 
 // ── Feature download (mirrors ArcGISRestClient.DownloadedFeature / CotFieldMapping) ──
@@ -168,6 +233,15 @@ export interface DownloadedFeature {
     rings: number[][][];
 }
 
+// Result of a paged layer download (C-06). `truncated` must be surfaced in the UI — reporting a
+// capped `features.length` as the layer's feature count is a false negative on real-world objects.
+export interface LayerDownloadResult {
+    features: DownloadedFeature[];
+    truncated: boolean;
+    /** Features dropped for unusable/out-of-range geometry. */
+    skipped: number;
+}
+
 // ── PLI / send-to-layer payload (mirrors ArcGISRestClient.buildPliAttributes) ──
 
 export interface PliFeatureInput {
@@ -183,6 +257,9 @@ export interface PliFeatureInput {
     lat: number; lon: number; hae: number; ce: number; le: number;
     timeMs: number; startMs: number; staleMs: number;
     rawCotXml: string;
+    // Provenance columns the schema defines and ATAK populates (§9.6 parity gap).
+    sourceLayer?: string;
+    sourceObjectId?: string;
 }
 
 // ── Generic operational JSON payload types (kept for paste/upload import — the ATAK

@@ -1,23 +1,38 @@
 {
     "name": "cloudtak-plugin-featurelink",
     "version": "0.1.0",
+    "private": true,
+    "license": "Apache-2.0",
     "type": "module",
     "description": "CloudTAK plugin — bridges CloudTAK to ArcGIS Feature Services (auth, layer browse/download, PLI streaming, send-to-layer)",
-    "scripts": {
-        "lint":  "eslint .",
-        "check": "vue-tsc --noEmit"
+    "engines": {
+        "node": ">=20.11",
+        "npm": ">=10"
     },
-    "//": "Dev-only deps so the plugin can typecheck/lint against CloudTAK's web types in isolation. At build time the plugin is compiled INSIDE CloudTAK, which provides the real versions. '@tak-ps/cloudtak' points at your local CloudTAK checkout's api/web — adjust the relative path to where your CloudTAK lives, or use the published package.",
+    "scripts": {
+        "lint": "eslint .",
+        "check": "vue-tsc --noEmit",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "verify": "npm run check && npm run lint && npm test"
+    },
+    "//": "Dev-only deps so the plugin can typecheck/lint/test in isolation. At build time the plugin is compiled INSIDE CloudTAK, which provides the real versions. CloudTAK's own types are stubbed locally in types/cloudtak.d.ts — the previous 'file:../../../../../CloudTAK/api/web' link pointed outside the repo and made npm ci unreproducible on every machine but the original author's (C-30).",
+    "peerDependencies": {
+        "vue": "^3.5.0"
+    },
     "devDependencies": {
-        "@eslint/js":                        "^10.0.1",
-        "@tak-ps/cloudtak":                  "file:../../../../../CloudTAK/api/web",
-        "@tabler/icons-vue":                 "^3.31.0",
-        "@typescript-eslint/eslint-plugin":  "^8.52.0",
-        "@typescript-eslint/parser":         "^8.52.0",
-        "eslint":                            "^10.0.1",
-        "globals":                           "^17.3.0",
-        "typescript":                        "^6.0.2",
-        "vue":                               "^3.5.26",
-        "vue-tsc":                           "^3.2.2"
+        "@eslint/js": "^10.0.1",
+        "@typescript-eslint/eslint-plugin": "^8.52.0",
+        "@typescript-eslint/parser": "^8.52.0",
+        "@vue/test-utils": "^2.4.6",
+        "eslint": "^10.0.1",
+        "eslint-plugin-vue": "^10.0.0",
+        "globals": "^17.3.0",
+        "happy-dom": "^20.0.0",
+        "typescript": "^6.0.2",
+        "typescript-eslint": "^8.52.0",
+        "vitest": "^3.2.7",
+        "vue": "^3.5.26",
+        "vue-tsc": "^3.2.2"
     }
 }

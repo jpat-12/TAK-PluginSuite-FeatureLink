@@ -15,6 +15,8 @@
 import { getCloudTakToken } from './cloudtakInternals.ts';
 import { extractAutoSymbology, isAutoSymbologyEmpty } from './autoSymbology.ts';
 import { buildShapeStyleFields } from './displayConfig.ts';
+import { canonicalizeLayerUrl } from './arcgisUrl.ts';
+import { fetchLayerMeta } from './arcgisRest.ts';
 import type { AutoSymbologyResult } from './autoSymbology.ts';
 import type { DisplayConfig, SymConfig, SymValueEntry } from './types.ts';
 
@@ -23,44 +25,17 @@ export const SPEC_VERSION = 1;
 const GROUP_BAD_RE = /[^A-Za-z0-9 _-]/g;
 const FILE_BAD_RE = /[^A-Za-z0-9._-]/g;
 
+/** A hostile or misauthored renderer must not be able to push unbounded data into the operator's CloudTAK account (§10.3). */
+const MAX_ICONS = 256;
+const MAX_ICON_BYTES = 512 * 1024;
+
 // ── §2 — URL canonicalization ──────────────────────────────────────────────────
 
-function isWebMapLink(url: string): boolean {
-    return /\/home\/item\.html/i.test(url) || /\/sharing\/rest\/content\/items\//i.test(url);
-}
-
-// §2.1–§2.2: normalize to {scheme}://{host}{/path}/FeatureServer|MapServer/{layerId}, with
-// scheme+host lowercased, path case preserved, query/fragment/trailing-slash stripped, and a
-// bare service root defaulting to layer 0. Throws on a Web Map link (§2.3 not implemented here
-// either — reject rather than hash a raw web-map URL, which would produce a non-matching UID).
+// Canonicalization moved to arcgisUrl.ts so the REST client and the iconset generator cannot drift
+// apart again (they previously had two different URL contracts — C-08). Re-exported because
+// AUTO-ICONSET-SPEC.md names this function.
 export function canonicalizeUrl(sourceUrl: string): string {
-    const raw = (sourceUrl || '').trim();
-    if (!raw) throw new Error('A FeatureServer layer URL is required.');
-    if (isWebMapLink(raw)) {
-        throw new Error(
-            "Web Map links aren't resolved yet — paste the FeatureServer layer URL "
-            + '(…/FeatureServer/0). See AUTO-ICONSET-SPEC.md §2.3.',
-        );
-    }
-
-    let u: URL;
-    try { u = new URL(raw); }
-    catch { throw new Error(`Not a valid URL: ${raw}`); }
-
-    const scheme = u.protocol.toLowerCase().replace(/:$/, '');
-    const host = u.host.toLowerCase();
-    const path = u.pathname.replace(/\/{2,}/g, '/').replace(/\/+$/, '');
-
-    const m = path.match(/^(.*\/(?:FeatureServer|MapServer))(?:\/(\d+))?$/i);
-    if (!m) {
-        throw new Error(
-            `URL does not point at a FeatureServer/MapServer layer: ${raw} `
-            + '(expected …/FeatureServer or …/FeatureServer/{layerId}).',
-        );
-    }
-    const base = m[1];
-    const layerId = m[2] ?? '0'; // §2.2 — service root defaults to layer 0
-    return `${scheme}://${host}${base}/${layerId}`;
+    return canonicalizeLayerUrl(sourceUrl).url;
 }
 
 // ── §4 — UID ────────────────────────────────────────────────────────────────────
@@ -83,7 +58,7 @@ export function sanitizeGroupBase(s: string): string {
 export function fileNameFor(rawLabel: string | null): string {
     let base = rawLabel ?? '';
     const parts = base.split(/[\\/]/);
-    base = parts[parts.length - 1];
+    base = parts[parts.length - 1] ?? '';
     base = base.replace(/\.png$/i, '');
     base = base.replace(FILE_BAD_RE, '_');
     if (!base) base = 'icon';
@@ -165,30 +140,56 @@ function extractPmsEntries(renderer: EsriRendererJson | undefined, fieldOverride
 
 interface IconToUpload { name: string; imageData: string }
 
-async function apiPost(path: string, body: unknown, token: string): Promise<void> {
+async function apiPost(path: string, body: unknown, token: string): Promise<number> {
     const res = await fetch(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
     });
-    if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
+    // 409 is returned when the deterministic UID already exists — which is the NORMAL case on a
+    // second add of the same layer. Treating it as an error made re-adding a layer silently lose
+    // its icons (§10.3).
+    if (!res.ok && res.status !== 409) throw new Error(`${path} → HTTP ${res.status}`);
+    return res.status;
+}
+
+/** Rejects anything that is not a real PNG before it is pushed into the operator's account (§10.3). */
+function isPlausiblePng(base64: string): boolean {
+    if (base64.length > MAX_ICON_BYTES * 2) return false;
+    let head: string;
+    try { head = atob(base64.slice(0, 16)); } catch { return false; }
+    return head.charCodeAt(0) === 0x89 && head.slice(1, 4) === 'PNG';
 }
 
 // Creates the iconset (user-scoped — a plugin has no admin rights to make it server-wide) then
 // uploads each icon. CloudTAK's own map already resolves the resulting {uid}/{group}/{filename}
 // paths on demand (api/web/src/base/cot.ts + the atlas-sync IconManager), so nothing else on the
 // rendering side needs to change — this is purely "does the icon exist on the server yet".
-async function registerIconset(uid: string, group: string, icons: IconToUpload[], token: string): Promise<void> {
+//
+// Uploads are all-or-nothing from the caller's point of view: a partial set registered under a
+// deterministic UID is worse than none, because every other platform resolves {uid}/{group}/{file}
+// against it and gets a 404 (§10.3). Failures are collected and reported rather than aborting
+// mid-set on the first one.
+async function registerIconset(uid: string, group: string, icons: IconToUpload[], token: string): Promise<{ uploaded: number; failed: string[] }> {
     await apiPost('/api/iconset', {
         uid, version: SPEC_VERSION, name: group, scope: 'USER', default_group: group,
     }, token);
 
+    const failed: string[] = [];
+    let uploaded = 0;
     for (const icon of icons) {
-        await apiPost(`/api/iconset/${encodeURIComponent(uid)}/icon`, {
-            name: `${group}/${icon.name}`,
-            data: `data:image/png;base64,${icon.imageData}`,
-        }, token);
+        try {
+            await apiPost(`/api/iconset/${encodeURIComponent(uid)}/icon`, {
+                name: `${group}/${icon.name}`,
+                data: `data:image/png;base64,${icon.imageData}`,
+            }, token);
+            uploaded++;
+        } catch (e) {
+            failed.push(`${icon.name}: ${e instanceof Error ? e.message : String(e)}`);
+        }
     }
+    return { uploaded, failed };
 }
 
 // ── Self-render — synthesize a DisplayConfig from the just-registered icons ────
@@ -229,6 +230,27 @@ export interface AutoIconsetResult {
     iconCount: number;
     field: string;
     displayConfig: DisplayConfig;
+    /** Non-fatal problems (icons that failed to upload, symbols that failed to decode). */
+    warnings: string[];
+}
+
+export interface AutoIconsetOptions {
+    /** Driving field override (AutoIconset.java's `fieldOverride`). */
+    fieldOverride?: string;
+    /** ArcGIS access token, used only for the metadata fetch and only on trusted hosts. */
+    arcgisToken?: string | null;
+    /**
+     * Renderer supplied by the caller instead of being fetched. FIX-4 / parity with
+     * `AutoIconset.generate(..., rendererOverride, uidOverride, groupOverride)`: a TAK Portal
+     * Web Map export embeds the resolved renderer in the config, and without honoring it CloudTAK
+     * self-derives a DIFFERENT uid, so the icons it registers do not match the paths in the shared
+     * config and nothing renders (§10.3).
+     */
+    rendererOverride?: EsriRendererJson | null;
+    uidOverride?: string | null;
+    groupOverride?: string | null;
+    /** Pre-fetched layer name, so the download path does not re-fetch metadata it already has. */
+    layerName?: string;
 }
 
 // Generate + register an iconset from a FeatureServer layer link, per AUTO-ICONSET-SPEC.md, and
@@ -239,18 +261,28 @@ export interface AutoIconsetResult {
 // esriSMS/esriSLS/esriSFS styling to extract — that's an unstyled/default-symbology layer, not a
 // failure. Throws on an actual problem (bad URL, network/API failure, no CloudTAK session — the
 // latter only when there ARE icons to register; a shape-only result needs no CloudTAK session).
-export async function generateAutoIconset(sourceUrl: string, fieldOverride?: string, arcgisToken?: string | null): Promise<AutoIconsetResult | null> {
+export async function generateAutoIconset(
+    sourceUrl: string, options: AutoIconsetOptions = {},
+): Promise<AutoIconsetResult | null> {
+    const { fieldOverride, arcgisToken = null, rendererOverride = null, uidOverride = null, groupOverride = null } = options;
     const canonicalUrl = canonicalizeUrl(sourceUrl);
+    const warnings: string[] = [];
 
-    const tokenQs = arcgisToken ? `&token=${encodeURIComponent(arcgisToken)}` : '';
-    const res = await fetch(`${canonicalUrl}?f=json${tokenQs}`, { headers: { Accept: 'application/json' } });
-    if (!res.ok) throw new Error(`ArcGIS request failed (${res.status}) for ${canonicalUrl}`);
-    const meta = await res.json() as { name?: string; serviceDescription?: string; error?: unknown; drawingInfo?: { renderer?: EsriRendererJson } };
-    if (meta.error) throw new Error(`ArcGIS error fetching ${canonicalUrl}`);
+    // One metadata fetch for the whole plugin: fetchLayerMeta is cached, so the download path that
+    // already resolved geometryType/objectIdField does NOT pay for a second `?f=json` here. Before
+    // this, fetchLayerInfo, fetchGeometryType and this function fetched the same document three
+    // times and read its renderer zero times (RC-3).
+    let renderer = rendererOverride;
+    let layerName = options.layerName ?? '';
+    if (!renderer || !layerName) {
+        const meta = await fetchLayerMeta(canonicalUrl, arcgisToken);
+        if (!renderer) renderer = meta.renderer as EsriRendererJson | null;
+        if (!layerName) layerName = meta.name;
+    }
+    if (!layerName) layerName = 'Layer';
 
-    const layerName = meta.name || meta.serviceDescription || 'Layer';
-    const { field: iconField, single, entries } = extractPmsEntries(meta.drawingInfo?.renderer, fieldOverride);
-    const shapeResult = extractAutoSymbology(meta.drawingInfo?.renderer, fieldOverride);
+    const { field: iconField, single, entries } = extractPmsEntries(renderer ?? undefined, fieldOverride);
+    const shapeResult = extractAutoSymbology(renderer ?? undefined, fieldOverride);
     const hasShapeStyle = !isAutoSymbologyEmpty(shapeResult);
     if (!entries.length && !hasShapeStyle) return null;
 
@@ -261,29 +293,48 @@ export async function generateAutoIconset(sourceUrl: string, fieldOverride?: str
     let singleIconPath: string | null = null;
 
     if (entries.length) {
-        uid = await uidFor(canonicalUrl, iconField);
-        group = `${sanitizeGroupBase(layerName)} Icons`;
+        uid = uidOverride ?? await uidFor(canonicalUrl, iconField);
+        // §5.1: the 60-char cap is applied ONCE, to the base, BEFORE the " Icons" suffix, and never
+        // again — re-applying it after the suffix is the confirmed TAK Portal double-truncation bug
+        // that breaks {uid}/{group}/{file} string identity for names over 54 chars (C-39).
+        group = groupOverride ?? `${sanitizeGroupBase(layerName)} Icons`;
 
         const seen = new Set<string>();
         const icons: IconToUpload[] = [];
         for (const e of entries) {
+            if (icons.length >= MAX_ICONS) {
+                warnings.push(`renderer declares more than ${MAX_ICONS} icons — the rest were ignored`);
+                break;
+            }
+            if (!isPlausiblePng(e.imageData)) {
+                warnings.push(`symbol "${e.rawLabel ?? e.value ?? 'default'}" is not a usable PNG and was skipped`);
+                continue;
+            }
             const fname = dedupe(e.isDefault && !e.rawLabel ? 'Other.png' : fileNameFor(e.rawLabel), seen);
             icons.push({ name: fname, imageData: e.imageData });
             const path = `${uid}/${group}/${fname}`;
             if (e.value) pathByValue.set(e.value, path);
             else if (single) singleIconPath = path;
         }
-        if (!icons.length) throw new Error('All picture-marker symbols failed to decode.');
 
-        const cloudtakToken = getCloudTakToken();
-        if (!cloudtakToken) throw new Error('Not signed into CloudTAK — can\'t register icons on this server.');
-        await registerIconset(uid, group, icons, cloudtakToken);
-        iconCount = icons.length;
+        if (icons.length) {
+            const cloudtakToken = getCloudTakToken();
+            if (!cloudtakToken) {
+                // ATAK logs and degrades here rather than failing the whole add (AutoIconset.java:374).
+                warnings.push('not signed into CloudTAK — icons could not be registered on this server');
+            } else {
+                const { uploaded, failed } = await registerIconset(uid, group, icons, cloudtakToken);
+                iconCount = uploaded;
+                if (failed.length) warnings.push(`${failed.length} of ${icons.length} icons failed to upload: ${failed[0]}`);
+            }
+        } else {
+            warnings.push('all picture-marker symbols failed to decode');
+        }
     }
 
     const field = entries.length ? iconField : shapeResult.field;
     return {
-        uid, group, iconCount, field,
+        uid, group, iconCount, field, warnings,
         displayConfig: buildAutoDisplayConfig(canonicalUrl, field, singleIconPath, pathByValue, shapeResult),
     };
 }
