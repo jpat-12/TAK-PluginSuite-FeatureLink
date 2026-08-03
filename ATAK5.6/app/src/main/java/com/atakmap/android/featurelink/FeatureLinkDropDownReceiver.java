@@ -1509,14 +1509,16 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         String field = iconset != null ? iconset.field : shapeResult.field;
         String singleIconPath = iconset != null ? iconset.singleIconPath : null;
         Map<String, String> pathByValue = iconset != null ? iconset.pathByValue : null;
-        lastResolvedIconset.set(iconset);
+        if (iconset != null) {
+            // Kept from the old add-path behaviour, but it now fires on EVERY route that resolves
+            // symbology, not only "paste a URL" — which is the whole point of C-07.
+            final AutoIconset.Result generated = iconset;
+            postToUi(() -> Toast.makeText(pluginContext,
+                    "Icons ready: " + generated.group + " (" + generated.iconCount + ")",
+                    Toast.LENGTH_SHORT).show());
+        }
         return DisplayConfig.forAutoIcons(layerUrl, field, singleIconPath, pathByValue, shapeResult);
     }
-
-    /** Side channel so the add path can still toast "Icons ready: G (N)" without
-     * {@link #resolveSymbology} needing two return values. */
-    private final java.util.concurrent.atomic.AtomicReference<AutoIconset.Result>
-            lastResolvedIconset = new java.util.concurrent.atomic.AtomicReference<>();
 
     /**
      * Resolves and installs symbology for {@code layer} if it has none yet, storing the result in
