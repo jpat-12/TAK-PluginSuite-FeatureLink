@@ -1,0 +1,59 @@
+# gitleaks configuration for TAK-PluginSuite-FeatureLink.
+#
+# Extends the upstream default ruleset rather than replacing it — a hand-rolled ruleset
+# inevitably lags upstream's coverage of new credential formats.
+
+[extend]
+useDefault = true
+
+# ── Suite-specific detections ────────────────────────────────────────────────
+
+[[rules]]
+id = "featurelink-keystore-password"
+description = "Hardcoded keystore password in a Gradle signing config"
+# C-40: storePassword/keyPassword were literals in BOTH the debug and release signingConfigs.
+# The literal in the RELEASE config is the structural problem: a real production key cannot
+# be substituted without editing tracked build logic, so the correct posture is unreachable.
+regex = '''(?i)(store|key)Password\s+["'][^"']{3,}["']'''
+path = '''.*\.gradle$'''
+tags = ["password", "gradle", "C-40"]
+
+[[rules]]
+id = "featurelink-arcgis-token-in-url"
+description = "ArcGIS access token in a URL query string"
+# C-21: tokens were passed as ?token=… and then logged. A token in a URL leaks via server
+# logs, proxy logs, Referer headers and crash reports.
+regex = '''[?&]token=[A-Za-z0-9._-]{20,}'''
+tags = ["token", "arcgis", "C-21"]
+
+[[rules]]
+id = "featurelink-prod-host"
+description = "Live production TAK server FQDN"
+# Appendix E §1.5: docs/CLOUDTAK-SHARE-DESIGN.md named a real public-safety TAK server and
+# its exact software version in a public repository — a reconnaissance gift for anyone
+# matching that version against a CVE feed.
+regex = '''map\.prod\.[a-z0-9-]+\.us'''
+tags = ["opsec"]
+
+# ── Allowlist ────────────────────────────────────────────────────────────────
+
+[allowlist]
+description = "Known-benign matches, each justified"
+
+paths = [
+  # The audit checklist quotes findings verbatim, including the credential patterns they
+  # describe. It is gitignored and must never reach a remote in any case.
+  '''FEATURELINK-AUDIT-CHECKLIST\.md''',
+  # The icon corpora are 14,900 binary files; scanning them is pure cost.
+  '''TAKPortal/assets/featurelink-configurator/icons/.*''',
+  '''Infra-TAK/featurelink_displayconfig_assets/icons/.*''',
+]
+
+regexes = [
+  # The ArcGIS OAuth client ID. Adjudicated LOW and explicitly NOT a credential: under
+  # RFC 8252 / RFC 7636 a native or browser-based PKCE client is a PUBLIC client, and its ID
+  # is transmitted in the clear on every authorize request regardless. It cannot be "leaked".
+  # The genuine issues are operational coupling and five-place duplication, tracked
+  # separately — not secret exposure.
+  '''RXtGmClVuYd1Sp7d''',
+]

@@ -1,0 +1,193 @@
+# FeatureLink Suite — security gates.
+#
+# Closes the security-gate half of C-13 and supports C-35 / C-40.
+#
+# Before this file there was no CodeQL, no dependency scanning, no secret scanning, no
+# `npm audit`, no `dotnet list package --vulnerable`, and no static analysis of any kind
+# across four languages. Given the committed keystore (C-40), secret scanning would have
+# flagged it on the very first push.
+
+name: Security
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    # Weekly, so that a newly-disclosed CVE in a pinned dependency surfaces without needing
+    # a commit to trigger it. Dependency risk is time-varying; a push-only gate is not.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a secret committed and later deleted is still a secret. The audit's
+          # own history sweep found only the two keystore paths, but that was a point-in-time
+          # result and is not a substitute for a standing gate.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .github/gitleaks.toml
+          # NOTE: gitleaks-action requires GITLEAKS_LICENSE for ORGANISATION-owned repos.
+          # It is free for personal public repositories. If this repository moves under an
+          # organisation, set the secret or this job will fail — which is the correct
+          # failure mode, but it needs to be a deliberate decision, not a surprise.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # All four languages present in the suite are analysed. `javascript-typescript`
+          # covers CloudTAK (Vue/TS) and TAK Portal (Node/Express/EJS) together.
+          - language: javascript-typescript
+            os: ubuntu-latest
+          - language: python
+            os: ubuntu-latest
+          # Java and C# need a real compile, which needs the SDKs. They are declared here so
+          # the coverage gap is visible in the Actions tab rather than silently absent, and
+          # they run in `none` build mode where CodeQL supports it.
+          - language: java-kotlin
+            os: ubuntu-latest
+            build-mode: none
+          - language: csharp
+            os: windows-2022
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode || 'none' }}
+          queries: security-and-quality
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        with:
+          category: /language:${{ matrix.language }}
+
+  npm-audit:
+    name: npm audit (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: CloudTAK
+            dir: CloudTAK/plugin
+          - component: TAKPortal
+            dir: TAKPortal
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Audit
+        working-directory: ${{ matrix.dir }}
+        run: |
+          set -euo pipefail
+          if [ ! -f package-lock.json ]; then
+            echo "::warning::${{ matrix.component }} has no package-lock.json; generating one"
+            echo "::warning::for audit purposes only. Commit the real lockfile (C-30)."
+            npm install --package-lock-only --no-audit --no-fund
+          fi
+          # `high` is the failure threshold. Moderate findings are reported but do not block,
+          # so that the gate stays actionable rather than being routinely overridden.
+          npm audit --audit-level=high
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          # C-36: the suite is Apache-2.0. A dependency arriving under a copyleft licence is
+          # a licensing incident, not a style question — catch it at the PR, not at award.
+          deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0, LGPL-3.0, SSPL-1.0
+          comment-summary-in-pr: on-failure
+
+  pinned-binaries:
+    name: Pinned binary digests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Verifies every blob listed in .github/pinned-binaries.sha256, and — just as
+      # importantly — fails if a NEW executable blob appears that nobody pinned.
+      - name: Verify recorded digests
+        run: |
+          set -euo pipefail
+          rc=0
+          while read -r path digest; do
+            case "$path" in ''|'#'*) continue ;; esac
+            if [ ! -f "$path" ]; then
+              echo "::error::pinned file missing: $path"
+              rc=1
+              continue
+            fi
+            actual="$(sha256sum "$path" | cut -d' ' -f1)"
+            if [ "$actual" != "$digest" ]; then
+              echo "::error::digest mismatch for $path"
+              echo "  expected $digest"
+              echo "  actual   $actual"
+              rc=1
+            else
+              echo "OK  $path"
+            fi
+          done < <(sed 's/#.*//' .github/pinned-binaries.sha256 | awk 'NF==2')
+          exit $rc
+
+      - name: Fail on any unpinned executable blob
+        run: |
+          set -euo pipefail
+          rc=0
+          while IFS= read -r f; do
+            if ! grep -qF "$f" .github/pinned-binaries.sha256; then
+              echo "::error::$f is a tracked executable binary with no pinned digest."
+              echo "  It would be executed by the build with no integrity check. Establish its"
+              echo "  provenance, record it in THIRD-PARTY-NOTICES.md, then add its SHA-256 to"
+              echo "  .github/pinned-binaries.sha256."
+              rc=1
+            fi
+          done < <(git ls-files '*.jar' '*.aar' '*.dll' '*.exe' '*.so' '*.keystore' '*.jks')
+          exit $rc

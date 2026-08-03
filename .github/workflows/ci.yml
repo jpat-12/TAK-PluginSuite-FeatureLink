@@ -1,0 +1,641 @@
+# FeatureLink Suite — component build / lint / test matrix.
+#
+# Closes C-13 (CRITICAL) and carries the enforcement half of C-15, C-29 and C-30.
+#
+# WHAT WAS WRONG BEFORE
+# ---------------------
+# Four workflow files existed at ATAK5.6/workflows/{build,release}.yml and
+# ATAK5.7/workflows/{build,release}.yml. GitHub Actions only discovers workflows in
+# .github/workflows/ AT THE REPOSITORY ROOT, and .github/ did not exist. Those four files
+# had never executed and could not execute. The repository appeared to have CI and had
+# none: every one of the nine released artifacts came from an unverified local build on a
+# developer workstation.
+#
+# They would also have failed immediately if simply relocated:
+#   * build.yml:66 wrote `sdk.path` into local.properties, but ATAK5.6/app/build.gradle:44
+#     reads `atak.sdk.path`. main.jar would never have reached the compile classpath.
+#   * every path in them assumed the repository root WAS the ATAK project root
+#     (buildtools/, gradlew, app/build/outputs/...), which in this monorepo is ATAK5.6/.
+#
+# Both are fixed here. See .github/workflows/release.yml for the two Actions script
+# injections that were in the old release.yml.
+#
+# ACTION PINNING
+# --------------
+# Every third-party action is pinned by 40-character commit SHA, never by tag. A tag is
+# repointable by the action owner or by anyone who compromises the action repository — the
+# tj-actions/changed-files supply-chain pattern. The human-readable version is in a trailing
+# comment so Dependabot can still propose upgrades (.github/dependabot.yml).
+#
+# PERMISSIONS
+# -----------
+# Every job declares least-privilege `permissions:`. The old workflows declared none and so
+# inherited the repository-default GITHUB_TOKEN scope, which on older repository settings is
+# read/write on all scopes.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# Top-level default: read-only. Jobs escalate individually, and none of them needs to.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ===========================================================================
+  # Repository-wide gates. These need no SDK and are expected to be GREEN today.
+  # ===========================================================================
+
+  version-policy:
+    name: Version policy (C-15)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need history so the monotonicity gate can resolve the merge base.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Determine baseline ref
+        id: baseline
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            echo "ref=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${GITHUB_SHA}~1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enforce VERSIONING.md
+        run: |
+          python .github/scripts/check_versions.py --baseline "${{ steps.baseline.outputs.ref }}"
+
+  icon-corpus-parity:
+    name: Icon corpus parity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      # The two corpora are currently byte-for-byte identical — the "silent drift" asserted
+      # by two auditors is FALSE and was struck (Appendix F §2.4). What is missing is any
+      # mechanism preventing FUTURE divergence, which would break the frozen cross-platform
+      # iconset contract silently. This job is that mechanism.
+      - name: Assert the two icon corpora are identical
+        run: python .github/scripts/check_icon_corpora.py --report
+
+  clean-clone-build:
+    name: Clean-clone build (C-29)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # C-29: three load-bearing source files (AutoSymbology.java x2, autoSymbology.ts) were
+      # untracked while tracked, modified files imported them. HEAD still built, so the
+      # breakage was prospective — the first commit of that work would have broken the branch
+      # for everyone. This job makes that class of error impossible to land: it builds from
+      # what git actually tracks, with no working-tree residue.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Export a pristine tree from the index
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/clean
+          # `git archive` sees ONLY tracked content. Anything load-bearing but untracked
+          # simply will not be there, and the steps below will fail.
+          git archive HEAD | tar -x -C /tmp/clean
+          echo "Tracked files exported: $(find /tmp/clean -type f | wc -l)"
+
+      - name: Assert every TypeScript import resolves to a tracked file
+        working-directory: /tmp/clean/CloudTAK/plugin
+        run: |
+          set -euo pipefail
+          missing=0
+          # Walk every relative import in the tracked TS sources and confirm the target is
+          # present in the pristine export.
+          while IFS= read -r line; do
+            src="${line%%:*}"
+            spec="$(printf '%s' "$line" | sed -n "s/.*from *['\"]\(\.[^'\"]*\)['\"].*/\1/p")"
+            [ -z "$spec" ] && continue
+            dir="$(dirname "$src")"
+            ok=0
+            for ext in "" ".ts" ".tsx" ".js" ".vue" "/index.ts"; do
+              [ -f "$dir/$spec$ext" ] && ok=1 && break
+            done
+            if [ "$ok" -eq 0 ]; then
+              echo "UNRESOLVED IMPORT: $src -> $spec"
+              missing=$((missing+1))
+            fi
+          done < <(grep -rn "from *['\"]\." --include='*.ts' --include='*.vue' . || true)
+          if [ "$missing" -gt 0 ]; then
+            echo
+            echo "$missing import(s) do not resolve in a clean clone."
+            echo "This is C-29: a tracked file importing an UNTRACKED one. Run 'git add' on the"
+            echo "missing sources in the same commit as their callers."
+            exit 1
+          fi
+          echo "All relative TypeScript imports resolve against tracked content."
+
+      - name: Assert every Java import of a first-party class resolves to a tracked file
+        run: |
+          set -euo pipefail
+          missing=0
+          for tree in ATAK5.6 ATAK5.7; do
+            src="/tmp/clean/$tree/app/src/main/java"
+            [ -d "$src" ] || continue
+            while IFS= read -r fq; do
+              path="$src/$(printf '%s' "$fq" | tr '.' '/').java"
+              if [ ! -f "$path" ]; then
+                echo "UNRESOLVED IMPORT ($tree): $fq"
+                missing=$((missing+1))
+              fi
+            done < <(grep -rhoP '^import \Kcom\.atakmap\.android\.featurelink\.[A-Za-z0-9_.]+(?=;)' "$src" | sort -u)
+          done
+          if [ "$missing" -gt 0 ]; then
+            echo
+            echo "$missing first-party Java import(s) do not resolve in a clean clone (C-29)."
+            exit 1
+          fi
+          echo "All first-party Java imports resolve against tracked content."
+
+      - name: Assert Python entry points import cleanly from the pristine tree
+        working-directory: /tmp/clean
+        run: python -m py_compile Infra-TAK/featurelink_displayconfig.py
+
+  # ===========================================================================
+  # Node components. These CAN be built and tested for real, today.
+  # ===========================================================================
+
+  cloudtak:
+    name: CloudTAK (typecheck / lint / test)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: CloudTAK/plugin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: CloudTAK/plugin/package-lock.json
+
+      # `npm ci` — not `npm install`. It installs exactly the lockfile and fails if
+      # package.json and the lockfile disagree. This is the reproducibility half of C-30:
+      # CloudTAK/.gitignore previously ignored plugin/package-lock.json, deliberately
+      # discarding the lockfile, so with `eslint ^10` / `typescript ^6` / `vue ^3.5` caret
+      # ranges any two installs could resolve differently.
+      - name: Assert the lockfile is committed (C-30)
+        run: |
+          if [ ! -f package-lock.json ]; then
+            echo "::error::CloudTAK/plugin/package-lock.json is not present in the checkout."
+            echo "C-30: the lockfile is what makes 'npm ci' reproducible and is the input to"
+            echo "the CycloneDX SBOM. Remove the ignore rule and commit it."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+  takportal:
+    name: TAK Portal (lint / test)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: TAKPortal
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "::warning::TAKPortal/package-lock.json is absent; falling back to 'npm install'."
+            echo "::warning::Commit the lockfile so this component is reproducible (C-30)."
+            npm install
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      # install.sh and uninstall.sh are how this component is deployed, with root-adjacent
+      # effects. A syntax error in them is a production outage, and they are never compiled.
+      - name: Shell script syntax check
+        run: |
+          set -euo pipefail
+          for f in install.sh uninstall.sh; do
+            [ -f "$f" ] || continue
+            bash -n "$f" && echo "OK  $f"
+          done
+
+      # A CRLF shebang line makes a script fail on Linux with `bad interpreter: /bin/bash^M`.
+      # .gitattributes pins *.sh to LF; this asserts the pin actually held.
+      - name: Assert shell scripts are LF (see .gitattributes)
+        run: |
+          set -euo pipefail
+          bad=0
+          for f in install.sh uninstall.sh; do
+            [ -f "$f" ] || continue
+            if head -c 2000 "$f" | grep -q $'\r'; then
+              echo "::error::$f contains CR characters. It will not execute on Linux."
+              bad=1
+            fi
+          done
+          exit $bad
+
+  infratak:
+    name: Infra-TAK (lint / test)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: Infra-TAK
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          # Pinned exactly: an unpinned linter is a build that can start failing without a
+          # commit, and an unpinned install is an unattested dependency (C-35 / NIST SSDF).
+          pip install "ruff==0.14.2" "pytest==8.4.2" "bandit==1.9.2"
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Bandit (Python static security analysis)
+        # Infra-TAK is root-privileged at install time and carries the confirmed XSS at
+        # featurelink_displayconfig.py:248. It gets a security linter, not just a style one.
+        run: bandit -r . -ll
+
+      - name: Tests
+        run: |
+          if compgen -G "test_*.py" > /dev/null || compgen -G "tests/**" > /dev/null; then
+            pytest -q
+          else
+            echo "::warning::Infra-TAK has no test files yet (C-14). Skipping pytest."
+          fi
+
+      - name: Shell script syntax + LF check
+        run: |
+          set -euo pipefail
+          bad=0
+          for f in install.sh uninstall.sh; do
+            [ -f "$f" ] || continue
+            bash -n "$f" && echo "OK  syntax $f"
+            if head -c 2000 "$f" | grep -q $'\r'; then
+              echo "::error::$f contains CR characters. It will not execute on Linux."
+              bad=1
+            fi
+          done
+          exit $bad
+
+  # ===========================================================================
+  # ATAK. REQUIRES the ATAK CIV SDK, which is not redistributable and is not present
+  # on a public runner. These jobs FAIL LOUDLY when the SDK secret is absent — they do
+  # not skip, and they never report success without having compiled anything.
+  # ===========================================================================
+
+  atak:
+    name: ATAK ${{ matrix.atak }} (build / lint / test)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - atak: '5.6'
+            tree: ATAK5.6
+          - atak: '5.7'
+            tree: ATAK5.7
+    defaults:
+      run:
+        working-directory: ${{ matrix.tree }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      # ---- SDK gate -------------------------------------------------------
+      # The ATAK CIV SDK is licensed and cannot be committed or fetched anonymously. Rather
+      # than let the job pass vacuously when it is unavailable, it stops here with an
+      # actionable message. A build gate that silently no-ops is worse than no build gate,
+      # because it produces a green check that means nothing.
+      - name: Require the ATAK SDK
+        env:
+          ATAK_SDK_URL: ${{ secrets.ATAK_SDK_URL }}
+          ATAK_SDK_SHA256: ${{ secrets.ATAK_SDK_SHA256 }}
+        run: |
+          if [ -z "${ATAK_SDK_URL:-}" ]; then
+            echo "::error title=ATAK SDK not configured::The ATAK ${{ matrix.atak }} build cannot run."
+            cat <<'MSG'
+
+            This job needs the ATAK CIV SDK's main.jar, which is licensed and must not be
+            committed to this repository. It is NOT skipped when absent, deliberately: a
+            build job that passes without compiling anything is a false assurance.
+
+            To make this job green, set these repository secrets:
+
+              ATAK_SDK_URL_5_6      URL to the ATAK-CIV 5.6 SDK main.jar
+              ATAK_SDK_SHA256_5_6   its expected SHA-256
+              ATAK_SDK_URL_5_7      URL to the ATAK-CIV 5.7 SDK main.jar
+              ATAK_SDK_SHA256_5_7   its expected SHA-256
+
+            The checksum is mandatory. The previous workflow downloaded main.jar from a
+            GitHub Release named `sdk-artifacts` with no checksum and no signature, so
+            anyone with release-write access — or a compromised token — could substitute a
+            malicious main.jar that would then be compiled into every plugin artifact.
+
+            Note also that the two old workflows both downloaded the SAME main.jar from the
+            SAME release, differing only in a comment. Had they ever run, the 5.7 build
+            would have compiled against the 5.6 SDK. Hence the per-version secrets above.
+          MSG
+            exit 1
+          fi
+
+      - name: Download and verify main.jar
+        env:
+          ATAK_SDK_URL: ${{ matrix.atak == '5.6' && secrets.ATAK_SDK_URL_5_6 || secrets.ATAK_SDK_URL_5_7 }}
+          ATAK_SDK_SHA256: ${{ matrix.atak == '5.6' && secrets.ATAK_SDK_SHA256_5_6 || secrets.ATAK_SDK_SHA256_5_7 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/atak-sdk"
+          curl --fail --silent --show-error --location \
+               --output "$RUNNER_TEMP/atak-sdk/main.jar" "$ATAK_SDK_URL"
+          echo "${ATAK_SDK_SHA256}  $RUNNER_TEMP/atak-sdk/main.jar" | sha256sum --check --strict
+          echo "ATAK_SDK_DIR=$RUNNER_TEMP/atak-sdk" >> "$GITHUB_ENV"
+
+      # C-35 supply-chain: buildtools/atak-gradle-takdev.jar is a 148 KB tracked binary blob
+      # that is EXECUTED as a Gradle classpath dependency. It has no provenance record and
+      # no pinned digest. Pinning it by SHA-256 means a substituted jar fails the build
+      # rather than silently running attacker code inside the release pipeline.
+      - name: Verify the tracked takdev build plugin by SHA-256
+        run: |
+          set -euo pipefail
+          jar=buildtools/atak-gradle-takdev.jar
+          if [ ! -f "$jar" ]; then
+            echo "::error::$jar is missing."
+            exit 1
+          fi
+          actual="$(sha256sum "$jar" | cut -d' ' -f1)"
+          expected="$(grep -E "^${{ matrix.tree }}/buildtools/atak-gradle-takdev.jar" \
+                      "$GITHUB_WORKSPACE/.github/pinned-binaries.sha256" | awk '{print $2}')"
+          if [ -z "$expected" ]; then
+            echo "::error::No pinned SHA-256 recorded for $jar in .github/pinned-binaries.sha256."
+            echo "Actual digest is $actual — record it there after verifying provenance."
+            exit 1
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::$jar digest mismatch."
+            echo "  expected $expected"
+            echo "  actual   $actual"
+            echo "This jar is executed as a Gradle classpath dependency. A mismatch means"
+            echo "attacker-controlled code would run inside the build."
+            exit 1
+          fi
+          echo "OK  $jar  $actual"
+
+      # THE C-13 PROPERTY-KEY BUG. build.gradle:44 reads `atak.sdk.path`; the old workflow
+      # wrote `sdk.path`. main.jar therefore never reached the compile classpath, so even a
+      # correctly-relocated workflow would have failed to resolve every ATAK API symbol.
+      - name: Write local.properties
+        run: |
+          set -euo pipefail
+          cat > local.properties <<EOF
+          sdk.dir=${ANDROID_HOME}
+          takdev.plugin=${GITHUB_WORKSPACE}/${{ matrix.tree }}/buildtools/atak-gradle-takdev.jar
+          atak.sdk.path=${ATAK_SDK_DIR}
+          EOF
+          echo "--- local.properties ---"
+          cat local.properties
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Assemble (civ debug)
+        run: ./gradlew assembleCivDebug --no-daemon --stacktrace
+
+      # C-37: `abortOnError` is already true in the lint config and NOTHING EVER INVOKED IT.
+      # This is the step that makes it mean something. It is also the gate that catches the
+      # minSdkVersion 21 vs Map.getOrDefault (API 24) / String.join (API 26) NewApi defect.
+      - name: Android Lint (C-37)
+        run: ./gradlew lintCivRelease --no-daemon --stacktrace
+
+      - name: Unit tests
+        run: ./gradlew testCivDebugUnitTest --no-daemon --stacktrace
+
+      - name: Upload lint + test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atak-${{ matrix.atak }}-reports
+          # `path:` does NOT honour `defaults.run.working-directory` — it is resolved from
+          # the workspace root. This was one of the "every path is wrong" defects.
+          path: |
+            ${{ matrix.tree }}/app/build/reports/**
+            ${{ matrix.tree }}/app/build/outputs/apk/civ/debug/*.apk
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # WinTAK. REQUIRES the WinTAK SDK assemblies. Same fail-loudly posture as ATAK.
+  # ===========================================================================
+
+  wintak:
+    name: WinTAK ${{ matrix.wintak }} (build / test / package)
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - wintak: '5.6'
+            tree: WinTAK5.6
+          - wintak: '5.7'
+            tree: WinTAK5.7
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.tree }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+
+      - uses: NuGet/setup-nuget@fd55a6f3b34392fa83fde1454582407d8c714123 # v4.0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Require the WinTAK SDK
+        env:
+          WINTAK_SDK_URL: ${{ matrix.wintak == '5.6' && secrets.WINTAK_SDK_URL_5_6 || secrets.WINTAK_SDK_URL_5_7 }}
+        run: |
+          if [ -z "${WINTAK_SDK_URL:-}" ]; then
+            echo "::error title=WinTAK SDK not configured::The WinTAK ${{ matrix.wintak }} build cannot run."
+            cat <<'MSG'
+
+            This job needs the WinTAK SDK assemblies that populate WinTAK5.x/libs/
+            (TAK.Engine.dll and friends). They are licensed, are correctly NOT committed,
+            and their redistribution terms are undocumented — see THIRD-PARTY-NOTICES.md,
+            "Unresolved", and QUESTIONS-FOR-OWNER.md.
+
+            This job is NOT skipped when the SDK is absent, deliberately: a green check on a
+            build that compiled nothing is a false assurance.
+
+            To make it green, set:
+              WINTAK_SDK_URL_5_6 / WINTAK_SDK_SHA256_5_6
+              WINTAK_SDK_URL_5_7 / WINTAK_SDK_SHA256_5_7
+
+            pointing at an archive of the SDK assemblies for each target.
+          MSG
+            exit 1
+          fi
+
+      - name: Fetch and verify the SDK assemblies
+        env:
+          WINTAK_SDK_URL: ${{ matrix.wintak == '5.6' && secrets.WINTAK_SDK_URL_5_6 || secrets.WINTAK_SDK_URL_5_7 }}
+          WINTAK_SDK_SHA256: ${{ matrix.wintak == '5.6' && secrets.WINTAK_SDK_SHA256_5_6 || secrets.WINTAK_SDK_SHA256_5_7 }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --output /tmp/wintak-sdk.zip "$WINTAK_SDK_URL"
+          echo "${WINTAK_SDK_SHA256}  /tmp/wintak-sdk.zip" | sha256sum --check --strict
+          mkdir -p libs
+          unzip -q -o /tmp/wintak-sdk.zip -d libs
+          ls -la libs
+
+      - name: NuGet restore
+        run: nuget restore FeatureLink.csproj -PackagesDirectory packages
+
+      - name: Build (Release)
+        run: msbuild FeatureLink.csproj -p:Configuration=Release -p:Platform=AnyCPU -m
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          if ls *.Tests/*.csproj >/dev/null 2>&1 || ls Tests/*.csproj >/dev/null 2>&1; then
+            dotnet test --no-build -c Release
+          else
+            echo "::warning::WinTAK ${{ matrix.wintak }} has no test project yet (C-14)."
+          fi
+
+      - name: Package the .wpk
+        run: python build-wpk.py
+
+      # C-18: build-wpk.py packaged only FeatureLink.dll, the icon and the manifest, while
+      # packages.config pins Newtonsoft.Json 13.0.3. A .wpk missing it either fails to load
+      # or binds to whatever the host supplies — which also re-opens C-19, because
+      # Newtonsoft >= 13.0.1 is what supplies the MaxDepth=64 default.
+      - name: Assert the .wpk contains every required assembly (C-18)
+        run: |
+          set -euo pipefail
+          wpk="$(find . -name '*.wpk' -print -quit)"
+          if [ -z "$wpk" ]; then
+            echo "::error::build-wpk.py produced no .wpk."
+            exit 1
+          fi
+          python "$GITHUB_WORKSPACE/.github/scripts/check_wpk.py" "$wpk"
+
+      - name: Upload .wpk
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wintak-${{ matrix.wintak }}-wpk
+          path: ${{ matrix.tree }}/**/*.wpk
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # Aggregate gate. Branch protection should require THIS check, so that adding a new
+  # component job automatically becomes required without editing branch settings.
+  # ===========================================================================
+
+  ci-required:
+    name: CI required checks
+    if: always()
+    needs:
+      - version-policy
+      - icon-corpus-parity
+      - clean-clone-build
+      - cloudtak
+      - takportal
+      - infratak
+      - atak
+      - wintak
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fail if any required job did not succeed
+        run: |
+          results='${{ toJSON(needs) }}'
+          echo "$results"
+          if printf '%s' "$results" | grep -qE '"result" *: *"(failure|cancelled)"'; then
+            echo "::error::At least one required CI job failed."
+            exit 1
+          fi
+          echo "All required CI jobs succeeded."
