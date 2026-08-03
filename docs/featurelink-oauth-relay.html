@@ -2,39 +2,102 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
 <title>FeatureLink Sign-In</title>
 </head>
 <body>
 <p id="msg">Signing you in&hellip;</p>
 <script>
-// Fixed OAuth redirect_uri for every FeatureLink CloudTAK deployment. ArcGIS only allows
-// pre-registered exact redirect URIs (no wildcards), so instead of every CloudTAK hostname
-// needing its own registered redirect URI, they all point here — this single page — and this
-// page forwards the result back to whichever CloudTAK origin actually opened it. That origin
-// travels round-trip inside the OAuth `state` param (untouched by ArcGIS) as `origin::nonce`.
-(function () {
-    var params = new URLSearchParams(window.location.search);
-    var state = params.get('state') || '';
-    var targetOrigin = state.split('::')[0];
+// Fixed OAuth redirect_uri for every FeatureLink CloudTAK / TAK Portal deployment. ArcGIS only
+// allows pre-registered exact redirect URIs (no wildcards), so instead of every CloudTAK hostname
+// needing its own registered redirect URI, they all point here — this single page — and this page
+// forwards the result back to the deployment that opened it.
+//
+// SECURITY (C-01, audit finding #1): this page used to read the destination out of the OAuth
+// `state` parameter — splitting it on "::" and using the leading segment as the postMessage
+// target origin. `state` round-trips through the attacker's browser
+// and is echoed back by ArcGIS untouched, so anyone who could hand a victim a crafted
+// authorize URL received that victim's ArcGIS **authorization code** at an origin of their
+// choosing. The destination must therefore NEVER be derived from `state`.
+//
+// Replacement model:
+//   * REGISTERED_ORIGINS below is the allowlist. It is part of the page served by the
+//     deployment operator — i.e. it is server-controlled data, not request-controlled data —
+//     and is the ONLY source of a postMessage target.
+//   * `state` is now treated as an opaque CSPRNG nonce. It is echoed back to the opener so the
+//     opener can match it against its own pending request (C-09), but it never selects a target.
+//   * We postMessage once per registered origin. `window.postMessage(msg, targetOrigin)` is
+//     delivered ONLY if the opener's actual origin equals targetOrigin, so at most one of these
+//     calls delivers anything and an unregistered opener receives nothing. Iterating the
+//     allowlist is what lets one relay serve many registered deployments without ever trusting
+//     request input.
+//
+// OPERATOR ACTION: add each CloudTAK / TAK Portal origin that is permitted to complete
+// FeatureLink sign-in. Scheme + host + optional port, no path, no trailing slash, no wildcards.
+// An origin that is not listed here cannot receive an authorization code through this relay.
+var REGISTERED_ORIGINS = [
+    // "https://cloudtak.example.org",
+    // "https://takportal.example.org",
+];
 
+(function () {
+    var msgEl = document.getElementById('msg');
+
+    function say(text) { msgEl.textContent = text; }
+
+    // Defence in depth: refuse anything that is not a bare, absolute, non-wildcard origin, so a
+    // mis-edited allowlist can never widen into "*" or an origin with credentials/path.
+    function isValidOrigin(value) {
+        if (typeof value !== 'string' || !value || value === '*') return false;
+        var u;
+        try { u = new URL(value); } catch (e) { return false; }
+        if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+        if (u.username || u.password) return false;
+        if (u.pathname !== '/' || u.search || u.hash) return false;
+        if (value.indexOf('*') !== -1) return false;
+        return u.origin === value;
+    }
+
+    var targets = REGISTERED_ORIGINS.filter(isValidOrigin);
+    var rejected = REGISTERED_ORIGINS.length - targets.length;
+    if (rejected > 0) {
+        // Loud, because a silently-dropped entry looks identical to a broken deployment.
+        try { console.error('featurelink-oauth-relay: ' + rejected + ' malformed entry/entries in REGISTERED_ORIGINS were ignored.'); } catch (e) {}
+    }
+
+    var params = new URLSearchParams(window.location.search);
     var payload = {
         source: 'featurelink-oauth-relay',
         code: params.get('code'),
         error: params.get('error'),
         errorDescription: params.get('error_description'),
-        state: state,
+        // Opaque nonce, echoed for the opener's own pending-request check (C-09). Deliberately
+        // NOT parsed, NOT split, and NOT used to choose a destination.
+        state: params.get('state') || '',
     };
 
-    if (window.opener && targetOrigin) {
-        try {
-            window.opener.postMessage(payload, targetOrigin);
-            document.getElementById('msg').textContent = 'Signed in — you can close this window.';
-        } catch (e) {
-            document.getElementById('msg').textContent = 'Sign-in could not be completed automatically. Close this window and try again.';
-        }
-    } else {
-        document.getElementById('msg').textContent = 'This page must be opened as part of FeatureLink sign-in.';
+    if (!window.opener) {
+        say('This page must be opened as part of FeatureLink sign-in.');
+        return;
     }
+    if (!targets.length) {
+        say('Sign-in is not configured: this relay has no registered FeatureLink origins. Contact your TAK administrator.');
+        return;
+    }
+
+    // At most one of these lands — the browser drops any whose targetOrigin does not equal the
+    // opener's real origin. An opener on an unregistered origin therefore gets nothing at all.
+    var posted = 0;
+    for (var i = 0; i < targets.length; i++) {
+        try {
+            window.opener.postMessage(payload, targets[i]);
+            posted++;
+        } catch (e) { /* cross-origin opener that rejects this target — try the next */ }
+    }
+
+    say(posted
+        ? 'Signed in — you can close this window.'
+        : 'Sign-in could not be completed automatically. Close this window and try again.');
 
     window.setTimeout(function () { window.close(); }, 800);
 })();
