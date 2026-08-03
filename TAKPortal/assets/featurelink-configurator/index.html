@@ -1197,6 +1197,15 @@ function flBind(el, selector, handler) {
 const ICONS_BASE = '/featurelink-configs/configurator/icons/';
 const CUSTOM_ICONS_BASE = '/api/featurelink/admin/custom-icons/';
 
+// C-10: every state-changing call below must carry the double-submit CSRF token. The cookie is
+// issued by featurelinkCsrf.service.js when this page is served (SameSite=Lax, deliberately
+// readable by script so it can be echoed here); a cross-site page cannot read it, so it cannot
+// forge the header. The server also asserts Origin/Referer independently.
+function flCsrfHeaders(extra) {
+  const m = document.cookie.match(/(?:^|;\s*)fl_csrf=([^;]*)/);
+  return Object.assign({ 'X-FeatureLink-CSRF': m ? decodeURIComponent(m[1]) : '' }, extra || {});
+}
+
 let state = {
   fileName: null,
   featureLayerUrl: null,
@@ -1514,7 +1523,8 @@ async function applyAutoSymbology(info, layerUrl, isWebMapOverride) {
       // while this function builds value/field mappings from the right one — silently mismatched.
       const resp = await fetch('/api/featurelink/admin/custom-icons/from-arcgis', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        headers: flCsrfHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ url: layerUrl, renderer }),
       });
       const data = await resp.json();
@@ -2422,7 +2432,9 @@ async function uploadCustomIconSet() {
   for (const f of files) fd.append('icons', f);
 
   try {
-    const r = await fetch(CUSTOM_ICONS_BASE, { method: 'POST', body: fd });
+    const r = await fetch(CUSTOM_ICONS_BASE, {
+      method: 'POST', credentials: 'same-origin', headers: flCsrfHeaders(), body: fd,
+    });
     const data = await r.json();
     if (!data.ok) { alert('Upload failed: ' + (data.error || 'unknown error')); return; }
     if (nameInput) nameInput.value = '';
@@ -2435,7 +2447,9 @@ async function uploadCustomIconSet() {
 async function deleteCustomIconSetUI(name) {
   if (!confirm(`Delete custom icon set "${name}"? This removes its uploaded images.`)) return;
   try {
-    const r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name), { method: 'DELETE' });
+    const r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name), {
+      method: 'DELETE', credentials: 'same-origin', headers: flCsrfHeaders(),
+    });
     const data = await r.json();
     if (!data.ok) { alert('Delete failed: ' + (data.error || 'unknown error')); return; }
     if (state.cfg.symbology.icon.iconset === name) {
@@ -3325,7 +3339,8 @@ async function saveDatasetCore(name, group) {
 
   const resp = await fetch('/api/featurelink/admin/datasets', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    headers: flCsrfHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
   });
   if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || 'save failed');
@@ -3864,11 +3879,22 @@ function renderIconsetManager(sets) {
           ${usageLine}
         </div>
         <div class="isr-actions">
-          <button type="button" onclick="downloadIconset(${JSON.stringify(s.name)})">Download</button>
-          <button type="button" class="danger" onclick="deleteIconsetFromManager(${JSON.stringify(s.name)})">Delete</button>
+          <!-- C-05: these two used inline onclick handlers carrying the JSON-stringified set
+               name. JSON stringification escapes for JavaScript, not HTML, so the quotes it emits
+               closed the onclick attribute. It only ever failed to be a live XSS because a
+               server-side sanitizer three files away happened to strip quote characters from set
+               names — an incidental defence one regex change from collapsing. data-* attributes
+               plus a delegated listener instead. -->
+          <button type="button" data-iconset-action="download" data-name="${esc(s.name)}">Download</button>
+          <button type="button" class="danger" data-iconset-action="delete" data-name="${esc(s.name)}">Delete</button>
         </div>
       </div>`;
   }).join('');
+
+  flBind(listEl, 'button[data-iconset-action]', function (t) {
+    if (t.dataset.iconsetAction === 'download') downloadIconset(t.dataset.name);
+    else deleteIconsetFromManager(t.dataset.name);
+  });
 }
 
 function downloadIconset(name) {
@@ -3883,7 +3909,9 @@ async function deleteIconsetFromManager(name) {
 
   const statusEl = document.getElementById('iconset-mgr-status');
   try {
-    let r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name), { method: 'DELETE' });
+    let r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name), {
+      method: 'DELETE', credentials: 'same-origin', headers: flCsrfHeaders(),
+    });
     let data = await r.json();
 
     // 409 == still referenced by saved configs. Re-confirm naming them, then force.
@@ -3894,7 +3922,9 @@ async function deleteIconsetFromManager(name) {
         + `Deleting it means those configs' markers fall back to plain default styling on any `
         + `device that hasn't already installed this icon set.\n\nDelete anyway?`);
       if (!proceed) return;
-      r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name) + '?force=1', { method: 'DELETE' });
+      r = await fetch(CUSTOM_ICONS_BASE + encodeURIComponent(name) + '?force=1', {
+        method: 'DELETE', credentials: 'same-origin', headers: flCsrfHeaders(),
+      });
       data = await r.json();
     }
 

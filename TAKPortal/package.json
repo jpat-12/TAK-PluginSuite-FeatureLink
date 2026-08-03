@@ -12,7 +12,8 @@
     "lint": "node --check routes/featurelinkBrowse.routes.js && node --check routes/featurelinkConfigurator.routes.js && node --check routes/featurelinkCustomIcons.routes.js && node --check routes/featurelinkDatasetsAdmin.routes.js && node --check services/featurelinkArcgisIconset.service.js && node --check services/featurelinkCustomIcons.service.js && node --check services/featurelinkDatasets.service.js && node --check services/featurelinkCsrf.service.js && node --check services/featurelinkSafeFetch.service.js"
   },
   "dependencies": {
-    "multer": "^1.4.5-lts.1",
+    "express": "^4.22.2",
+    "multer": "^2.2.0",
     "unzipper": "^0.12.3"
   }
 }
