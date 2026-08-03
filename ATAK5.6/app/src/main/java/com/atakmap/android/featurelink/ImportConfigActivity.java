@@ -39,17 +39,37 @@ public class ImportConfigActivity extends Activity {
     // generated BuildConfig class) stays consistent with that existing convention.
     private static final String ATAK_PACKAGE_NAME = "com.atakmap.app.civ";
 
+    /** C-02 — signature-level permission declared in this plugin's AndroidManifest; the receiver
+     * registers requiring it, so only code signed with the plugin's own key can deliver a
+     * config. Duplicated as a literal for the same reason as ATAK_PACKAGE_NAME above. */
+    private static final String INTERNAL_PERMISSION =
+            "com.atakmap.android.featurelink.permission.INTERNAL_BROADCAST";
+
+    /** C-02 — a display config is a few KB of JSON. Anything larger is not one, and buffering an
+     * unbounded deep-link parameter is a trivial OOM primitive. */
+    private static final int MAX_CONFIG_LENGTH = 512 * 1024;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         Uri data = getIntent().getData();
-        String config = data != null ? data.getQueryParameter("config") : null;
+        String config = null;
+        try {
+            config = data != null ? data.getQueryParameter("config") : null;
+        } catch (Exception ignored) {
+            // Malformed/opaque URI — treated as no config below.
+        }
 
-        if (config != null && !config.isEmpty()) {
+        if (config != null && !config.isEmpty() && config.length() <= MAX_CONFIG_LENGTH
+                && looksLikeJsonObject(config)) {
             Intent broadcast = new Intent(BROADCAST_ACTION);
+            // Explicit target + signature permission: this is no longer a system-wide implicit
+            // broadcast that any app can receive, and no unprivileged app can send one.
+            broadcast.setPackage(ATAK_PACKAGE_NAME);
             broadcast.putExtra("config", config);
-            sendBroadcast(broadcast);
+            broadcast.putExtra("source", "featurelink://import deep link");
+            sendBroadcast(broadcast, INTERNAL_PERMISSION);
         }
 
         Intent atakIntent = getPackageManager().getLaunchIntentForPackage(ATAK_PACKAGE_NAME);
@@ -59,5 +79,13 @@ public class ImportConfigActivity extends Activity {
         }
 
         finish();
+    }
+
+    /** Cheap shape check before broadcasting — all four accepted schema modes are JSON objects.
+     * Deliberately not a full parse: this Activity avoids plugin class references, and the
+     * receiving side re-parses and prompts for confirmation regardless. */
+    private static boolean looksLikeJsonObject(String s) {
+        String t = s.trim();
+        return t.startsWith("{") && t.endsWith("}");
     }
 }

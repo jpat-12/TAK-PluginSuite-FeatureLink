@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Appendix A §4 (Transport). The plugin previously declared no network security policy at all and
+  inherited whatever the host ATAK app happened to permit — which is not under this plugin's
+  control and is not something a submission review will accept as an answer.
+
+  Every endpoint this plugin talks to (ArcGIS Online, ArcGIS Enterprise portals, TAK Portal
+  saved-dataset links) is HTTPS. Cleartext is therefore denied outright: a QR code encoding an
+  http:// "Mode 4 saved dataset link" must fail loudly rather than hand an on-path attacker full
+  control of the display config, layer URLs and iconset payloads.
+
+  Certificate pinning for arcgis.com was considered and deliberately NOT applied — Esri rotates
+  its chain without notice and a stale pin bricks sign-in in the field with no remote remedy.
+  Recorded as an owner decision in QUESTIONS-FOR-OWNER.md.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
