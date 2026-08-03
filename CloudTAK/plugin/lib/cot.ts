@@ -5,17 +5,20 @@
 // cot.ts — this reaches into `mapStore.worker.db` and node-cot's normalizer. Isolated here so
 // there's one place to fix on a CloudTAK upgrade.
 //
-// Covers three things the ATAK plugin did with real ATAK map APIs:
-//   1. One marker per downloaded layer feature, styled via lib/displayConfig.ts
+// Covers four things the ATAK plugin did with real ATAK map APIs:
+//   1. One marker per downloaded point layer feature, styled via lib/displayConfig.ts
 //      (FeatureLinkDropDownReceiver.downloadLayer's marker-build logic).
-//   2. A 5-point fading PLI history breadcrumb trail (PliHistoryOverlay.java).
-//   3. listCotMarkers() for the send-to-layer picker (radial-menu replacement) and a
+//   2. One polyline/polygon shape per downloaded line/polygon layer feature, styled via
+//      lib/autoSymbology.ts + displayConfig.ts's resolveShapeStyle (FeatureLinkDropDownReceiver's
+//      buildPolylineShapes()/buildPolygonShapes()) — see syncLayerShapes() below.
+//   3. A 5-point fading PLI history breadcrumb trail (PliHistoryOverlay.java).
+//   4. listCotMarkers() for the send-to-layer picker (radial-menu replacement) and a
 //      best-effort self-position reader for PLI auto-send (MapView.getSelfMarker()).
 
 import { getPluginApi } from './plugin-api.ts';
 import { store } from './store.ts';
-import { resolveColor, resolveIconsetPath, resolveLabel, buildRemarks } from './displayConfig.ts';
-import type { DisplayConfig, DownloadedFeature } from './types.ts';
+import { resolveColor, resolveIconsetPath, resolveLabel, buildRemarks, resolveShapeStyle } from './displayConfig.ts';
+import type { DisplayConfig, DownloadedFeature, ShapeStyle } from './types.ts';
 
 let _normalize: ((f: unknown) => Promise<unknown>) | null = null;
 let _mapStore: { worker: { db: {
@@ -133,6 +136,111 @@ export async function removeLayerMarkers(layerUrl: string): Promise<void> {
     const uids = store.layerMarkerUids[layerUrl] ?? [];
     for (const uid of uids) await removeMarker(uid);
     delete store.layerMarkerUids[layerUrl];
+}
+
+// ── Downloaded-layer shapes (polyline/polygon) ──────────────────────────────
+//
+// Port of FeatureLinkDropDownReceiver's buildPolylineShapes()/buildPolygonShapes(). Styling
+// comes from displayConfig.ts's resolveShapeStyle (esriSLS/esriSFS auto-symbology — see
+// autoSymbology.ts), falling back to a default blue/solid/2px stroke with no fill when nothing
+// resolves, same as the ATAK/WinTAK ports. NOTE: @tak-ps/node-cot's normalize_geojson (see
+// initCot() above) has no dasharray concept, so ShapeStyle.strokeDash has no visible effect here
+// — carried through the model for parity, not currently renderable.
+
+function hexColor(hex: string | undefined, fallback: string): string {
+    return hex && /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : fallback;
+}
+
+async function upsertShape(
+    uid: string, geomType: 'LineString' | 'Polygon', coordinates: number[][] | number[][][],
+    callsign: string, cotType: string, remarks: string, style: ShapeStyle | null,
+): Promise<void> {
+    if (!_normalize || !_mapStore) return;
+    try {
+        const properties: Record<string, unknown> = {
+            callsign, remarks,
+            stroke: hexColor(style?.strokeColor, '#3388ff'),
+            'stroke-opacity': style?.strokeOpacity ?? 1,
+            'stroke-width': style?.strokeWidthPx ?? 2,
+        };
+        if (style && style.fillStyle !== 'none') {
+            properties.fill = hexColor(style.fillColor, '#3388ff');
+            properties['fill-opacity'] = style.fillOpacity;
+        }
+        const feat = {
+            id: uid, type: 'Feature',
+            properties,
+            geometry: { type: geomType, coordinates },
+        };
+        const norm = await _normalize(feat) as Record<string, unknown>;
+        const props = norm.properties as Record<string, unknown>;
+        props.type = cotType;
+        await _mapStore.worker.db.add(JSON.parse(JSON.stringify(norm)), { authored: true });
+    } catch (e) {
+        console.warn('[featurelink] upsertShape failed', e);
+    }
+}
+
+// GeoJSON requires each Polygon ring to be closed (first coordinate === last); ArcGIS rings
+// normally already are, but this closes defensively rather than trusting the source data.
+function closeRing(ring: number[][]): number[][] {
+    if (ring.length === 0) return ring;
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first[0] === last[0] && first[1] === last[1]) return ring;
+    return [...ring, first];
+}
+
+// One shape-uid per path, sharing the same "{uid}-p{i}" sub-uid scheme as the ATAK/WinTAK ports
+// for a multi-part feature; single-part features keep the feature's own uid unchanged.
+function partUid(layerUrl: string, featureUid: string, index: number, total: number): string {
+    const base = markerUid(layerUrl, featureUid);
+    return total > 1 ? `${base}-p${index}` : base;
+}
+
+// Places (or replaces) polyline/polygon shapes for every downloaded feature of a layer, removing
+// any shapes left over from a previous download that no longer have a matching feature — same
+// diff-and-remove-old-then-add-new behaviour as syncLayerMarkers, and shares its store bucket
+// (store.layerMarkerUids is keyed by layer URL regardless of geometry kind, since removal is
+// just "delete this uid from the map").
+export async function syncLayerShapes(
+    layerUrl: string, features: DownloadedFeature[], visible: boolean, displayConfig: DisplayConfig | null,
+    geometryKind: 'polyline' | 'polygon',
+): Promise<void> {
+    const previous = store.layerMarkerUids[layerUrl] ?? [];
+    const nextUids: string[] = [];
+
+    for (const f of features) {
+        if (!visible) continue;
+
+        const style = displayConfig ? resolveShapeStyle(displayConfig, f.attributes) : null;
+        const label = displayConfig ? resolveLabel(displayConfig, f.attributes, f.callsign) : f.callsign;
+        const popupRemarks = displayConfig ? buildRemarks(displayConfig, f.attributes) : '';
+        const remarks = popupRemarks && f.remarks ? `${popupRemarks}\n${f.remarks}` : (popupRemarks || f.remarks);
+
+        if (geometryKind === 'polyline') {
+            const parts = f.paths.filter(p => p.length >= 2);
+            for (let i = 0; i < parts.length; i++) {
+                const uid = partUid(layerUrl, f.uid, i, parts.length);
+                nextUids.push(uid);
+                await upsertShape(uid, 'LineString', parts[i], label, f.cotType, remarks, style);
+            }
+        } else {
+            // ATAK's Polyline shape has no multi-ring/hole support and only ever renders the
+            // outer ring; GeoJSON Polygon coordinates natively support holes as additional rings,
+            // so unlike that port, every ring here (not just the first) is passed through.
+            if (f.rings.length === 0 || f.rings[0].length < 3) continue;
+            const uid = markerUid(layerUrl, f.uid);
+            nextUids.push(uid);
+            const coordinates = f.rings.map(closeRing);
+            await upsertShape(uid, 'Polygon', coordinates, label, f.cotType, remarks, style);
+        }
+    }
+
+    for (const uid of previous) {
+        if (!nextUids.includes(uid)) await removeMarker(uid);
+    }
+    store.layerMarkerUids[layerUrl] = nextUids;
 }
 
 // ── PLI history breadcrumbs (ported from PliHistoryOverlay.java) ──────────────

@@ -92,3 +92,8 @@ README.md.bak
 # runner (GitHub Actions, TAK Product Center's submission pipeline) since a release build's
 # R8 minification pass has hit OutOfMemoryError on the default heap.
 !ATAK5.6/gradle.properties
+
+# Internal pre-award audit deliverable (capability/defect/test checklist).
+# Local working artifact only - not part of the shipped suite, and it enumerates
+# unremediated security findings, so it must never reach a remote.
+FEATURELINK-AUDIT-CHECKLIST.md

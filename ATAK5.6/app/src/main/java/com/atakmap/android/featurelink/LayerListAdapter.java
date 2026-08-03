@@ -87,6 +87,7 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         TextView    configBadge     = convertView.findViewById(R.id.layer_config_badge);
         TextView    featureCountBadge = convertView.findViewById(R.id.layer_feature_count_badge);
         View        intervalRow     = convertView.findViewById(R.id.layer_interval_row);
+        View        intervalEditor  = convertView.findViewById(R.id.layer_interval_editor);
         EditText    intervalSecondsEdit = convertView.findViewById(R.id.layer_interval_seconds_edit);
         ImageButton actionBtn       = convertView.findViewById(R.id.layer_action_btn);
         ImageButton shareBtn        = convertView.findViewById(R.id.layer_share_btn);
@@ -120,41 +121,49 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
             if (visibilityListener != null) visibilityListener.onToggleVisibility(layer);
         });
 
-        // --- Interval row: shown for both private and public layers. Private layers route
-        // changes through the same listener the action button uses (existing behavior: saves
-        // and immediately re-syncs). Public layers route through the dedicated
-        // intervalChangeListener instead, since their action button means "delete" — reusing
-        // onAction there would pop the delete-confirmation dialog just from picking an interval.
+        // --- Interval row: always visible — it also carries the action/delete buttons, which
+        // must stay usable on a browse-list row ("My ArcGIS Layers"/"Shared with me") since the
+        // action button IS how a browse item gets downloaded in the first place. Only the
+        // interval EDITOR (label/field/"seconds") is conditionally hidden: editing a refresh
+        // interval before the layer even exists on-device doesn't make sense, and previously
+        // wiring its focus-loss listener there risked an accidental auto-download of a layer the
+        // user only meant to browse (that listener call is now skipped entirely, not just hidden,
+        // for the same reason).
+        boolean synced = layer.lastSync > 0;
+        boolean editableInterval = !isPrivate || synced;
         intervalRow.setVisibility(View.VISIBLE);
+        intervalEditor.setVisibility(editableInterval ? View.VISIBLE : View.GONE);
 
-        // Editable purely in seconds now — recurrenceMillis() still handles a layer whose
-        // recurrenceUnit is "min"/"hr" from before this change; edited layers always land back
-        // on recurrenceUnit="s" via the commit below, showing the equivalent second count here.
-        long currentSeconds = layer.recurrenceMillis() / 1000L;
         intervalSecondsEdit.setOnFocusChangeListener(null);
-        intervalSecondsEdit.setText(String.valueOf(currentSeconds));
-        intervalSecondsEdit.setOnFocusChangeListener((v, hasFocus) -> {
-            if (hasFocus) return;
-            int seconds;
-            try {
-                seconds = Integer.parseInt(intervalSecondsEdit.getText().toString().trim());
-            } catch (NumberFormatException e) {
-                seconds = 0;
-            }
-            if (seconds < 0) seconds = 0;
-            layer.recurrenceInterval = seconds;
-            layer.recurrenceUnit = "s";
-            intervalSecondsEdit.setText(String.valueOf(seconds));
-            if (isPrivate) {
-                if (listener != null) listener.onAction(layer);
-            } else if (intervalChangeListener != null) {
-                intervalChangeListener.onIntervalChanged(layer);
-            }
-        });
+        if (editableInterval) {
+            // Editable purely in seconds now — recurrenceMillis() still handles a layer whose
+            // recurrenceUnit is "min"/"hr" from before this change; edited layers always land
+            // back on recurrenceUnit="s" via the commit below, showing the equivalent second
+            // count here.
+            long currentSeconds = layer.recurrenceMillis() / 1000L;
+            intervalSecondsEdit.setText(String.valueOf(currentSeconds));
+            intervalSecondsEdit.setOnFocusChangeListener((v, hasFocus) -> {
+                if (hasFocus) return;
+                int seconds;
+                try {
+                    seconds = Integer.parseInt(intervalSecondsEdit.getText().toString().trim());
+                } catch (NumberFormatException e) {
+                    seconds = 0;
+                }
+                if (seconds < 0) seconds = 0;
+                layer.recurrenceInterval = seconds;
+                layer.recurrenceUnit = "s";
+                intervalSecondsEdit.setText(String.valueOf(seconds));
+                if (isPrivate) {
+                    if (listener != null) listener.onAction(layer);
+                } else if (intervalChangeListener != null) {
+                    intervalChangeListener.onIntervalChanged(layer);
+                }
+            });
+        }
 
         if (isPrivate) {
             // --- Action button: down arrow until first sync, circular refresh after ---
-            boolean synced = layer.lastSync > 0;
             actionBtn.setImageResource(synced ? R.drawable.ic_refresh_circle : R.drawable.ic_download);
             actionBtn.setOnClickListener(v -> {
                 if (listener != null) listener.onAction(layer);

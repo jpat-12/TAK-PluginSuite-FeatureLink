@@ -59,15 +59,36 @@ export async function queryFeatureCount(serviceUrl: string, token: string | null
 export async function fetchLayerInfo(serviceUrl: string): Promise<ArcGISLayer | null> {
     try {
         const url = ensureLayerIndex(serviceUrl);
-        const json = await readJson<{ error?: unknown; name?: string; serviceDescription?: string }>(
+        const json = await readJson<{ error?: unknown; name?: string; serviceDescription?: string; geometryType?: string }>(
             await fetch(`${url}?f=json`),
         );
         if (json.error) return null;
         const name = json.name || json.serviceDescription || 'Unknown Layer';
-        return newLayer(name, serviceUrl, 'public');
+        const layer = newLayer(name, serviceUrl, 'public');
+        layer.geometryType = json.geometryType ?? '';
+        return layer;
     } catch (e) {
         console.error('[featurelink] fetchLayerInfo failed for', serviceUrl, e);
         return null;
+    }
+}
+
+// One-time lazy backfill for a layer whose geometryType was never resolved (added before this
+// field existed, or its browse-list search result — a portal item, not layer metadata — never
+// carried it). Fail-soft: returns '' on any error, same as an unresolved geometryType elsewhere.
+export async function fetchGeometryType(serviceUrl: string, token: string | null): Promise<string> {
+    try {
+        const url = ensureLayerIndex(serviceUrl);
+        const params = new URLSearchParams({ f: 'json' });
+        if (token) params.set('token', token);
+        const json = await readJson<{ error?: unknown; geometryType?: string }>(
+            await fetch(`${url}?${params.toString()}`),
+        );
+        if (json.error) return '';
+        return json.geometryType ?? '';
+    } catch (e) {
+        console.warn('[featurelink] fetchGeometryType failed for', serviceUrl, e);
+        return '';
     }
 }
 
@@ -80,6 +101,24 @@ function resolveField(attrs: Record<string, unknown>, candidates: string[], fall
     }
     const fb = attrs[fallbackField];
     return fb !== undefined && fb !== null ? String(fb) : '';
+}
+
+// Parses a "paths" or "rings" JSON array (array of parts, each an array of [x,y,...] vertices)
+// into a list of [lon,lat] vertex lists, one per part. Missing/malformed input -> empty array
+// (point geometry, or the other of paths/rings for this feature's geometry type).
+function extractParts(parts: unknown): number[][][] {
+    if (!Array.isArray(parts)) return [];
+    const result: number[][][] = [];
+    for (const part of parts) {
+        if (!Array.isArray(part)) continue;
+        const vertices: number[][] = [];
+        for (const pt of part) {
+            if (!Array.isArray(pt) || pt.length < 2 || typeof pt[0] !== 'number' || typeof pt[1] !== 'number') continue;
+            vertices.push([pt[0], pt[1]]);
+        }
+        if (vertices.length) result.push(vertices);
+    }
+    return result;
 }
 
 function extractFirstVertex(geom: Record<string, unknown>): [number, number] | null {
@@ -111,6 +150,8 @@ export async function downloadLayerAsCoT(
         try {
             const geom = feat.geometry;
             if (!geom) return;
+            const paths = extractParts(geom.paths);
+            const rings = extractParts(geom.rings);
             let lat = NaN, lon = NaN;
             if (typeof geom.x === 'number' && typeof geom.y === 'number') {
                 lon = geom.x; lat = geom.y;
@@ -136,7 +177,7 @@ export async function downloadLayerAsCoT(
             if (!cotType) cotType = 'a-f-G';
             if (!callsign) callsign = `Feature-${i}`;
 
-            results.push({ uid, cotType, callsign, remarks, lat, lon, hae, attributes: attrMap });
+            results.push({ uid, cotType, callsign, remarks, lat, lon, hae, attributes: attrMap, paths, rings });
         } catch (e) {
             console.warn('[featurelink] Skipping malformed feature at index', i, e);
         }

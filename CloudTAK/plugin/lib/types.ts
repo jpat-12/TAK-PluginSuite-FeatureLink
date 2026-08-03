@@ -19,6 +19,11 @@ export interface ArcGISLayer {
     // share. Lets removePrivateLayer/removePublicLayer send it back to the browse list on
     // removal instead of just discarding it, since it's still the user's own ArcGIS item.
     ownedByMe: boolean;
+    // Raw Esri geometryType of the layer ("esriGeometryPoint"/"esriGeometryPolyline"/
+    // "esriGeometryPolygon"), resolved via fetchLayerInfo/fetchGeometryType and cached here so
+    // it's only fetched once per layer. Empty until resolved — layerActions.downloadLayer()
+    // lazily backfills it for layers added before this field existed.
+    geometryType: string;
     featureCount: number;
     lastSync: number;               // epoch ms; 0 = never synced
     downloadEnabled: boolean;
@@ -31,6 +36,7 @@ export interface ArcGISLayer {
 export function newLayer(name: string, url: string, type: LayerKind, access: LayerAccess = 'org', ownedByMe = false): ArcGISLayer {
     return {
         name, url, type, access, ownedByMe,
+        geometryType: '',
         featureCount: 0,
         lastSync: 0,
         downloadEnabled: false,
@@ -103,6 +109,23 @@ export interface CotMapping {
     rf?: string | string[];
 }
 
+// Stroke + fill styling for a polyline/polygon feature — only ever populated by the on-device
+// auto-symbology path (autoIconset.ts's generateAutoIconset via displayConfig.ts's
+// buildShapeStyleFields), never round-tripped through the QR/TAK-Portal "sym" schema, which has
+// no polyline/polygon styling concept (yet). Ported from DisplayConfig.java's ShapeStyle.
+export interface ShapeStyle {
+    strokeColor: string;   // '#rrggbb'
+    strokeOpacity: number; // 0-1
+    strokeWidthPx: number;
+    // Parsed from esriSLS for parity with the ATAK/WinTAK ports, but CloudTAK's own CoT bridge
+    // (@tak-ps/node-cot's normalize_geojson) has no dasharray concept — see cot.ts's upsertShape,
+    // this is carried through the model but currently has no renderable effect.
+    strokeDash: 'solid' | 'dash' | 'dot';
+    fillColor: string;
+    fillOpacity: number; // 0 when fillStyle === 'none'
+    fillStyle: 'solid' | 'none';
+}
+
 export interface DisplayConfig {
     v: number;
     url?: string;
@@ -112,6 +135,12 @@ export interface DisplayConfig {
     popup?: PopupConfig;
     cm?: CotMapping;
     freq?: { iv: number; u: 's' | 'min' | 'hr' };
+    // Driving field for shapeStyleByValue below; empty for a single-symbol renderer.
+    shapeField?: string;
+    // Stroke/fill style for a single-symbol renderer, or the fallback for a uniqueValue one.
+    singleShapeStyle?: ShapeStyle;
+    // uniqueValue renderer: field VALUE -> stroke/fill style.
+    shapeStyleByValue?: Record<string, ShapeStyle>;
 }
 
 // ── Feature download (mirrors ArcGISRestClient.DownloadedFeature / CotFieldMapping) ──
@@ -130,6 +159,13 @@ export interface DownloadedFeature {
     remarks: string;
     lat: number; lon: number; hae: number;
     attributes: Record<string, string>;
+    // Full polyline geometry: one inner array per part, each a [lon,lat] vertex in order.
+    // Empty for point/polygon features.
+    paths: number[][][];
+    // Full polygon geometry: one inner array per ring (first ring is the outer boundary,
+    // subsequent rings are holes per Esri's ring-orientation convention), each a [lon,lat]
+    // vertex in order. Empty for point/polyline features.
+    rings: number[][][];
 }
 
 // ── PLI / send-to-layer payload (mirrors ArcGISRestClient.buildPliAttributes) ──

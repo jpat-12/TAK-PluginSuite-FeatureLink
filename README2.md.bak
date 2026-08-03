@@ -12,66 +12,12 @@ FeatureLink component in one place.
 
 <div align="center">
 
-<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="20" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="20" alt="Configuration & Install"></a>&nbsp;&nbsp;<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="20" alt="Buy Me A Coffee"></a>
+<a href="#supported-modules"><img src="https://img.shields.io/badge/Supported%20Modules-14B8A6?style=flat&logoColor=000000" height="80" alt="Supported Modules"></a>&nbsp;&nbsp;<a href="#configuration--install"><img src="https://img.shields.io/badge/Configuration%20%26%20Install-7C3AED?style=flat&logoColor=000000" height="80" alt="Configuration & Install"></a>&nbsp;&nbsp;<a href="https://buymeacoffee.com/jpat"><img src="https://img.shields.io/badge/%E2%98%95_Buy_me_a_coffee-FFD166?style=flat&logoColor=000000" height="80" alt="Buy Me A Coffee"></a>
 
 </div>
 
-## How It All Fits Together
-
-```mermaid
-flowchart LR
-    ESRI["<b>Esri ArcGIS</b><br/>hosted feature layer<br/>or saved web map"]
-    CFG["<b>Configuration</b><br/>TAK Portal Display Configurator,<br/>ArcGIS sign-in, or a pasted URL"]
-    DELIVER["<b>Delivery</b><br/>QR scan - TAK Portal link - paste URL"]
-    TAK["<b>FeatureLink Plugin</b><br/>ATAK - WinTAK - CloudTAK"]
-    FIELD["<b>On the Map</b><br/>styled layers + auto-generated icons"]
-    PLI["<b>PLI &amp; Share</b><br/>shared position layer, CoT to the team"]
-    WB["<b>Edits + PLI Write Back</b><br/>map items and position history<br/>pushed to the hosted layer"]
-
-    ESRI --> CFG --> DELIVER --> TAK
-    TAK --> FIELD
-    TAK --> PLI
-    TAK -.-> WB
-    WB -.-> ESRI
-
-    classDef esri fill:#DBEAFE,stroke:#2563EB,color:#0B1220;
-    classDef cfg fill:#EDE9FE,stroke:#7C3AED,color:#0B1220;
-    classDef tak fill:#FEF3C7,stroke:#D97706,color:#0B1220;
-    classDef field fill:#DCFCE7,stroke:#16A34A,color:#0B1220;
-    classDef wb fill:#FFE4E6,stroke:#E11D48,color:#0B1220;
-
-    class ESRI esri;
-    class CFG,DELIVER cfg;
-    class TAK tak;
-    class FIELD,PLI field;
-    class WB wb;
-```
-
-<p align="center"><em>Esri holds the data - a config says how it should look - the plugin puts it on
-the EUD - edits and PLI flow back to the same layer.</em></p>
-
-## What Makes It Different
-
-FeatureLink isn't the only way to get Esri data into TAK. The short version: most
-of the alternatives **render ArcGIS data as a layer**, server-side or natively.
-FeatureLink turns it into **CoT map items the operator owns** - and, uniquely,
-pushes edits and position history **back** to the hosted layer from the device.
-
-| | **FeatureLink** | **ArcGIS Content Services**<br/>(PAR Gov / Esri plugin) | **infra-TAK ArcGIS Configurator**<br/>([takwerx/infra-TAK](https://github.com/takwerx/infra-TAK)) | **CloudTAK ETL / Node-RED bridges**<br/>([dfpc-coe](https://github.com/dfpc-coe/CloudTAK)) |
-|---|---|---|---|---|
-| **Runs where** | On the EUD (plugin) | On the EUD (plugin) | On the server (console) | On the server |
-| **Data lands as** | **CoT map items** - real markers you can share, edit, drop into a Data Package | Native map overlay (GL-rendered feature/raster layers in Overlay Manager) | TAK **DataSync feed** pushed to every client | CoT into a Data Sync mission |
-| **Write back to ArcGIS** | ✅ send map items + **PLI history** to a hosted layer from the device | Partial - `addFeatures`/`deleteFeatures` and ArcGIS **Mission Server** location tracks | ❌ read-only | ❌ read-only (one-way ETL) |
-| **Imagery / basemaps** | ❌ feature services only | ✅ tiled + dynamic Map/Image Services, KML, Shapefile | ❌ | ❌ |
-| **Enterprise auth** | ArcGIS OAuth2 (PKCE) | ✅ broadest - OAuth2, PKI/cert, SAML, IWA/NTLM, token | Server-side creds | Server-side creds |
-| **Styling control** | Display configs - symbology, labels, popups, **auto-generated iconsets** shared across platforms | Reads the layer's own renderer | Per-feature-class polygon styling, coded-value labels | Whatever the ETL author codes |
-| **Per-user setup** | Sign in, or scan a QR / open a link | Sign in per server | **None** - admin configures once, everyone gets it | **None** |
-| **Platforms** | ATAK, WinTAK, CloudTAK, TAK Portal | ATAK | Any client on that server | Any client on that server |
-| **Needs server infra** | ❌ | ❌ | ✅ an infra-TAK console | ✅ CloudTAK / Node-RED host |
-
-**Pick FeatureLink when** field users need to *contribute* to ArcGIS - collecting
-points, sending map items to a layer, streaming PLI into a shared position layer -
-or when each user needs a different set of layers without an admin in the loop.
+<!-- TODO: diagram/visual explaining how the FeatureLink pieces (config sources + plugins) fit together -->
+<p align="center"><em>(visual - how the whole FeatureLink suite fits together - coming soon)</em></p>
 
 ## Supported Modules
 

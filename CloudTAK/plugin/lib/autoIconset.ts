@@ -13,6 +13,9 @@
 // cloudtakInternals.ts.
 
 import { getCloudTakToken } from './cloudtakInternals.ts';
+import { extractAutoSymbology, isAutoSymbologyEmpty } from './autoSymbology.ts';
+import { buildShapeStyleFields } from './displayConfig.ts';
+import type { AutoSymbologyResult } from './autoSymbology.ts';
 import type { DisplayConfig, SymConfig, SymValueEntry } from './types.ts';
 
 export const SPEC_VERSION = 1;
@@ -193,15 +196,31 @@ async function registerIconset(uid: string, group: string, icons: IconToUpload[]
 // Port of DisplayConfig.forAutoIcons() — a "ic" (single icon) or "adv" (per-value) SymConfig
 // pointing at the iconset paths just registered, so THIS device renders the layer's custom icons
 // immediately rather than only on devices that later receive its CoT.
-function buildAutoIconDisplayConfig(url: string, field: string, singleIconPath: string | null, pathByValue: Map<string, string>): DisplayConfig {
-    let sym: SymConfig;
+// Extends the icon-only synthesis above with esriSMS marker color/shape styling (only used when
+// no custom icon was resolved — an icon always wins over a plain colored shape marker) and
+// esriSLS/esriSFS stroke/fill styling for polyline/polygon layers, folded in via
+// buildShapeStyleFields. Port of DisplayConfig.forAutoIcons()'s 5-arg overload.
+function buildAutoDisplayConfig(
+    url: string, field: string, singleIconPath: string | null, pathByValue: Map<string, string>,
+    shapeResult: AutoSymbologyResult | null,
+): DisplayConfig {
+    let sym: SymConfig | undefined;
     if (singleIconPath) {
         sym = { t: 'ic', up: singleIconPath };
-    } else {
+    } else if (pathByValue.size > 0) {
         const vs: SymValueEntry[] = Array.from(pathByValue.entries()).map(([v, up]) => ({ v, m: 'icon', up }));
         sym = { t: 'adv', f: field, vs };
+    } else if (shapeResult && shapeResult.markerByValue.size > 0) {
+        // No icons anywhere in the renderer; uniqueValue esriSMS renderer — per-value colored
+        // shape markers via the plain "uv" resolveColor path.
+        const uv: SymValueEntry[] = Array.from(shapeResult.markerByValue.entries()).map(([v, m]) => ({ v, c: m.color }));
+        sym = { t: 'uv', f: shapeResult.field, c: shapeResult.singleMarker?.color, uv };
+    } else if (shapeResult && shapeResult.singleMarker) {
+        // No icons, single-symbol esriSMS marker — plain colored shape marker.
+        sym = { t: 's', c: shapeResult.singleMarker.color, sh: shapeResult.singleMarker.shape };
     }
-    return { v: 3, url, sym };
+
+    return { v: 3, url, sym, ...buildShapeStyleFields(shapeResult) };
 }
 
 export interface AutoIconsetResult {
@@ -212,10 +231,14 @@ export interface AutoIconsetResult {
     displayConfig: DisplayConfig;
 }
 
-// Generate + register an iconset from a FeatureServer layer link, per AUTO-ICONSET-SPEC.md.
-// Returns null (not an error) when the renderer simply has no esriPMS symbols to extract —
-// that's the common case (colored-shape layers), not a failure. Throws on an actual problem
-// (bad URL, network/API failure, no CloudTAK session).
+// Generate + register an iconset from a FeatureServer layer link, per AUTO-ICONSET-SPEC.md, and
+// also fold in esriSMS/esriSLS/esriSFS auto-symbology (marker color/shape, line stroke, polygon
+// fill) extracted from the same renderer fetch — mirrors FeatureLinkDropDownReceiver's
+// single-fetch-feeds-both-extractors pattern (avoids a duplicate renderer round trip).
+// Returns null (not an error) when the renderer has neither esriPMS symbols nor any
+// esriSMS/esriSLS/esriSFS styling to extract — that's an unstyled/default-symbology layer, not a
+// failure. Throws on an actual problem (bad URL, network/API failure, no CloudTAK session — the
+// latter only when there ARE icons to register; a shape-only result needs no CloudTAK session).
 export async function generateAutoIconset(sourceUrl: string, fieldOverride?: string, arcgisToken?: string | null): Promise<AutoIconsetResult | null> {
     const canonicalUrl = canonicalizeUrl(sourceUrl);
 
@@ -226,32 +249,41 @@ export async function generateAutoIconset(sourceUrl: string, fieldOverride?: str
     if (meta.error) throw new Error(`ArcGIS error fetching ${canonicalUrl}`);
 
     const layerName = meta.name || meta.serviceDescription || 'Layer';
-    const { field, single, entries } = extractPmsEntries(meta.drawingInfo?.renderer, fieldOverride);
-    if (!entries.length) return null; // no picture-marker symbols — nothing to generate
+    const { field: iconField, single, entries } = extractPmsEntries(meta.drawingInfo?.renderer, fieldOverride);
+    const shapeResult = extractAutoSymbology(meta.drawingInfo?.renderer, fieldOverride);
+    const hasShapeStyle = !isAutoSymbologyEmpty(shapeResult);
+    if (!entries.length && !hasShapeStyle) return null;
 
-    const uid = await uidFor(canonicalUrl, field);
-    const group = `${sanitizeGroupBase(layerName)} Icons`;
-
-    const seen = new Set<string>();
-    const icons: IconToUpload[] = [];
+    let uid = '';
+    let group = '';
+    let iconCount = 0;
     const pathByValue = new Map<string, string>();
     let singleIconPath: string | null = null;
 
-    for (const e of entries) {
-        const fname = dedupe(e.isDefault && !e.rawLabel ? 'Other.png' : fileNameFor(e.rawLabel), seen);
-        icons.push({ name: fname, imageData: e.imageData });
-        const path = `${uid}/${group}/${fname}`;
-        if (e.value) pathByValue.set(e.value, path);
-        else if (single) singleIconPath = path;
+    if (entries.length) {
+        uid = await uidFor(canonicalUrl, iconField);
+        group = `${sanitizeGroupBase(layerName)} Icons`;
+
+        const seen = new Set<string>();
+        const icons: IconToUpload[] = [];
+        for (const e of entries) {
+            const fname = dedupe(e.isDefault && !e.rawLabel ? 'Other.png' : fileNameFor(e.rawLabel), seen);
+            icons.push({ name: fname, imageData: e.imageData });
+            const path = `${uid}/${group}/${fname}`;
+            if (e.value) pathByValue.set(e.value, path);
+            else if (single) singleIconPath = path;
+        }
+        if (!icons.length) throw new Error('All picture-marker symbols failed to decode.');
+
+        const cloudtakToken = getCloudTakToken();
+        if (!cloudtakToken) throw new Error('Not signed into CloudTAK — can\'t register icons on this server.');
+        await registerIconset(uid, group, icons, cloudtakToken);
+        iconCount = icons.length;
     }
-    if (!icons.length) throw new Error('All picture-marker symbols failed to decode.');
 
-    const cloudtakToken = getCloudTakToken();
-    if (!cloudtakToken) throw new Error('Not signed into CloudTAK — can\'t register icons on this server.');
-    await registerIconset(uid, group, icons, cloudtakToken);
-
+    const field = entries.length ? iconField : shapeResult.field;
     return {
-        uid, group, iconCount: icons.length, field,
-        displayConfig: buildAutoIconDisplayConfig(canonicalUrl, field, singleIconPath, pathByValue),
+        uid, group, iconCount, field,
+        displayConfig: buildAutoDisplayConfig(canonicalUrl, field, singleIconPath, pathByValue, shapeResult),
     };
 }

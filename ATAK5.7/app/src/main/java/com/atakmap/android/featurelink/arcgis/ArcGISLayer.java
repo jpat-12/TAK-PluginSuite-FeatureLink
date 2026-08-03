@@ -12,6 +12,13 @@ public class ArcGISLayer {
      * ArcGISRestClient.searchUserLayers() — layers added via URL (page_add_layer) or received
      * via a share default to "org" since there's no portal item to ask. */
     public String access = "org";
+    /** Owner username of the portal item — only meaningful for a "Shared with me" item
+     * (see ArcGISRestClient.searchSharedWithMeLayers()). Empty for owned/public/URL-added layers. */
+    public String sharedBy = "";
+    /** Raw Esri geometryType of the layer ("esriGeometryPoint"/"esriGeometryPolyline"/
+     * "esriGeometryPolygon"), resolved lazily via a layer metadata fetch and cached here so it's
+     * only fetched once per layer. Empty until resolved. */
+    public String geometryType = "";
     public long featureCount = 0;
     public long lastSync = 0;
     public boolean downloadEnabled = false;
@@ -45,6 +52,8 @@ public class ArcGISLayer {
         obj.put("url",                url);
         obj.put("type",               type);
         obj.put("access",             access);
+        obj.put("sharedBy",           sharedBy);
+        obj.put("geometryType",       geometryType);
         obj.put("featureCount",       featureCount);
         obj.put("lastSync",           lastSync);
         obj.put("downloadEnabled",    downloadEnabled);
@@ -61,6 +70,8 @@ public class ArcGISLayer {
                 obj.optString("url",  ""),
                 obj.optString("type", "public"));
         layer.access           = obj.optString("access", "org");
+        layer.sharedBy         = obj.optString("sharedBy", "");
+        layer.geometryType     = obj.optString("geometryType", "");
         layer.featureCount    = obj.optLong("featureCount", 0);
         layer.lastSync        = obj.optLong("lastSync", 0);
         layer.downloadEnabled = obj.optBoolean("downloadEnabled", false);

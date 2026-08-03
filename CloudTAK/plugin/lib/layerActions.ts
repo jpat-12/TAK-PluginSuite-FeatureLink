@@ -6,12 +6,26 @@
 
 import { store } from './store.ts';
 import { newLayer } from './types.ts';
-import type { ArcGISLayer } from './types.ts';
+import type { ArcGISLayer, DisplayConfig, DownloadedFeature } from './types.ts';
 import * as auth from './arcgisAuth.ts';
 import * as rest from './arcgisRest.ts';
 import { cotMappingOf } from './displayConfig.ts';
-import { syncLayerMarkers, removeLayerMarkers } from './cot.ts';
+import { syncLayerMarkers, syncLayerShapes, removeLayerMarkers } from './cot.ts';
 import { generateAutoIconset } from './autoIconset.ts';
+
+// Places (or replaces) the map items for one already-downloaded feature list, dispatching by the
+// layer's geometryType — mirrors FeatureLinkDropDownReceiver.downloadLayer()'s per-feature
+// buildMarker()/buildPolylineShapes()/buildPolygonShapes() dispatch, done once for the whole
+// batch here since geometryType doesn't vary per feature within a layer.
+async function syncLayerMapItems(layer: ArcGISLayer, features: DownloadedFeature[], displayConfig: DisplayConfig | null): Promise<void> {
+    if (layer.geometryType === 'esriGeometryPolyline') {
+        await syncLayerShapes(layer.url, features, layer.visible, displayConfig, 'polyline');
+    } else if (layer.geometryType === 'esriGeometryPolygon') {
+        await syncLayerShapes(layer.url, features, layer.visible, displayConfig, 'polygon');
+    } else {
+        await syncLayerMarkers(layer.url, features, layer.visible, displayConfig);
+    }
+}
 
 export async function downloadLayer(layer: ArcGISLayer): Promise<void> {
     // Downloading a "My ArcGIS Layers" item for the first time moves it onto the device, into
@@ -21,6 +35,13 @@ export async function downloadLayer(layer: ArcGISLayer): Promise<void> {
     }
 
     const token = layer.type === 'private' ? await auth.getToken() : null;
+
+    // One-time lazy backfill for layers added before geometryType existed, or whose browse-list
+    // search result (a portal item, not layer metadata) never carried it.
+    if (!layer.geometryType) {
+        layer.geometryType = await rest.fetchGeometryType(layer.url, token);
+    }
+
     const displayConfig = store.displayConfigs[layer.url] ?? null;
     const mapping = displayConfig ? cotMappingOf(displayConfig.cm) : null;
 
@@ -28,7 +49,7 @@ export async function downloadLayer(layer: ArcGISLayer): Promise<void> {
         const features = await rest.downloadLayerAsCoT(layer.url, token, mapping);
         layer.lastSync = Date.now();
         layer.featureCount = features.length;
-        await syncLayerMarkers(layer.url, features, layer.visible, displayConfig);
+        await syncLayerMapItems(layer, features, displayConfig);
     } catch (e) {
         console.error('[featurelink] downloadLayer failed for', layer.name, e);
         throw e;
@@ -108,17 +129,20 @@ export async function addPublicLayer(url: string): Promise<{ ok: boolean; messag
     if (!layer) return { ok: false, message: 'Could not load layer from URL' };
 
     // Best-effort: a plain paste-URL add also tries to auto-generate + register this layer's
-    // picture-marker icons (AUTO-ICONSET-SPEC.md), so it renders its own custom markers on this
+    // picture-marker icons and/or extract its esriSMS/esriSLS/esriSFS auto-symbology
+    // (AUTO-ICONSET-SPEC.md; autoSymbology.ts), so it renders with its real styling on this
     // device immediately rather than only on devices that later receive its CoT. Never blocks
-    // adding the layer — a colored-shape renderer (no esriPMS symbols) isn't a failure, and a
-    // real failure (network, no CloudTAK session) just means no icons this time.
+    // adding the layer — a default-symbology renderer (nothing to extract) isn't a failure, and
+    // a real failure (network, no CloudTAK session) just means no auto-styling this time.
     let message = `Added: ${layer.name}`;
     if (!store.displayConfigs[layer.url]) {
         try {
             const iconset = await generateAutoIconset(trimmed);
             if (iconset) {
                 store.displayConfigs[layer.url] = iconset.displayConfig;
-                message += ` (${iconset.iconCount} custom icon${iconset.iconCount === 1 ? '' : 's'})`;
+                message += iconset.iconCount > 0
+                    ? ` (${iconset.iconCount} custom icon${iconset.iconCount === 1 ? '' : 's'})`
+                    : ' (auto-styled)';
             }
         } catch (e) {
             console.warn('[featurelink] auto-iconset generation failed for', layer.name, e);
@@ -183,12 +207,12 @@ export async function toggleLayerVisibility(layer: ArcGISLayer): Promise<void> {
         return;
     }
     const displayConfig = store.displayConfigs[layer.url] ?? null;
-    // Re-run the sync so markers actually appear rather than just flipping a flag.
+    // Re-run the sync so markers/shapes actually appear rather than just flipping a flag.
     const token = layer.type === 'private' ? await auth.getToken() : null;
     const mapping = displayConfig ? cotMappingOf(displayConfig.cm) : null;
     try {
         const features = await rest.downloadLayerAsCoT(layer.url, token, mapping);
-        await syncLayerMarkers(layer.url, features, layer.visible, displayConfig);
+        await syncLayerMapItems(layer, features, displayConfig);
     } catch (e) {
         console.warn('[featurelink] toggleLayerVisibility resync failed', e);
     }

@@ -7,7 +7,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 buildscript {
-    ext.PLUGIN_VERSION = "2.6.24"
+    ext.PLUGIN_VERSION = "2.7.24"
     ext.ATAK_VERSION = '5.6.0'
 
     def takdevVersion = '3.+'
@@ -195,7 +195,7 @@ android {
     defaultConfig {
         minSdkVersion 21
         targetSdkVersion 34
-        versionCode 4
+        versionCode 5
         versionName PLUGIN_VERSION
 
         def runTasks = gradle.startParameter.taskNames

@@ -2,11 +2,14 @@ package com.atakmap.android.featurelink;
 
 import android.graphics.Color;
 
+import com.atakmap.android.featurelink.arcgis.AutoSymbology;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -63,9 +66,20 @@ final class DisplayConfig {
      * FeatureLinkDropDownReceiver.applyScannedDisplayConfig()'s missing-iconset regeneration. */
     final JSONObject rendererOverride;
 
+    /** Driving field for shapeStyleByValue below; empty for a single-symbol renderer. Only ever
+     * populated by the on-device auto-symbology path ({@link #forAutoIcons}) — never round-trips
+     * through the QR/TAK-Portal "sym" schema (fromJson/fromJsonV3), since polyline/polygon
+     * stroke/fill styling isn't part of that schema (yet). */
+    final String shapeField;
+    /** Stroke/fill style for a single-symbol renderer, or the fallback for a uniqueValue one. */
+    final ShapeStyle singleShapeStyle;
+    /** uniqueValue renderer: field VALUE -> stroke/fill style. */
+    final Map<String, ShapeStyle> shapeStyleByValue;
+
     private DisplayConfig(String url, String name, float opacity, boolean visible,
             SymConfig sym, LabelConfig lbl, PopupConfig popup, CotMapping cotMapping,
-            int freqInterval, String freqUnit, boolean isPrivate, JSONObject rendererOverride) {
+            int freqInterval, String freqUnit, boolean isPrivate, JSONObject rendererOverride,
+            String shapeField, ShapeStyle singleShapeStyle, Map<String, ShapeStyle> shapeStyleByValue) {
         this.url          = url;
         this.name         = name;
         this.opacity      = opacity;
@@ -78,6 +92,9 @@ final class DisplayConfig {
         this.freqUnit     = freqUnit;
         this.isPrivate    = isPrivate;
         this.rendererOverride = rendererOverride;
+        this.shapeField        = shapeField        != null ? shapeField        : "";
+        this.singleShapeStyle  = singleShapeStyle;
+        this.shapeStyleByValue = shapeStyleByValue != null ? shapeStyleByValue : Collections.emptyMap();
     }
 
     /** Parses a v:2 or v:1-display JSONObject. Returns null if the object is not a display config. */
@@ -106,7 +123,7 @@ final class DisplayConfig {
             JSONObject rendererOverride = o.optJSONObject("rendererOverride");
 
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
-                    freqInterval, freqUnit, isPrivate, rendererOverride);
+                    freqInterval, freqUnit, isPrivate, rendererOverride, "", null, null);
         } catch (Exception e) {
             return null;
         }
@@ -142,7 +159,7 @@ final class DisplayConfig {
             String freqUnit        = freqEnabled ? freqJ.optString("intervalUnit", "s") : "s";
 
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
-                    freqInterval, freqUnit, false, null);
+                    freqInterval, freqUnit, false, null, "", null, null);
         } catch (Exception e) {
             return null;
         }
@@ -163,26 +180,107 @@ final class DisplayConfig {
      */
     static DisplayConfig forAutoIcons(String url, String field, String singleIconPath,
             Map<String, String> pathByValue) {
+        return forAutoIcons(url, field, singleIconPath, pathByValue, null);
+    }
+
+    /**
+     * Same as the 4-arg {@link #forAutoIcons}, but also folds in stroke/fill/marker styling
+     * extracted from the layer's renderer (see {@code AutoSymbology.extract}). esriSLS/esriSFS
+     * styling for polyline/polygon layers becomes this config's shapeField/singleShapeStyle/
+     * shapeStyleByValue (consulted by {@link #resolveShapeStyle}). esriSMS point-marker styling
+     * (color/shape, no custom icon) instead feeds into the ordinary "s"/"uv" SymConfig path so
+     * the existing {@link #resolveColor} machinery picks it up with no new resolution logic —
+     * only used when no icon path was resolved, since a custom picture-marker icon always wins
+     * over a plain colored shape marker.
+     */
+    static DisplayConfig forAutoIcons(String url, String field, String singleIconPath,
+            Map<String, String> pathByValue, AutoSymbology.Result shapeResult) {
         SymConfig sym;
         if (singleIconPath != null && !singleIconPath.isEmpty()) {
             // "ic" — single custom icon for every feature (resolveIconsetPath returns usericonPath).
             sym = new SymConfig("ic", Color.BLUE, Color.BLACK, 12, "circle", 1.0f, "",
                     new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), Color.BLUE,
                     new ArrayList<>(), "", "", singleIconPath);
-        } else {
+        } else if (pathByValue != null && !pathByValue.isEmpty()) {
             // "adv" — per-value icon entries; resolveIconsetPath matches attrs[field] to e.value.
             List<UvEntry> adv = new ArrayList<>();
-            if (pathByValue != null) {
-                for (Map.Entry<String, String> e : pathByValue.entrySet()) {
-                    adv.add(new UvEntry(e.getKey(), Color.BLUE, true, "", "", e.getValue()));
-                }
+            for (Map.Entry<String, String> e : pathByValue.entrySet()) {
+                adv.add(new UvEntry(e.getKey(), Color.BLUE, true, "", "", e.getValue()));
             }
             sym = new SymConfig("adv", Color.BLUE, Color.BLACK, 12, "circle", 1.0f,
                     field == null ? "" : field,
                     new ArrayList<>(), adv, new ArrayList<>(), Color.BLUE,
                     new ArrayList<>(), "", "", null);
+        } else if (shapeResult != null && !shapeResult.markerByValue.isEmpty()) {
+            // No icons anywhere in the renderer; uniqueValue esriSMS renderer — per-value
+            // colored shape markers via the plain "uv" resolveColor path.
+            List<UvEntry> uv = new ArrayList<>();
+            for (Map.Entry<String, AutoSymbology.MarkerStyle> e : shapeResult.markerByValue.entrySet()) {
+                uv.add(new UvEntry(e.getKey(), e.getValue().color));
+            }
+            int fallback = shapeResult.singleMarker != null ? shapeResult.singleMarker.color : Color.BLUE;
+            sym = new SymConfig("uv", fallback, Color.BLACK, 12, "circle", 1.0f,
+                    shapeResult.field, uv, new ArrayList<>(), new ArrayList<>(), fallback,
+                    new ArrayList<>(), "", "", null);
+        } else if (shapeResult != null && shapeResult.singleMarker != null) {
+            // No icons, single-symbol esriSMS marker — plain colored shape marker.
+            AutoSymbology.MarkerStyle m = shapeResult.singleMarker;
+            sym = new SymConfig("s", m.color, Color.BLACK, Math.round(m.sizePx), m.shape, 1.0f, "",
+                    new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), m.color,
+                    new ArrayList<>(), "", "", null);
+        } else {
+            sym = null;
         }
-        return new DisplayConfig(url, "", 1.0f, true, sym, null, null, null, 0, "s", false, null);
+
+        String shapeField = "";
+        ShapeStyle singleShapeStyle = null;
+        Map<String, ShapeStyle> shapeStyleByValue = new HashMap<>();
+        if (shapeResult != null) {
+            shapeField = shapeResult.field;
+            singleShapeStyle = combineShapeStyle(shapeResult.singleStroke, shapeResult.singleFill);
+            if (!shapeResult.strokeByValue.isEmpty() || !shapeResult.fillByValue.isEmpty()) {
+                Set<String> values = new HashSet<>();
+                values.addAll(shapeResult.strokeByValue.keySet());
+                values.addAll(shapeResult.fillByValue.keySet());
+                for (String v : values) {
+                    ShapeStyle style = combineShapeStyle(
+                            shapeResult.strokeByValue.get(v), shapeResult.fillByValue.get(v));
+                    if (style != null) shapeStyleByValue.put(v, style);
+                }
+            }
+        }
+
+        return new DisplayConfig(url, "", 1.0f, true, sym, null, null, null, 0, "s", false, null,
+                shapeField, singleShapeStyle, shapeStyleByValue);
+    }
+
+    /** Merges a renderer entry's stroke (esriSLS) and fill (esriSFS, whose own outline is also an
+     * esriSLS) into one {@link ShapeStyle} — a polygon's outline can come from either the fill
+     * symbol's outline or a separate line symbol depending on how the renderer is authored, so
+     * the fill's outline is preferred when there's no standalone stroke. Returns null if neither
+     * a stroke nor a fill was extracted (e.g. an esriPMS/esriSMS-only renderer). */
+    private static ShapeStyle combineShapeStyle(AutoSymbology.StrokeStyle stroke, AutoSymbology.FillStyle fill) {
+        if (stroke == null && fill == null) return null;
+        AutoSymbology.StrokeStyle outline = fill != null ? fill.outline : null;
+        int strokeColor     = stroke != null ? stroke.color    : (outline != null ? outline.color    : Color.BLUE);
+        float strokeWidthPx = stroke != null ? stroke.widthPx  : (outline != null ? outline.widthPx  : 2f);
+        String strokeDash   = stroke != null ? stroke.dash     : (outline != null ? outline.dash     : "solid");
+        int fillColor  = fill != null ? fill.color : Color.TRANSPARENT;
+        String fillStyleStr = fill != null ? fill.style : "none";
+        return new ShapeStyle(strokeColor, strokeWidthPx, strokeDash, fillColor, fillStyleStr);
+    }
+
+    /** Returns the stroke/fill style for a feature given its raw attribute map, or null if this
+     * config has no shape styling (e.g. a point layer, or one with no esriSLS/esriSFS symbology)
+     * — callers should fall back to a sensible default (ATAK's default blue stroke). */
+    ShapeStyle resolveShapeStyle(Map<String, String> attrs) {
+        if (singleShapeStyle != null) return singleShapeStyle;
+        if (!shapeStyleByValue.isEmpty()) {
+            String val = attrs.getOrDefault(shapeField, "");
+            ShapeStyle s = shapeStyleByValue.get(val);
+            if (s != null) return s;
+        }
+        return null;
     }
 
     /**
@@ -851,6 +949,26 @@ final class DisplayConfig {
             if (iconFile != null && !iconFile.isEmpty()) j.put("ic", iconFile);
             if (usericonPath != null) j.put("up", usericonPath);
             return j;
+        }
+    }
+
+    /** Stroke + fill styling for a polyline/polygon feature — only ever populated by the
+     * on-device auto-symbology path ({@link DisplayConfig#forAutoIcons}), never round-tripped
+     * through the QR/TAK-Portal "sym" schema. See {@link DisplayConfig#resolveShapeStyle}. */
+    static final class ShapeStyle {
+        final int    strokeColor;
+        final float  strokeWidthPx;
+        final String strokeDash; // "solid" | "dash" | "dot"
+        final int    fillColor;
+        final String fillStyle;  // "solid" | "none"
+
+        ShapeStyle(int strokeColor, float strokeWidthPx, String strokeDash,
+                int fillColor, String fillStyle) {
+            this.strokeColor   = strokeColor;
+            this.strokeWidthPx = strokeWidthPx;
+            this.strokeDash    = strokeDash;
+            this.fillColor     = fillColor;
+            this.fillStyle     = fillStyle;
         }
     }
 

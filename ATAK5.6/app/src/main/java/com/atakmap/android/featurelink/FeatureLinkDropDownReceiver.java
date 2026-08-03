@@ -41,6 +41,7 @@ import com.atakmap.android.featurelink.arcgis.ArcGISAuthManager;
 import com.atakmap.android.featurelink.arcgis.ArcGISLayer;
 import com.atakmap.android.featurelink.arcgis.ArcGISRestClient;
 import com.atakmap.android.featurelink.arcgis.AutoIconset;
+import com.atakmap.android.featurelink.arcgis.AutoSymbology;
 import com.atakmap.android.featurelink.plugin.R;
 import com.atakmap.android.ipc.AtakBroadcast;
 import com.atakmap.android.maps.MapGroup;
@@ -48,6 +49,7 @@ import com.atakmap.android.maps.MapItem;
 import com.atakmap.android.maps.MapView;
 import com.atakmap.android.maps.Marker;
 import com.atakmap.android.maps.PointMapItem;
+import com.atakmap.android.maps.Polyline;
 import com.atakmap.android.missionpackage.api.MissionPackageApi;
 import com.atakmap.android.missionpackage.api.ToastSaveCallback;
 import com.atakmap.android.missionpackage.file.MissionPackageManifest;
@@ -60,6 +62,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileWriter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -90,6 +93,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private static final String PREF_DISPLAY_CONFIGS_JSON = "display_configs_json";
     private static final String PREF_PUBLIC_LAYERS_JSON = "public_layers_json";
     private static final String PREF_SHARED_PRIVATE_LAYERS_JSON = "shared_private_layers_json";
+    private static final String PREF_SHARED_WITH_ME_LAYERS_JSON = "shared_with_me_layers_json";
     private static final String PREF_SECTION_PRIVATE_EXPANDED = "section_private_expanded";
     private static final String PREF_SECTION_SHARED_PRIVATE_EXPANDED = "section_shared_private_expanded";
     private static final String PREF_SECTION_PUBLIC_EXPANDED = "section_public_expanded";
@@ -173,6 +177,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private LinearLayout privateLayersList;
     private View myArcGisLayersCard;
 
+    // Layers page — "Shared with me" subsection, nested inside "My ArcGIS Layers": items shared
+    // with the signed-in user via ArcGIS group membership (see ArcGISRestClient.
+    // searchSharedWithMeLayers()), as opposed to owned items. Shares the same collapse control as
+    // the owned-layers list above it (no separate toggle).
+    private LinearLayout sharedWithMeList;
+    private TextView sharedWithMeCountBadge;
+
     // Layers page — "Private Layers" section: on-device layers not shared to Everyone, either
     // shared to you by another user, or downloaded from "My ArcGIS Layers" and not public — see
     // moveMyArcGisLayerOnDownload(). Whole card hidden when this list is empty.
@@ -193,10 +204,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private final List<ArcGISLayer> privateLayers = new ArrayList<>();
     private final List<ArcGISLayer> publicLayers  = new ArrayList<>();
     private final List<ArcGISLayer> sharedPrivateLayers = new ArrayList<>();
+    private final List<ArcGISLayer> sharedWithMeLayers = new ArrayList<>();
     private String pliLayerUrl = null;
 
-    /** Tracks ATAK Markers added per layer URL so they can be refreshed or removed. */
-    private final Map<String, List<Marker>> layerMarkers = new HashMap<>();
+    /** Tracks ATAK map items (Markers for points, Polylines for lines/polygons) added per layer
+     * URL so they can be refreshed or removed — MapItem is the common base both extend. */
+    private final Map<String, List<MapItem>> layerItems = new HashMap<>();
 
     /** Display configs keyed by layer URL, populated when a v:2 (or v:1 display) QR is scanned. */
     private final Map<String, DisplayConfig> layerDisplayConfigs = new HashMap<>();
@@ -308,16 +321,18 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         all.addAll(privateLayers);
         all.addAll(sharedPrivateLayers);
         all.addAll(publicLayers);
-        for (ArcGISLayer layer : all) removeLayerMarkers(layer);
+        for (ArcGISLayer layer : all) removeLayerItems(layer);
 
         privateLayers.clear();
         sharedPrivateLayers.clear();
         publicLayers.clear();
+        sharedWithMeLayers.clear();
         layerDisplayConfigs.clear();
 
         savePrivateLayers();
         saveSharedPrivateLayers();
         savePublicLayers();
+        saveSharedWithMeLayers();
         saveDisplayConfigs();
 
         refreshHomeStats();
@@ -590,6 +605,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void refreshHomeStats() {
         final List<ArcGISLayer> privateSnap = new ArrayList<>(privateLayers);
+        final List<ArcGISLayer> sharedWithMeSnap = new ArrayList<>(sharedWithMeLayers);
         final List<ArcGISLayer> sharedPrivateSnap = new ArrayList<>(sharedPrivateLayers);
         final List<ArcGISLayer> publicSnap  = new ArrayList<>(publicLayers);
         executor.submit(() -> {
@@ -602,18 +618,28 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 layer.featureCount = count;
                 total += count;
                 stats.add(new String[]{layer.name, String.valueOf(count), "private"});
+                Log.d(TAG, "refreshHomeStats: [myArcGis] " + layer.name + " count=" + count);
+            }
+            for (ArcGISLayer layer : sharedWithMeSnap) {
+                long count = cachedCount(layer.url, token);
+                layer.featureCount = count;
+                total += count;
+                stats.add(new String[]{layer.name, String.valueOf(count), "private"});
+                Log.d(TAG, "refreshHomeStats: [sharedWithMe] " + layer.name + " count=" + count);
             }
             for (ArcGISLayer layer : sharedPrivateSnap) {
                 long count = cachedCount(layer.url, token);
                 layer.featureCount = count;
                 total += count;
                 stats.add(new String[]{layer.name, String.valueOf(count), "private"});
+                Log.d(TAG, "refreshHomeStats: [privateOnDevice] " + layer.name + " count=" + count);
             }
             for (ArcGISLayer layer : publicSnap) {
                 long count = cachedCount(layer.url, null);
                 layer.featureCount = count;
                 total += count;
                 stats.add(new String[]{layer.name, String.valueOf(count), "public"});
+                Log.d(TAG, "refreshHomeStats: [publicOnDevice] " + layer.name + " count=" + count);
             }
 
             final int totalFinal = total;
@@ -787,6 +813,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void performLogout() {
         authManager.logout();
         privateLayers.clear();
+        sharedWithMeLayers.clear();
         prefs.edit().remove(PREF_PORTAL_URL).apply();
         syncHomeAuthState();
         if (currentPage == 1) refreshLayersList();
@@ -801,22 +828,47 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
         authStatusText.setText("Loading layers…");
         executor.submit(() -> {
-            List<ArcGISLayer> layers = restClient.searchUserLayers(portal, token, username);
+            List<ArcGISLayer> owned  = restClient.searchUserLayers(portal, token, username);
+            List<ArcGISLayer> shared = restClient.searchSharedWithMeLayers(portal, token, username);
+            Log.d(TAG, "fetchUserLayers: username=" + username + " owned=" + owned.size()
+                    + " shared=" + shared.size());
+            for (ArcGISLayer l : shared) {
+                Log.d(TAG, "fetchUserLayers: shared item name=" + l.name + " owner=" + l.sharedBy);
+            }
             mainHandler.post(() -> {
                 Set<String> excluded = getExcludedPrivateUrls();
                 Set<String> onDevice = new HashSet<>();
                 for (ArcGISLayer l : sharedPrivateLayers) onDevice.add(l.url);
                 for (ArcGISLayer l : publicLayers)        onDevice.add(l.url);
+
                 privateLayers.clear();
-                for (ArcGISLayer l : layers) {
+                for (ArcGISLayer l : owned) {
                     // Already downloaded onto this device (see moveMyArcGisLayerOnDownload) —
                     // it now lives in Private or Public Layers, not the browse list.
                     if (excluded.contains(l.url) || onDevice.contains(l.url)) continue;
                     l.type = "private";
                     privateLayers.add(l);
                 }
-                restoreLayerPreferences(privateLayers);
+                restoreLayerPreferences(privateLayers, PREF_LAYERS_JSON);
                 savePrivateLayers();
+
+                // Cross-check against the owned-layers result by URL rather than trusting only
+                // searchSharedWithMeLayers()'s owner-string comparison — ArcGIS Online can format
+                // a username differently between the group-search "owner" field and the OAuth
+                // username, so an owned item shared into the user's own group could otherwise
+                // slip past that check and land here too.
+                Set<String> ownedUrls = new HashSet<>();
+                for (ArcGISLayer l : owned) ownedUrls.add(l.url);
+
+                sharedWithMeLayers.clear();
+                for (ArcGISLayer l : shared) {
+                    if (excluded.contains(l.url) || onDevice.contains(l.url) || ownedUrls.contains(l.url)) continue;
+                    l.type = "private";
+                    sharedWithMeLayers.add(l);
+                }
+                restoreLayerPreferences(sharedWithMeLayers, PREF_SHARED_WITH_ME_LAYERS_JSON);
+                saveSharedWithMeLayers();
+
                 authStatusText.setText("Signed in as: " + authManager.getUsername());
                 refreshHomeStats();
                 refreshHomeStatusCard();
@@ -845,6 +897,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         privateLayersContent = layersPageView.findViewById(R.id.private_layers_content);
         myArcGisLayersCard   = layersPageView.findViewById(R.id.my_arcgis_layers_card);
         collapsePrivateBtn   = layersPageView.findViewById(R.id.collapse_private_btn);
+
+        // "Shared with me" subsection, nested inside the same card/collapse control above
+        sharedWithMeList       = layersPageView.findViewById(R.id.shared_with_me_list);
+        sharedWithMeCountBadge = layersPageView.findViewById(R.id.shared_with_me_count_badge);
         Button refreshPrivateBtn = layersPageView.findViewById(R.id.refresh_private_layers_btn);
         refreshPrivateBtn.setOnClickListener(v -> {
             if (authManager.isAuthenticated()) fetchUserLayers();
@@ -918,6 +974,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         myArcGisLayersCard.setVisibility(authed ? View.VISIBLE : View.GONE);
         if (!authed) return;
         populateLayerList(privateLayersList, privateLayers);
+        sharedWithMeCountBadge.setText(String.valueOf(sharedWithMeLayers.size()));
+        populateLayerList(sharedWithMeList, sharedWithMeLayers);
     }
 
     private void refreshSharedPrivateLayers() {
@@ -969,9 +1027,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void toggleLayerVisibility(ArcGISLayer layer) {
         layer.visible = !layer.visible;
-        List<Marker> markers = layerMarkers.get(layer.url);
-        if (markers != null) {
-            for (Marker m : markers) m.setVisible(layer.visible);
+        List<MapItem> items = layerItems.get(layer.url);
+        if (items != null) {
+            for (MapItem item : items) item.setVisible(layer.visible);
         }
         saveLayerOfSection(layer);
         refreshLayerOfSection(layer);
@@ -985,9 +1043,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 confirmRemovePublicLayer(layer);
             }
         } else {
-            // Downloading a "My ArcGIS Layers" item for the first time moves it onto the device,
-            // into Private or Public Layers depending on its ArcGIS sharing scope.
-            if (privateLayers.contains(layer)) {
+            // Downloading a "My ArcGIS Layers"/"Shared with me" item for the first time moves it
+            // onto the device, into Private or Public Layers depending on its ArcGIS sharing scope.
+            if (privateLayers.contains(layer) || sharedWithMeLayers.contains(layer)) {
                 moveMyArcGisLayerOnDownload(layer);
             }
             saveLayerOfSection(layer);
@@ -995,13 +1053,18 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         }
     }
 
-    /** Moves a "My ArcGIS Layers" browse-list item onto the device once its download/refresh
-     * button is tapped, landing it in Private Layers or Public Layers depending on whether the
-     * ArcGIS item is shared to Everyone ({@link ArcGISLayer#access}) — from then on it behaves
-     * like any other on-device layer in that section instead of staying in the browse list. */
+    /** Moves a "My ArcGIS Layers"/"Shared with me" browse-list item onto the device once its
+     * download/refresh button is tapped, landing it in Private Layers or Public Layers depending
+     * on whether the ArcGIS item is shared to Everyone ({@link ArcGISLayer#access}) — from then on
+     * it behaves like any other on-device layer in that section instead of staying in the browse
+     * list. */
     private void moveMyArcGisLayerOnDownload(ArcGISLayer layer) {
-        privateLayers.remove(layer);
-        savePrivateLayers();
+        if (sharedWithMeLayers.remove(layer)) {
+            saveSharedWithMeLayers();
+        } else {
+            privateLayers.remove(layer);
+            savePrivateLayers();
+        }
         if ("public".equals(layer.access)) {
             layer.type = "public";
             publicLayers.add(layer);
@@ -1144,7 +1207,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 .setPositiveButton("Remove", (d, w) -> {
                     publicLayers.remove(layer);
                     savePublicLayers();
-                    removeLayerMarkers(layer);
+                    removeLayerItems(layer);
                     layerDisplayConfigs.remove(layer.url);
                     saveDisplayConfigs();
                     refreshPublicLayers();
@@ -1160,7 +1223,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      * silently bring it back — a shared-private layer only ever gets (re)added by another share,
      * so it doesn't need that same tracking. */
     private void onLayerDelete(ArcGISLayer layer) {
-        boolean isMyArcGis = privateLayers.contains(layer);
+        boolean isMyArcGis = privateLayers.contains(layer) || sharedWithMeLayers.contains(layer);
         new AlertDialog.Builder(getMapView().getContext())
                 .setTitle("Remove Layer?")
                 .setMessage("Remove \"" + layer.name + "\" from your layer list here? "
@@ -1168,7 +1231,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                                       : "")
                         + "Any markers it added to the map will also be removed.")
                 .setPositiveButton("Remove", (d, w) -> {
-                    if (isMyArcGis) {
+                    if (sharedWithMeLayers.remove(layer)) {
+                        saveSharedWithMeLayers();
+                        addExcludedPrivateUrl(layer.url);
+                    } else if (isMyArcGis) {
                         privateLayers.remove(layer);
                         savePrivateLayers();
                         addExcludedPrivateUrl(layer.url);
@@ -1176,7 +1242,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         sharedPrivateLayers.remove(layer);
                         saveSharedPrivateLayers();
                     }
-                    removeLayerMarkers(layer);
+                    removeLayerItems(layer);
                     layerDisplayConfigs.remove(layer.url);
                     saveDisplayConfigs();
                     if (isMyArcGis) refreshPrivateLayers(); else refreshSharedPrivateLayers();
@@ -1217,14 +1283,35 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             // still loads, markers just keep default styling until the set exists. Runs on this
             // background thread (AutoIconset.generate does its own blocking renderer fetch).
             AutoIconset.Result iconset = null;
+            AutoSymbology.Result shapeResult = null;
             if (layer != null) {
+                // Fetch the renderer once and feed it into both extractors — AutoIconset only
+                // handles esriPMS (picture-marker) symbols, AutoSymbology handles esriSMS/esriSLS/
+                // esriSFS (marker color/shape, line stroke, polygon fill) — avoids a duplicate
+                // renderer round trip for the same layer.
+                JSONObject renderer = null;
+                String canonicalUrl = AutoIconset.canonicalize(url);
+                if (canonicalUrl != null) {
+                    try {
+                        JSONObject meta = restClient.fetchJson(canonicalUrl, null);
+                        if (meta != null && !meta.has("error")) {
+                            JSONObject drawingInfo = meta.optJSONObject("drawingInfo");
+                            renderer = drawingInfo != null ? drawingInfo.optJSONObject("renderer") : null;
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "renderer fetch failed for " + url, e);
+                    }
+                }
                 try {
-                    iconset = AutoIconset.generate(pluginContext, restClient, url, null, null);
+                    iconset = AutoIconset.generate(pluginContext, restClient, url, null, null,
+                            renderer, null, null);
                 } catch (Exception e) {
                     Log.w(TAG, "auto-iconset generation failed for " + url, e);
                 }
+                shapeResult = AutoSymbology.extract(renderer, null);
             }
             final AutoIconset.Result iconsetResult = iconset;
+            final AutoSymbology.Result finalShapeResult = shapeResult;
             mainHandler.post(() -> {
                 addPublicLayerBtn.setEnabled(true);
                 if (layer != null) {
@@ -1237,16 +1324,21 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     if (iconsetResult != null) {
                         Toast.makeText(pluginContext, "Icons ready: " + iconsetResult.group
                                 + " (" + iconsetResult.iconCount + ")", Toast.LENGTH_SHORT).show();
-                        // Self-render: if there's no styling config for this layer yet, synthesize
-                        // one from the just-generated icons so the markers show their real icons on
-                        // THIS device too (not only on devices that receive its CoT). We don't
-                        // overwrite an existing config (e.g. one from a scanned QR / TAK Portal).
-                        if (layerDisplayConfigs.get(url) == null) {
-                            layerDisplayConfigs.put(url, DisplayConfig.forAutoIcons(url,
-                                    iconsetResult.field, iconsetResult.singleIconPath,
-                                    iconsetResult.pathByValue));
-                            saveDisplayConfigs();
-                        }
+                    }
+                    boolean hasShapeStyle = finalShapeResult != null && !finalShapeResult.isEmpty();
+                    // Self-render: if there's no styling config for this layer yet, synthesize one
+                    // from the just-generated icons and/or extracted shape styling so the markers/
+                    // shapes show their real styling on THIS device too (not only on devices that
+                    // receive its CoT). We don't overwrite an existing config (e.g. one from a
+                    // scanned QR / TAK Portal).
+                    if ((iconsetResult != null || hasShapeStyle) && layerDisplayConfigs.get(url) == null) {
+                        String field = iconsetResult != null ? iconsetResult.field
+                                : (finalShapeResult != null ? finalShapeResult.field : "");
+                        String singleIconPath = iconsetResult != null ? iconsetResult.singleIconPath : null;
+                        Map<String, String> pathByValue = iconsetResult != null ? iconsetResult.pathByValue : null;
+                        layerDisplayConfigs.put(url, DisplayConfig.forAutoIcons(url, field,
+                                singleIconPath, pathByValue, finalShapeResult));
+                        saveDisplayConfigs();
                     }
                     downloadLayer(layer);
                 } else {
@@ -1257,12 +1349,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         });
     }
 
-    /** Removes any ATAK markers previously placed on the map for this layer. */
-    private void removeLayerMarkers(ArcGISLayer layer) {
-        List<Marker> old = layerMarkers.remove(layer.url);
+    /** Removes any ATAK map items (markers/shapes) previously placed on the map for this layer. */
+    private void removeLayerItems(ArcGISLayer layer) {
+        List<MapItem> old = layerItems.remove(layer.url);
         if (old != null) {
             MapGroup root = getMapView().getRootGroup();
-            for (Marker m : old) root.removeItem(m);
+            for (MapItem item : old) root.removeItem(item);
         }
     }
 
@@ -1296,32 +1388,42 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 : null;
         executor.submit(() -> {
             try {
+                // One-time lazy backfill for layers added before geometryType existed, or whose
+                // browse-list search result (a portal item, not layer metadata) never carried it.
+                if (layer.geometryType == null || layer.geometryType.isEmpty()) {
+                    String canonicalUrl = AutoIconset.canonicalize(layer.url);
+                    if (canonicalUrl != null) {
+                        try {
+                            JSONObject meta = restClient.fetchJson(canonicalUrl, token);
+                            if (meta != null && !meta.has("error")) {
+                                layer.geometryType = meta.optString("geometryType", "");
+                            }
+                        } catch (Exception e) {
+                            Log.w(TAG, "geometryType fetch failed for " + layer.url, e);
+                        }
+                    }
+                }
+
                 List<ArcGISRestClient.DownloadedFeature> features =
                         restClient.downloadLayerAsCoT(layer.url, token, cotMapping);
                 Log.d(TAG, "downloadLayer: downloaded " + features.size() + " features from " + layer.url);
                 layer.lastSync = System.currentTimeMillis();
                 mainHandler.post(() -> {
                     saveLayerOfSection(layer);
-                    // Swap out old markers for this layer
+                    // Swap out old map items for this layer
                     MapGroup root = getMapView().getRootGroup();
-                    removeLayerMarkers(layer);
-                    List<Marker> added = new ArrayList<>(features.size());
+                    removeLayerItems(layer);
+                    List<MapItem> added = new ArrayList<>(features.size());
                     int debugLogged = 0;
                     for (ArcGISRestClient.DownloadedFeature f : features) {
-                        GeoPoint gp = Double.isNaN(f.hae)
-                                ? new GeoPoint(f.lat, f.lon)
-                                : new GeoPoint(f.lat, f.lon, f.hae);
-                        Marker m = new Marker(gp, f.uid);
-                        m.setType(f.cotType);
-
-                        if (displayConfig != null) {
-                            // Apply custom iconset icon (sym type "ic", or "adv" per-value icon)
-                            String iconsetPath = displayConfig.resolveIconsetPath(f.attributes);
-                            if (iconsetPath != null) {
-                                m.setMetaString(com.atakmap.android.icons.UserIcon.IconsetPath,
-                                        iconsetPath);
-                            }
-                            if (debugLogged < 8) {
+                        List<MapItem> items;
+                        if ("esriGeometryPolyline".equals(layer.geometryType) && !f.paths.isEmpty()) {
+                            items = buildPolylineShapes(f, displayConfig);
+                        } else if ("esriGeometryPolygon".equals(layer.geometryType) && !f.rings.isEmpty()) {
+                            items = buildPolygonShapes(f, displayConfig);
+                        } else {
+                            items = Collections.singletonList(buildMarker(f, displayConfig));
+                            if (debugLogged < 8 && displayConfig != null) {
                                 debugLogged++;
                                 String symType = displayConfig.sym != null ? displayConfig.sym.type : "null";
                                 String fieldName = displayConfig.sym != null ? displayConfig.sym.fieldName : "";
@@ -1331,39 +1433,16 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                                 Log.d(TAG, "downloadLayer icon-debug: uid=" + f.uid
                                         + " symType=" + symType
                                         + " field=" + fieldName + "=" + rawVal
-                                        + " advValues.size=" + advCount
-                                        + " resolvedIconsetPath=" + iconsetPath);
+                                        + " advValues.size=" + advCount);
                             }
-
-                            // Marker color also tints custom icon bitmaps — a colored fill only
-                            // makes sense for shape symbology. When an icon actually applies,
-                            // force white (no tint) so the icon shows its own real colors.
-                            int color = iconsetPath != null ? Color.WHITE : displayConfig.resolveColor(f.attributes);
-                            m.setColor(color);
-
-                            // Apply label from lbl.field; fall back to callsign
-                            String label = displayConfig.resolveLabel(f.attributes, f.callsign);
-                            m.setMetaString("callsign", label);
-                            m.setTitle(label);
-
-                            // Build remarks from popup fields; append any existing remarks
-                            String popupRemarks = displayConfig.buildRemarks(f.attributes);
-                            String remarks = popupRemarks.isEmpty() ? f.remarks
-                                    : (f.remarks.isEmpty() ? popupRemarks
-                                            : popupRemarks + "\n" + f.remarks);
-                            if (!remarks.isEmpty()) m.setMetaString("remarks", remarks);
-                        } else {
-                            m.setMetaString("callsign", f.callsign);
-                            m.setTitle(f.callsign);
-                            if (!f.remarks.isEmpty()) m.setMetaString("remarks", f.remarks);
                         }
-
-                        m.setMetaBoolean("readiness", true);
-                        m.setVisible(layer.visible);
-                        root.addItem(m);
-                        added.add(m);
+                        for (MapItem item : items) {
+                            item.setVisible(layer.visible);
+                            root.addItem(item);
+                            added.add(item);
+                        }
                     }
-                    if (!added.isEmpty()) layerMarkers.put(layer.url, added);
+                    if (!added.isEmpty()) layerItems.put(layer.url, added);
                     Toast.makeText(pluginContext,
                             "Downloaded: " + layer.name + " (" + features.size() + " features)",
                             Toast.LENGTH_SHORT).show();
@@ -1374,6 +1453,152 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         "Download failed: " + layer.name, Toast.LENGTH_SHORT).show());
             }
         });
+    }
+
+    /** Builds a point marker for one downloaded feature — the original per-feature styling
+     * logic, unchanged, just extracted so downloadLayer() can dispatch by geometry type. */
+    private Marker buildMarker(ArcGISRestClient.DownloadedFeature f, DisplayConfig displayConfig) {
+        GeoPoint gp = Double.isNaN(f.hae)
+                ? new GeoPoint(f.lat, f.lon)
+                : new GeoPoint(f.lat, f.lon, f.hae);
+        Marker m = new Marker(gp, f.uid);
+        m.setType(f.cotType);
+
+        if (displayConfig != null) {
+            // Apply custom iconset icon (sym type "ic", or "adv" per-value icon)
+            String iconsetPath = displayConfig.resolveIconsetPath(f.attributes);
+            if (iconsetPath != null) {
+                m.setMetaString(com.atakmap.android.icons.UserIcon.IconsetPath, iconsetPath);
+            }
+
+            // Marker color also tints custom icon bitmaps — a colored fill only makes sense for
+            // shape symbology. When an icon actually applies, force white (no tint) so the icon
+            // shows its own real colors.
+            int color = iconsetPath != null ? Color.WHITE : displayConfig.resolveColor(f.attributes);
+            m.setColor(color);
+
+            String label = displayConfig.resolveLabel(f.attributes, f.callsign);
+            m.setMetaString("callsign", label);
+            m.setTitle(label);
+
+            String popupRemarks = displayConfig.buildRemarks(f.attributes);
+            String remarks = popupRemarks.isEmpty() ? f.remarks
+                    : (f.remarks.isEmpty() ? popupRemarks : popupRemarks + "\n" + f.remarks);
+            if (!remarks.isEmpty()) m.setMetaString("remarks", remarks);
+        } else {
+            m.setMetaString("callsign", f.callsign);
+            m.setTitle(f.callsign);
+            if (!f.remarks.isEmpty()) m.setMetaString("remarks", f.remarks);
+        }
+
+        m.setMetaBoolean("readiness", true);
+        return m;
+    }
+
+    /** Maps a DisplayConfig.ShapeStyle.strokeDash string ("solid"/"dash"/"dot") to the ATAK
+     * Polyline BASIC_LINE_STYLE_* constant, defaulting to solid. */
+    private static int basicLineStyleFrom(String dash) {
+        if ("dash".equals(dash)) return Polyline.BASIC_LINE_STYLE_DASHED;
+        if ("dot".equals(dash))  return Polyline.BASIC_LINE_STYLE_DOTTED;
+        return Polyline.BASIC_LINE_STYLE_SOLID;
+    }
+
+    /** Converts one [lon,lat] vertex list into a GeoPoint[] (ATAK's GeoPoint is lat,lon order). */
+    private static GeoPoint[] toGeoPoints(List<double[]> vertices) {
+        GeoPoint[] points = new GeoPoint[vertices.size()];
+        for (int i = 0; i < vertices.size(); i++) {
+            double[] v = vertices.get(i);
+            points[i] = new GeoPoint(v[1], v[0]);
+        }
+        return points;
+    }
+
+    /** Applies the same title/callsign/remarks/readiness metadata buildMarker() applies, shared
+     * by the shape builders below (stroke/fill styling is set separately by each caller, since
+     * points/lines/polygons resolve style differently). */
+    private void applyFeatureMeta(MapItem item, ArcGISRestClient.DownloadedFeature f,
+            DisplayConfig displayConfig) {
+        item.setType(f.cotType);
+        String label = displayConfig != null
+                ? displayConfig.resolveLabel(f.attributes, f.callsign) : f.callsign;
+        item.setMetaString("callsign", label);
+        item.setTitle(label);
+        String remarks;
+        if (displayConfig != null) {
+            String popupRemarks = displayConfig.buildRemarks(f.attributes);
+            remarks = popupRemarks.isEmpty() ? f.remarks
+                    : (f.remarks.isEmpty() ? popupRemarks : popupRemarks + "\n" + f.remarks);
+        } else {
+            remarks = f.remarks;
+        }
+        if (!remarks.isEmpty()) item.setMetaString("remarks", remarks);
+        item.setMetaBoolean("readiness", true);
+    }
+
+    /** One ATAK Polyline shape per path — a multi-part ArcGIS polyline feature becomes N sibling
+     * shapes sharing a "{uid}-p{i}" sub-UID scheme, since ATAK's Polyline is single-part. Stroke
+     * styling comes from the layer's DisplayConfig.resolveShapeStyle() (esriSLS), falling back to
+     * ATAK's default blue/solid/2px when no style resolves (e.g. no renderer symbology found). */
+    private List<MapItem> buildPolylineShapes(ArcGISRestClient.DownloadedFeature f,
+            DisplayConfig displayConfig) {
+        List<MapItem> shapes = new ArrayList<>();
+        DisplayConfig.ShapeStyle style = displayConfig != null
+                ? displayConfig.resolveShapeStyle(f.attributes) : null;
+        int strokeColor = style != null ? style.strokeColor : Color.BLUE;
+        float strokeWeight = style != null ? style.strokeWidthPx : 2f;
+        int lineStyle = basicLineStyleFrom(style != null ? style.strokeDash : "solid");
+
+        for (int i = 0; i < f.paths.size(); i++) {
+            List<double[]> path = f.paths.get(i);
+            if (path.size() < 2) continue;
+            String uid = f.paths.size() > 1 ? f.uid + "-p" + i : f.uid;
+            Polyline line = new Polyline(uid);
+            line.setPoints(toGeoPoints(path));
+            line.setStyle(Polyline.STYLE_STROKE_MASK);
+            line.setStrokeColor(strokeColor);
+            line.setStrokeWeight(strokeWeight);
+            line.setBasicLineStyle(lineStyle);
+            applyFeatureMeta(line, f, displayConfig);
+            shapes.add(line);
+        }
+        return shapes;
+    }
+
+    /** One ATAK Polyline shape (closed + filled) for a polygon feature's outer ring. ATAK's
+     * Polyline has no native multi-ring/hole support (its backing point list is a single flat
+     * ring, confirmed against the ATAK 5.7 SDK), so a polygon with holes renders solid rather
+     * than silently dropping the whole feature — holes beyond the first ring are simply not
+     * rendered. Fill/stroke styling comes from the layer's DisplayConfig.resolveShapeStyle()
+     * (esriSFS/esriSLS), falling back to ATAK's default blue/solid/2px stroke with no fill. */
+    private List<MapItem> buildPolygonShapes(ArcGISRestClient.DownloadedFeature f,
+            DisplayConfig displayConfig) {
+        List<MapItem> shapes = new ArrayList<>();
+        List<double[]> outerRing = f.rings.get(0);
+        if (outerRing.size() < 3) return shapes;
+        if (f.rings.size() > 1) {
+            Log.d(TAG, "buildPolygonShapes: " + f.uid + " has " + (f.rings.size() - 1)
+                    + " hole ring(s) — not rendered (outer ring only)");
+        }
+
+        DisplayConfig.ShapeStyle style = displayConfig != null
+                ? displayConfig.resolveShapeStyle(f.attributes) : null;
+        int strokeColor = style != null ? style.strokeColor : Color.BLUE;
+        float strokeWeight = style != null ? style.strokeWidthPx : 2f;
+        int lineStyle = basicLineStyleFrom(style != null ? style.strokeDash : "solid");
+        boolean filled = style != null && !"none".equals(style.fillStyle);
+
+        Polyline poly = new Polyline(f.uid);
+        poly.setPoints(toGeoPoints(outerRing));
+        int styleMask = Polyline.STYLE_CLOSED_MASK | Polyline.STYLE_STROKE_MASK
+                | (filled ? Polyline.STYLE_FILLED_MASK : 0);
+        poly.setStyle(styleMask);
+        poly.setStrokeColor(strokeColor);
+        poly.setStrokeWeight(strokeWeight);
+        poly.setBasicLineStyle(lineStyle);
+        if (filled) poly.setFillColor(style.fillColor);
+        applyFeatureMeta(poly, f, displayConfig);
+        shapes.add(poly);
+        return shapes;
     }
 
     // -------------------------------------------------------------------------
@@ -2068,6 +2293,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 for (int i = 0; i < arr.length(); i++)
                     sharedPrivateLayers.add(ArcGISLayer.fromJson(arr.getJSONObject(i)));
             }
+            String sharedWithMeJson = prefs.getString(PREF_SHARED_WITH_ME_LAYERS_JSON, null);
+            if (sharedWithMeJson != null) {
+                JSONArray arr = new JSONArray(sharedWithMeJson);
+                for (int i = 0; i < arr.length(); i++)
+                    sharedWithMeLayers.add(ArcGISLayer.fromJson(arr.getJSONObject(i)));
+            }
             pliLayerUrl = prefs.getString(PREF_PLI_LAYER_URL, null);
             if (prefs.getBoolean(PREF_PLI_AUTO_SEND, false)) startPliScheduler();
             updateSetPliEndpointBtn();
@@ -2147,9 +2378,19 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         }
     }
 
-    private void restoreLayerPreferences(List<ArcGISLayer> layers) {
+    private void saveSharedWithMeLayers() {
         try {
-            String savedJson = prefs.getString(PREF_LAYERS_JSON, null);
+            JSONArray arr = new JSONArray();
+            for (ArcGISLayer l : sharedWithMeLayers) arr.put(l.toJson());
+            prefs.edit().putString(PREF_SHARED_WITH_ME_LAYERS_JSON, arr.toString()).apply();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to save shared-with-me layers", e);
+        }
+    }
+
+    private void restoreLayerPreferences(List<ArcGISLayer> layers, String prefKey) {
+        try {
+            String savedJson = prefs.getString(prefKey, null);
             if (savedJson == null) return;
             JSONArray arr = new JSONArray(savedJson);
             for (int i = 0; i < arr.length(); i++) {
@@ -2170,15 +2411,16 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void checkLayerRecurrence() {
-        final List<ArcGISLayer> privateSnap = new ArrayList<>(privateLayers);
+        // Deliberately excludes privateLayers/sharedWithMeLayers — those are the "My ArcGIS
+        // Layers"/"Shared with me" browse lists, never-yet-downloaded items the user hasn't
+        // opted into. Every fresh ArcGISLayer defaults to a 180s recurrence with lastSync=0,
+        // which reads as "always overdue" — auto-refreshing this loop against the browse lists
+        // used to silently download every browsable layer in the account on every plugin load.
+        // Only layers already on-device (sharedPrivateLayers/publicLayers) get auto-refreshed.
         final List<ArcGISLayer> sharedPrivateSnap = new ArrayList<>(sharedPrivateLayers);
         final List<ArcGISLayer> publicSnap  = new ArrayList<>(publicLayers);
         executor.submit(() -> {
             long now = System.currentTimeMillis();
-            for (ArcGISLayer layer : privateSnap) {
-                long threshold = layer.recurrenceMillis();
-                if (threshold > 0 && (now - layer.lastSync) >= threshold) downloadLayer(layer);
-            }
             for (ArcGISLayer layer : sharedPrivateSnap) {
                 long threshold = layer.recurrenceMillis();
                 if (threshold > 0 && (now - layer.lastSync) >= threshold) downloadLayer(layer);
@@ -2242,11 +2484,11 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         if (prefFileResultReceiver != null) {
             AtakBroadcast.getInstance().unregisterReceiver(prefFileResultReceiver);
         }
-        // Remove all injected markers from the ATAK map
+        // Remove all injected map items from the ATAK map
         MapGroup root = getMapView().getRootGroup();
-        for (List<Marker> markers : layerMarkers.values()) {
-            for (Marker m : markers) root.removeItem(m);
+        for (List<MapItem> items : layerItems.values()) {
+            for (MapItem item : items) root.removeItem(item);
         }
-        layerMarkers.clear();
+        layerItems.clear();
     }
 }

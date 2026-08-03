@@ -5,8 +5,9 @@
 // still paste/upload correctly.
 
 import type {
-    DisplayConfig, SymConfig, SymValueEntry, SymOp, CotMapping, CotFieldMapping,
+    DisplayConfig, SymConfig, SymValueEntry, SymOp, CotMapping, CotFieldMapping, ShapeStyle,
 } from './types.ts';
+import type { AutoSymbologyResult, StrokeStyle, FillStyle } from './autoSymbology.ts';
 
 // ── Parsing ──────────────────────────────────────────────────────────────────
 
@@ -254,4 +255,59 @@ export function buildRemarks(config: DisplayConfig, attrs: Record<string, string
         if (v && v !== '') lines.push(`${alias}: ${v}`);
     }
     return lines.join('\n');
+}
+
+// ── Shape styling (polyline/polygon) — ported from DisplayConfig.java's ShapeStyle /
+// combineShapeStyle / resolveShapeStyle. Only ever populated by the on-device auto-symbology
+// path (see buildShapeStyleFields, called from autoIconset.ts's generateAutoIconset) — never
+// round-tripped through the QR/TAK-Portal "sym" schema. ──
+
+// Merges a renderer entry's stroke (esriSLS) and fill (esriSFS, whose own outline is also an
+// esriSLS) into one ShapeStyle — a polygon's outline can come from either the fill symbol's
+// outline or a separate line symbol depending on how the renderer is authored, so the fill's
+// outline is preferred when there's no standalone stroke. Returns null if neither a stroke nor a
+// fill was extracted (e.g. an esriPMS/esriSMS-only renderer).
+function combineShapeStyle(stroke: StrokeStyle | null, fill: FillStyle | null): ShapeStyle | null {
+    if (!stroke && !fill) return null;
+    const outline = fill?.outline ?? null;
+    return {
+        strokeColor:   stroke?.color   ?? outline?.color   ?? '#3388ff',
+        strokeOpacity: stroke?.opacity ?? outline?.opacity ?? 1,
+        strokeWidthPx: stroke?.widthPx ?? outline?.widthPx ?? 2,
+        strokeDash:    stroke?.dash    ?? outline?.dash    ?? 'solid',
+        fillColor:   fill?.color ?? '#000000',
+        fillOpacity: fill && fill.style !== 'none' ? fill.opacity : 0,
+        fillStyle:   fill?.style ?? 'none',
+    };
+}
+
+// Builds the shapeField/singleShapeStyle/shapeStyleByValue fields of a DisplayConfig from an
+// AutoSymbologyResult — the TS equivalent of DisplayConfig.forAutoIcons()'s shape-folding logic.
+export function buildShapeStyleFields(
+    shapeResult: AutoSymbologyResult | null,
+): Pick<DisplayConfig, 'shapeField' | 'singleShapeStyle' | 'shapeStyleByValue'> {
+    if (!shapeResult) return {};
+    const singleShapeStyle = combineShapeStyle(shapeResult.singleStroke, shapeResult.singleFill) ?? undefined;
+
+    const shapeStyleByValue: Record<string, ShapeStyle> = {};
+    const values = new Set<string>([...shapeResult.strokeByValue.keys(), ...shapeResult.fillByValue.keys()]);
+    for (const v of values) {
+        const s = combineShapeStyle(shapeResult.strokeByValue.get(v) ?? null, shapeResult.fillByValue.get(v) ?? null);
+        if (s) shapeStyleByValue[v] = s;
+    }
+
+    return { shapeField: shapeResult.field, singleShapeStyle, shapeStyleByValue };
+}
+
+// Returns the stroke/fill style for a feature given its raw attribute map, or null if this
+// config has no shape styling (e.g. a point layer, or one with no esriSLS/esriSFS symbology) —
+// callers should fall back to a sensible default (CloudTAK's default blue stroke, no fill).
+export function resolveShapeStyle(config: DisplayConfig, attrs: Record<string, string>): ShapeStyle | null {
+    if (config.singleShapeStyle) return config.singleShapeStyle;
+    if (config.shapeStyleByValue && config.shapeField) {
+        const val = attrs[config.shapeField] ?? '';
+        const s = config.shapeStyleByValue[val];
+        if (s) return s;
+    }
+    return null;
 }

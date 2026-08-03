@@ -49,6 +49,8 @@ public class ArcGISRestClient {
 
             JSONObject json = new JSONObject(response);
             JSONArray results = json.optJSONArray("results");
+            Log.d(TAG, "searchUserLayers: q=" + q + " total=" + json.optInt("total", -1)
+                    + " resultCount=" + (results == null ? -1 : results.length()));
             if (results == null) return layers;
 
             for (int i = 0; i < results.length(); i++) {
@@ -67,6 +69,79 @@ public class ArcGISRestClient {
             Log.e(TAG, "searchUserLayers failed", e);
         }
         return layers;
+    }
+
+    /**
+     * Returns the group ids the given user belongs to, via the ArcGIS "community/users" self
+     * endpoint. Used by {@link #searchSharedWithMeLayers} to enumerate which groups to search for
+     * items shared into. Fail-soft: returns an empty list on any error.
+     */
+    private List<String> fetchUserGroupIds(String portalUrl, String token, String username) {
+        List<String> ids = new ArrayList<>();
+        try {
+            String endpoint = normalizePortalUrl(portalUrl)
+                    + "/sharing/rest/community/users/" + enc(username)
+                    + "?f=json&token=" + enc(token);
+            String response = httpGet(endpoint, null);
+            if (response == null) return ids;
+            JSONObject json = new JSONObject(response);
+            JSONArray groups = json.optJSONArray("groups");
+            if (groups == null) return ids;
+            for (int i = 0; i < groups.length(); i++) {
+                JSONObject g = groups.optJSONObject(i);
+                if (g == null) continue;
+                String id = g.optString("id", "");
+                if (!id.isEmpty()) ids.add(id);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "fetchUserGroupIds failed", e);
+        }
+        return ids;
+    }
+
+    /**
+     * Searches for Feature Services shared with the authenticated user through group
+     * membership (ArcGIS has no single "shared with me" endpoint — this is the standard
+     * approach: enumerate the user's groups, then search each group's shared content).
+     * Excludes items the user owns themselves (already covered by {@link #searchUserLayers}) and
+     * dedupes items shared into more than one of the user's groups.
+     */
+    public List<ArcGISLayer> searchSharedWithMeLayers(String portalUrl, String token, String username) {
+        Map<String, ArcGISLayer> byId = new LinkedHashMap<>();
+        try {
+            String portal = normalizePortalUrl(portalUrl);
+            List<String> groupIds = fetchUserGroupIds(portal, token, username);
+            for (String groupId : groupIds) {
+                String q = "group:" + groupId + " AND type:\"Feature Service\"";
+                String endpoint = portal + "/sharing/rest/search?q=" + enc(q)
+                        + "&num=100&f=json&token=" + enc(token);
+                String response = httpGet(endpoint, null);
+                if (response == null) continue;
+
+                JSONObject json = new JSONObject(response);
+                JSONArray results = json.optJSONArray("results");
+                if (results == null) continue;
+
+                for (int i = 0; i < results.length(); i++) {
+                    JSONObject item = results.getJSONObject(i);
+                    String owner = item.optString("owner", "");
+                    if (owner.equalsIgnoreCase(username)) continue; // already in "My ArcGIS Layers"
+                    String url = item.optString("url", "");
+                    if (url.isEmpty()) continue;
+                    String id = item.optString("id", url);
+                    if (byId.containsKey(id)) continue;
+
+                    String name = item.optString("title", "Unnamed");
+                    ArcGISLayer layer = new ArcGISLayer(name, url, "private");
+                    layer.access   = item.optString("access", "org");
+                    layer.sharedBy = owner;
+                    byId.put(id, layer);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "searchSharedWithMeLayers failed", e);
+        }
+        return new ArrayList<>(byId.values());
     }
 
     // -------------------------------------------------------------------------
@@ -115,7 +190,9 @@ public class ArcGISRestClient {
             JSONObject json = new JSONObject(response);
             if (json.has("error")) return null;
             String name = json.optString("name", json.optString("serviceDescription", "Unknown Layer"));
-            return new ArcGISLayer(name, serviceUrl, "public");
+            ArcGISLayer layer = new ArcGISLayer(name, serviceUrl, "public");
+            layer.geometryType = json.optString("geometryType", "");
+            return layer;
         } catch (Exception e) {
             Log.e(TAG, "fetchLayerInfo failed for " + serviceUrl, e);
             return null;
@@ -198,6 +275,8 @@ public class ArcGISRestClient {
                 if (geom == null) continue;
 
                 double lat = Double.NaN, lon = Double.NaN, hae = Double.NaN;
+                List<List<double[]>> paths = extractParts(geom.optJSONArray("paths"));
+                List<List<double[]>> rings = extractParts(geom.optJSONArray("rings"));
                 if (geom.has("x") && geom.has("y")) {
                     lon = geom.optDouble("x", Double.NaN);
                     lat = geom.optDouble("y", Double.NaN);
@@ -237,13 +316,33 @@ public class ArcGISRestClient {
                     remarks  = "";
                 }
                 results.add(new DownloadedFeature(uid, cotType, callsign, remarks, lat, lon, hae,
-                        attrMap));
+                        attrMap, paths, rings));
             } catch (Exception ex) {
                 Log.w(TAG, "Skipping malformed feature at index " + i, ex);
             }
         }
         Log.d(TAG, "downloadLayerAsCoT: " + results.size() + " features from " + serviceUrl);
         return results;
+    }
+
+    /** Parses a "paths" or "rings" JSON array (array of parts, each an array of [x,y,...]
+     * vertices) into a list of [lon,lat] vertex lists, one per part. Null/empty input → empty
+     * list (point geometry, or the other of paths/rings for this feature's geometry type). */
+    private static List<List<double[]>> extractParts(JSONArray parts) {
+        if (parts == null || parts.length() == 0) return Collections.emptyList();
+        List<List<double[]>> result = new ArrayList<>(parts.length());
+        for (int i = 0; i < parts.length(); i++) {
+            JSONArray part = parts.optJSONArray(i);
+            if (part == null) continue;
+            List<double[]> vertices = new ArrayList<>(part.length());
+            for (int j = 0; j < part.length(); j++) {
+                JSONArray pt = part.optJSONArray(j);
+                if (pt == null || pt.length() < 2) continue;
+                vertices.add(new double[]{pt.optDouble(0, Double.NaN), pt.optDouble(1, Double.NaN)});
+            }
+            if (!vertices.isEmpty()) result.add(vertices);
+        }
+        return result;
     }
 
     /** Returns the [x, y] of the first vertex of a polyline or polygon geometry, or null. */
@@ -277,9 +376,22 @@ public class ArcGISRestClient {
         public final double lat, lon, hae;
         /** All ArcGIS attributes as strings — used by display config sym/lbl/popup resolution. */
         public final Map<String, String> attributes;
+        /** Full polyline geometry: one inner list per part, each a [lon,lat] vertex in order.
+         * Empty for point/polygon features. */
+        public final List<List<double[]>> paths;
+        /** Full polygon geometry: one inner list per ring (first ring is the outer boundary,
+         * subsequent rings are holes per Esri's ring-orientation convention), each a [lon,lat]
+         * vertex in order. Empty for point/polyline features. */
+        public final List<List<double[]>> rings;
 
         DownloadedFeature(String uid, String cotType, String callsign, String remarks,
                           double lat, double lon, double hae, Map<String, String> attributes) {
+            this(uid, cotType, callsign, remarks, lat, lon, hae, attributes, null, null);
+        }
+
+        DownloadedFeature(String uid, String cotType, String callsign, String remarks,
+                          double lat, double lon, double hae, Map<String, String> attributes,
+                          List<List<double[]>> paths, List<List<double[]>> rings) {
             this.uid        = uid;
             this.cotType    = cotType;
             this.callsign   = callsign;
@@ -288,6 +400,8 @@ public class ArcGISRestClient {
             this.lon        = lon;
             this.hae        = hae;
             this.attributes = attributes != null ? attributes : Collections.emptyMap();
+            this.paths      = paths != null ? paths : Collections.emptyList();
+            this.rings      = rings != null ? rings : Collections.emptyList();
         }
     }
 

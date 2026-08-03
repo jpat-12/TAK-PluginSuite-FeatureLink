@@ -107,7 +107,11 @@
 
     </LinearLayout>
 
-    <!-- Row 2: refresh interval + action button, same line (private and public layers) -->
+    <!-- Row 2: refresh interval + action button, same line (private and public layers). The
+         interval editor (label/field/"seconds") is its own sub-container, id'd separately from
+         this row, so it alone can be hidden for a not-yet-downloaded browse item ("My ArcGIS
+         Layers"/"Shared with me") without also hiding the download/delete buttons below — those
+         are the primary way to act on a browse-list row and must always stay visible. -->
     <LinearLayout
         android:id="@+id/layer_interval_row"
         android:layout_width="match_parent"
@@ -116,31 +120,41 @@
         android:gravity="center_vertical|end"
         android:layout_marginTop="2dp">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:id="@+id/layer_interval_editor"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:text="Refresh every"
-            android:layout_marginEnd="@dimen/fl_space_sm"
-            style="@style/FL.Text.Hint" />
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
-        <EditText
-            android:id="@+id/layer_interval_seconds_edit"
-            android:layout_width="56dp"
-            android:layout_height="wrap_content"
-            android:minHeight="0dp"
-            android:paddingTop="2dp"
-            android:paddingBottom="2dp"
-            android:gravity="end"
-            android:inputType="number"
-            android:maxLength="5"
-            android:singleLine="true"
-            android:layout_marginEnd="4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Refresh every"
+                android:layout_marginEnd="@dimen/fl_space_sm"
+                style="@style/FL.Text.Hint" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="seconds"
-            style="@style/FL.Text.Hint" />
+            <EditText
+                android:id="@+id/layer_interval_seconds_edit"
+                android:layout_width="56dp"
+                android:layout_height="wrap_content"
+                android:minHeight="0dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp"
+                android:gravity="end"
+                android:inputType="number"
+                android:maxLength="5"
+                android:singleLine="true"
+                android:layout_marginEnd="4dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="seconds"
+                style="@style/FL.Text.Hint" />
+
+        </LinearLayout>
 
         <!-- Action button: ic_download → ic_refresh_circle for private; ic_menu_delete for public -->
         <ImageButton
