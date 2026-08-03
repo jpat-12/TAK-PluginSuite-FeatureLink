@@ -7,7 +7,7 @@
 
 import { newLayer } from './types.ts';
 import type {
-    ArcGISLayer, CotFieldMapping, DownloadedFeature, LayerDownloadResult, PliFeatureInput,
+    ArcGISLayer, LayerAccess, CotFieldMapping, DownloadedFeature, LayerDownloadResult, PliFeatureInput,
 } from './types.ts';
 import { arcgisJson, ArcGISError } from './arcgisHttp.ts';
 import { canonicalizeLayerUrl, layerQueryUrl, redactUrl } from './arcgisUrl.ts';
@@ -167,7 +167,7 @@ export async function searchUserLayers(portalUrl: string, token: string, usernam
     const portal = normalizePortalUrl(portalUrl);
     const q = `type:"Feature Service" AND owner:${quoteSearchTerm(username)}`;
 
-    const items: { title: string; url: string; access: string }[] = [];
+    const items: { title: string; url: string; access: LayerAccess }[] = [];
     let start = 1;
     for (let page = 0; page < SEARCH_MAX_PAGES; page++) {
         const json = await arcgisJson<SearchResponse>(`${portal}/sharing/rest/search`, {

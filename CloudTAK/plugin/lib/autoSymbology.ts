@@ -69,11 +69,15 @@ export interface EsriRendererJson {
 // polygon fills are common ArcGIS styling and worth carrying over.
 function esriColor(arr: number[] | undefined, fallbackHex: string): { color: string; opacity: number } {
     if (!arr || arr.length < 3) return { color: fallbackHex, opacity: 1 };
-    const [r, g, b] = arr;
-    const a = arr.length >= 4 ? arr[3] : 255;
-    const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)));
-    const hex = `#${[r, g, b].map(n => clamp(n).toString(16).padStart(2, '0')).join('')}`;
-    return { color: hex, opacity: clamp(a) / 255 };
+    // Every component is clamped AND defaulted: a renderer with a short/sparse colour array used to
+    // index straight off the end (undefined), which `noUncheckedIndexedAccess` now makes visible.
+    const clamp = (n: unknown): number => {
+        const v = typeof n === 'number' && Number.isFinite(n) ? n : 0;
+        return Math.max(0, Math.min(255, Math.round(v)));
+    };
+    const hex = `#${[arr[0], arr[1], arr[2]].map(n => clamp(n).toString(16).padStart(2, '0')).join('')}`;
+    const a = arr.length >= 4 ? clamp(arr[3]) : 255;
+    return { color: hex, opacity: a / 255 };
 }
 
 function dashFromEsriStyle(style: string | undefined): 'solid' | 'dash' | 'dot' {
