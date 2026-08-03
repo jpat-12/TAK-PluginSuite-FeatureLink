@@ -122,11 +122,29 @@ final class DisplayConfig {
             boolean isPrivate      = o.optBoolean("private", false);
             JSONObject rendererOverride = o.optJSONObject("rendererOverride");
 
+            // C-23 — read back the shape styling block written by toCompactJson().
+            @SuppressWarnings("unchecked")
+            Object[] shape = shapeFromJson(o.optJSONObject("shp"));
+
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
-                    freqInterval, freqUnit, isPrivate, rendererOverride, "", null, null);
+                    freqInterval, freqUnit, isPrivate, rendererOverride,
+                    (String) shape[0], (ShapeStyle) shape[1],
+                    (Map<String, ShapeStyle>) shape[2]);
         } catch (Exception e) {
+            // Appendix A §8: this used to swallow the cause entirely, making a malformed config
+            // the single most undiagnosable field-support failure in the product.
+            android.util.Log.w("DisplayConfig", "fromJson failed: " + e
+                    + " payload[0,200]=" + preview(o), e);
             return null;
         }
+    }
+
+    /** First 200 characters of a payload, for a diagnostic log line that cannot itself throw. */
+    private static String preview(Object o) {
+        if (o == null) return "<null>";
+        String s;
+        try { s = o.toString(); } catch (Exception e) { return "<unprintable>"; }
+        return s.length() > 200 ? s.substring(0, 200) + "…" : s;
     }
 
     /**
@@ -161,6 +179,8 @@ final class DisplayConfig {
             return new DisplayConfig(url, name, opacity, visible, sym, lbl, popup, cotMapping,
                     freqInterval, freqUnit, false, null, "", null, null);
         } catch (Exception e) {
+            android.util.Log.w("DisplayConfig", "fromJsonV3 failed: " + e
+                    + " payload[0,200]=" + preview(o), e);
             return null;
         }
     }
@@ -274,13 +294,24 @@ final class DisplayConfig {
      * config has no shape styling (e.g. a point layer, or one with no esriSLS/esriSFS symbology)
      * — callers should fall back to a sensible default (ATAK's default blue stroke). */
     ShapeStyle resolveShapeStyle(Map<String, String> attrs) {
-        if (singleShapeStyle != null) return singleShapeStyle;
-        if (!shapeStyleByValue.isEmpty()) {
-            String val = attrs.getOrDefault(shapeField, "");
+        // C-24 — precedence inversion. singleShapeStyle is populated from the renderer's
+        // *defaultSymbol*, which a uniqueValue renderer commonly also declares. Consulting it
+        // first therefore made every per-value style dead code for exactly the renderers that
+        // have per-value styles. Per-value lookup first, single style as the fallback.
+        if (!shapeStyleByValue.isEmpty() && shapeField != null && !shapeField.isEmpty()) {
+            String val = attrOrEmpty(attrs, shapeField);
             ShapeStyle s = shapeStyleByValue.get(val);
             if (s != null) return s;
         }
-        return null;
+        return singleShapeStyle;
+    }
+
+    /** {@code Map.getOrDefault} is API 24+; the plugin's minSdk history makes it unsafe to call
+     * directly (C-37). One helper, used everywhere a default-on-miss lookup is needed. */
+    private static String attrOrEmpty(Map<String, String> attrs, String key) {
+        if (attrs == null || key == null) return "";
+        String v = attrs.get(key);
+        return v != null ? v : "";
     }
 
     /**
@@ -298,11 +329,96 @@ final class DisplayConfig {
             JSONObject cm = cotMapping.toJson();
             if (cm.length() > 0) o.put("cm", cm);
         }
+        // C-23 — everything below this line used to be silently dropped on every persist and
+        // stripped from every outgoing .featurelinkshare. Shape styling vanished on the next
+        // plugin reload; isPrivate/freq/rendererOverride vanished too, which additionally broke
+        // the missing-iconset regeneration path (it could no longer use the Web-Map renderer
+        // override and computed the wrong UID).
+        if (url != null && !url.isEmpty()) o.put("url", url);
+        JSONObject layerJ = new JSONObject();
+        if (name != null && !name.isEmpty()) layerJ.put("name", name);
+        layerJ.put("opacity", opacity);
+        layerJ.put("visible", visible);
+        o.put("layer", layerJ);
+        if (freqInterval > 0) {
+            o.put("freq", new JSONObject().put("iv", freqInterval)
+                    .put("u", freqUnit == null ? "s" : freqUnit));
+        }
+        if (isPrivate) o.put("private", true);
+        if (rendererOverride != null) o.put("rendererOverride", rendererOverride);
+
+        JSONObject shp = shapeToJson();
+        if (shp != null) o.put("shp", shp);
         return o;
     }
 
+    /**
+     * Version of the {@code shp} block written by this build. This is a <b>wire format</b>: it is
+     * persisted to SharedPreferences and travels inside every {@code .featurelinkshare} Mission
+     * Package, so a reader must tolerate a version it does not recognise rather than discard the
+     * whole config. Readers accept {@code sv <= SHAPE_SCHEMA_VERSION} and ignore unknown keys.
+     *
+     * <p>v1 — {@code {"sv":1,"f":<field>,"s":<style>,"byv":{<value>:<style>}}} where a style is
+     * {@code {"sc":"#AARRGGBB","sw":<px>,"sd":"solid|dash|dot","fc":"#AARRGGBB","fs":"solid|none"}}.
+     */
+    static final int SHAPE_SCHEMA_VERSION = 1;
+
+    private JSONObject shapeToJson() throws Exception {
+        if (singleShapeStyle == null && shapeStyleByValue.isEmpty()) return null;
+        JSONObject shp = new JSONObject();
+        shp.put("sv", SHAPE_SCHEMA_VERSION);
+        if (shapeField != null && !shapeField.isEmpty()) shp.put("f", shapeField);
+        if (singleShapeStyle != null) shp.put("s", singleShapeStyle.toJson());
+        if (!shapeStyleByValue.isEmpty()) {
+            JSONObject byv = new JSONObject();
+            for (Map.Entry<String, ShapeStyle> e : shapeStyleByValue.entrySet()) {
+                byv.put(e.getKey(), e.getValue().toJson());
+            }
+            shp.put("byv", byv);
+        }
+        return shp;
+    }
+
+    /** Reads a {@code shp} block written by {@link #shapeToJson()}. Returns a 3-element array
+     * {@code [String field, ShapeStyle single, Map<String,ShapeStyle> byValue]}. */
+    private static Object[] shapeFromJson(JSONObject shp) {
+        if (shp == null) return new Object[]{"", null, null};
+        int sv = shp.optInt("sv", 1);
+        if (sv > SHAPE_SCHEMA_VERSION) {
+            // Forward compatibility: a newer producer may add fields, but the v1 keys are
+            // guaranteed stable, so read what we understand rather than dropping all styling.
+            android.util.Log.w("DisplayConfig", "shp schema v" + sv + " is newer than this build's v"
+                    + SHAPE_SCHEMA_VERSION + " — reading the v1 subset");
+        }
+        String field = shp.optString("f", "");
+        ShapeStyle single = ShapeStyle.fromJson(shp.optJSONObject("s"));
+        Map<String, ShapeStyle> byValue = new HashMap<>();
+        JSONObject byv = shp.optJSONObject("byv");
+        if (byv != null) {
+            java.util.Iterator<String> keys = byv.keys();
+            while (keys.hasNext()) {
+                String k = keys.next();
+                ShapeStyle s = ShapeStyle.fromJson(byv.optJSONObject(k));
+                if (s != null) byValue.put(k, s);
+            }
+        }
+        return new Object[]{field, single, byValue};
+    }
+
+    /** 6-digit {@code #RRGGBB}, the existing cross-platform "sym" schema colour form.
+     * {@link Locale#ROOT} is mandatory: under a locale whose default numbering system is not
+     * Latin, {@code %x} emits non-ASCII digits and the receiving device's Color.parseColor
+     * throws, silently degrading every colour to the fallback (Appendix A §9). */
     static String toHexColor(int argb) {
-        return String.format("#%06x", argb & 0xFFFFFF);
+        return String.format(java.util.Locale.ROOT, "#%06x", argb & 0xFFFFFF);
+    }
+
+    /** 8-digit {@code #AARRGGBB}. Used only inside the {@code shp} block, which is new wire
+     * surface — translucent polygon fills are the common ArcGIS case and the 6-digit form masks
+     * their alpha off. The existing "sym" schema keeps the 6-digit form so nothing changes for
+     * the other four platform implementations. */
+    static String toHexColorArgb(int argb) {
+        return String.format(java.util.Locale.ROOT, "#%08x", argb);
     }
 
     /**
@@ -351,7 +467,12 @@ final class DisplayConfig {
     private static void addIconsetGroup(Set<String> groups, String usericonPath) {
         if (usericonPath == null || usericonPath.isEmpty()) return;
         String[] parts = usericonPath.split("/");
-        if (parts.length >= 2) groups.add(parts[1]);
+        // Exactly three segments: <uid>/<group>/<filename>. A two-segment legacy path yielded
+        // parts[1] = the *filename*, so sendLayerShare() then looked for "<filename>.zip" and
+        // silently shipped a share with no iconsets at all (Appendix A §9).
+        if (parts.length == 3 && !parts[1].isEmpty()) groups.add(parts[1]);
+        else android.util.Log.d("DisplayConfig",
+                "Ignoring non 3-segment usericonPath: " + usericonPath);
     }
 
     // -------------------------------------------------------------------------
@@ -369,7 +490,7 @@ final class DisplayConfig {
                 return blendOpacity(sym.color, sym.opacity);
 
             case "uv": {
-                String val = attrs.getOrDefault(sym.fieldName, "");
+                String val = attrOrEmpty(attrs, sym.fieldName);
                 for (UvEntry e : sym.uvEntries) {
                     if (e.value.equals(val)) return blendOpacity(e.color, sym.opacity);
                 }
@@ -378,12 +499,12 @@ final class DisplayConfig {
 
             case "adv": {
                 // value-based first, then rules
-                String val = attrs.getOrDefault(sym.fieldName, "");
+                String val = attrOrEmpty(attrs, sym.fieldName);
                 for (UvEntry e : sym.advValues) {
                     if (e.value.equals(val)) return blendOpacity(e.color, sym.opacity);
                 }
                 for (RbRule r : sym.rbRules) {
-                    String fval = attrs.getOrDefault(r.field, "");
+                    String fval = attrOrEmpty(attrs, r.field);
                     if (matchesRule(fval, r.op, r.value))
                         return blendOpacity(r.color, sym.opacity);
                 }
@@ -392,7 +513,7 @@ final class DisplayConfig {
 
             case "rb": {
                 for (RbRule r : sym.rbRules) {
-                    String fval = attrs.getOrDefault(r.field, "");
+                    String fval = attrOrEmpty(attrs, r.field);
                     if (matchesRule(fval, r.op, r.value))
                         return blendOpacity(r.color, sym.opacity);
                 }
@@ -400,11 +521,17 @@ final class DisplayConfig {
             }
 
             case "cb": {
-                String raw = attrs.getOrDefault(sym.fieldName, "");
+                String raw = attrOrEmpty(attrs, sym.fieldName);
                 try {
-                    double dval = Double.parseDouble(raw);
+                    double dval = Double.parseDouble(raw.trim());
+                    // Esri class breaks are half-open [min,max) except the final break, which is
+                    // inclusive at the top — without that the single highest-valued feature in a
+                    // layer matched nothing and fell to the default colour (Appendix A §9).
+                    double highest = Double.NEGATIVE_INFINITY;
+                    for (CbBreak b : sym.cbBreaks) if (b.max > highest) highest = b.max;
                     for (CbBreak b : sym.cbBreaks) {
-                        if (dval >= b.min && dval < b.max)
+                        boolean topInclusive = b.max == highest;
+                        if (dval >= b.min && (dval < b.max || (topInclusive && dval == b.max)))
                             return blendOpacity(b.color, sym.opacity);
                     }
                 } catch (NumberFormatException ignored) {}
@@ -433,14 +560,14 @@ final class DisplayConfig {
             return resolvedOrLegacy(sym.usericonPath, sym.iconset, sym.iconFile);
         }
         if ("adv".equals(sym.type)) {
-            String val = attrs.getOrDefault(sym.fieldName, "");
+            String val = attrOrEmpty(attrs, sym.fieldName);
             for (UvEntry e : sym.advValues) {
                 if (e.value.equals(val) && e.isIcon) {
                     return resolvedOrLegacy(e.usericonPath, e.iconset, e.iconFile);
                 }
             }
             for (RbRule r : sym.rbRules) {
-                String fval = attrs.getOrDefault(r.field, "");
+                String fval = attrOrEmpty(attrs, r.field);
                 if (matchesRule(fval, r.op, r.value) && r.isIcon) {
                     return resolvedOrLegacy(r.usericonPath, r.iconset, r.iconFile);
                 }
@@ -462,9 +589,20 @@ final class DisplayConfig {
         return buildIconsetPath(iconset, iconFile);
     }
 
+    /**
+     * Returns null, always. ATAK's {@code IconsetPath} is a three-segment
+     * {@code <uid>/<group>/<filename>}; the legacy two-segment concat this used to build was a
+     * guaranteed-invalid path, and {@code buildMarker} then set it anyway <em>and</em> forced the
+     * marker colour to white, producing an invisible marker. Returning null yields the correct
+     * default CoT-type icon instead (Appendix A §9). Kept as a named method so the reason is
+     * discoverable from the call site rather than looking like an oversight.
+     */
     private static String buildIconsetPath(String iconset, String iconFile) {
-        if (iconset == null || iconset.isEmpty() || iconFile == null || iconFile.isEmpty()) return null;
-        return iconset + "/" + iconFile;
+        if (iconset != null && !iconset.isEmpty() && iconFile != null && !iconFile.isEmpty()) {
+            android.util.Log.d("DisplayConfig", "Ignoring legacy 2-segment iconset reference '"
+                    + iconset + "/" + iconFile + "' — ATAK requires <uid>/<group>/<filename>");
+        }
+        return null;
     }
 
     /**
@@ -498,10 +636,19 @@ final class DisplayConfig {
     // Rule evaluation
     // -------------------------------------------------------------------------
 
-    private static boolean matchesRule(String fieldVal, String op, String ruleVal) {
+    static boolean matchesRule(String fieldVal, String op, String ruleVal) {
+        if (op == null) return false;
+        if (fieldVal == null) fieldVal = "";
+        if (ruleVal == null) ruleVal = "";
         switch (op) {
-            case "=":            return fieldVal.equals(ruleVal);
-            case "≠":            return !fieldVal.equals(ruleVal);
+            // "=" and "≠" compare numerically when both sides parse as numbers, so a rule
+            // "= 5" matches a double-typed ArcGIS column stringified as "5.0" (Appendix A §9).
+            case "=":            return valuesEqual(fieldVal, ruleVal);
+            // U+2260 is what TAK Portal emits; "!=" and "<>" are what every other producer
+            // emits and used to fall through to the numeric branch and always return false.
+            case "≠":
+            case "!=":
+            case "<>":           return !valuesEqual(fieldVal, ruleVal);
             case "contains":     return fieldVal.contains(ruleVal);
             case "starts with":  return fieldVal.startsWith(ruleVal);
             case "is empty":     return fieldVal.isEmpty();
@@ -518,6 +665,17 @@ final class DisplayConfig {
                     }
                 } catch (NumberFormatException ignored) {}
                 return false;
+        }
+    }
+
+    /** Equality that treats {@code "5"} and {@code "5.0"} as the same value — ArcGIS stringifies
+     * a Double column as "5.0", so a string-equality rule against "5" silently never matched. */
+    static boolean valuesEqual(String a, String b) {
+        if (a.equals(b)) return true;
+        try {
+            return Double.compare(Double.parseDouble(a.trim()), Double.parseDouble(b.trim())) == 0;
+        } catch (NumberFormatException e) {
+            return false;
         }
     }
 
@@ -540,9 +698,48 @@ final class DisplayConfig {
         return (o.has(key) && !o.isNull(key)) ? o.optString(key) : null;
     }
 
+    /**
+     * Parses {@code #RGB}, {@code #RRGGBB} and {@code #AARRGGBB} (with or without the leading
+     * {@code #}) to ARGB. Deliberately pure Java rather than {@code Color.parseColor}: it must
+     * behave identically under every locale, it must accept the 8-digit form the {@code shp}
+     * block writes, and it must be exercisable from a JVM unit test with no Android runtime.
+     */
     static int parseHexColor(String hex, int fallback) {
-        if (hex == null || hex.isEmpty()) return fallback;
-        try { return Color.parseColor(hex); } catch (Exception e) { return fallback; }
+        if (hex == null) return fallback;
+        String s = hex.trim();
+        if (s.startsWith("#")) s = s.substring(1);
+        if (s.isEmpty()) return fallback;
+        for (int i = 0; i < s.length(); i++) {
+            if (Character.digit(s.charAt(i), 16) < 0) return fallback;
+        }
+        try {
+            switch (s.length()) {
+                case 3: {   // #RGB -> #FFRRGGBB
+                    int r = Character.digit(s.charAt(0), 16);
+                    int g = Character.digit(s.charAt(1), 16);
+                    int b = Character.digit(s.charAt(2), 16);
+                    return argb(255, r * 17, g * 17, b * 17);
+                }
+                case 6:
+                    return 0xFF000000 | (int) Long.parseLong(s, 16);
+                case 8:
+                    return (int) Long.parseLong(s, 16);
+                default:
+                    return fallback;
+            }
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    /** ARGB pack with per-channel clamping — ArcGIS colour arrays are not guaranteed in range,
+     * and {@code Color.argb} passes an out-of-range channel straight through (Appendix A §3). */
+    static int argb(int a, int r, int g, int b) {
+        return (clamp8(a) << 24) | (clamp8(r) << 16) | (clamp8(g) << 8) | clamp8(b);
+    }
+
+    static int clamp8(int v) {
+        return v < 0 ? 0 : (v > 255 ? 255 : v);
     }
 
     // =========================================================================
@@ -697,8 +894,13 @@ final class DisplayConfig {
                 if (r.has("c")) {
                     ruleColor = parseHexColor(r.optString("c", "#3388ff"), Color.BLUE);
                 } else {
-                    // adv rule embeds color in the symbol object (same object, keyed "c")
-                    ruleColor = Color.BLUE;
+                    // The comment this replaces claimed the colour was "embedded in the symbol
+                    // object (same object, keyed c)" — which is the branch that was just tested
+                    // and failed, so the else-branch was unconditionally Color.BLUE and every
+                    // such rule silently rendered blue (Appendix A §12.13). Read the nested
+                    // Esri symbol's own colour array instead.
+                    JSONObject nested = r.optJSONObject("symbol");
+                    ruleColor = nested != null ? SymConfig.esriSymbolColor(nested) : Color.BLUE;
                 }
                 boolean isIcon = "icon".equals(r.optString("m", "shape"));
                 list.add(new RbRule(
@@ -837,10 +1039,13 @@ final class DisplayConfig {
         }
 
         /** Extracts an opaque RGB color from an esriSMS/esriPMS symbol's "color":[r,g,b,a] array. */
-        private static int esriSymbolColor(JSONObject symbol) {
-            if (symbol == null) return Color.parseColor("#3388ff");
+        /** ATAK's own default feature blue, as ARGB. Named so the literal appears once. */
+        static final int DEFAULT_BLUE = 0xFF3388FF;
+
+        static int esriSymbolColor(JSONObject symbol) {
+            if (symbol == null) return DEFAULT_BLUE;
             JSONArray c = symbol.optJSONArray("color");
-            return esriColorArray(c, Color.parseColor("#3388ff"));
+            return esriColorArray(c, DEFAULT_BLUE);
         }
 
         private static int esriOutlineColor(JSONObject symbol) {
@@ -853,7 +1058,7 @@ final class DisplayConfig {
         private static int esriColorArray(JSONArray arr, int fallback) {
             if (arr == null || arr.length() < 3) return fallback;
             try {
-                return Color.rgb(arr.getInt(0), arr.getInt(1), arr.getInt(2));
+                return argb(255, arr.getInt(0), arr.getInt(1), arr.getInt(2));
             } catch (Exception e) {
                 return fallback;
             }
@@ -969,6 +1174,57 @@ final class DisplayConfig {
             this.strokeDash    = strokeDash;
             this.fillColor     = fillColor;
             this.fillStyle     = fillStyle;
+        }
+
+        /** C-23 wire form — see {@link DisplayConfig#SHAPE_SCHEMA_VERSION}. */
+        JSONObject toJson() throws Exception {
+            return new JSONObject()
+                    .put("sc", toHexColorArgb(strokeColor))
+                    .put("sw", strokeWidthPx)
+                    .put("sd", strokeDash == null ? "solid" : strokeDash)
+                    .put("fc", toHexColorArgb(fillColor))
+                    .put("fs", fillStyle == null ? "none" : fillStyle);
+        }
+
+        static ShapeStyle fromJson(JSONObject j) {
+            if (j == null) return null;
+            return new ShapeStyle(
+                    parseHexColor(j.optString("sc", "#ff3388ff"), Color.BLUE),
+                    (float) j.optDouble("sw", 2.0),
+                    j.optString("sd", "solid"),
+                    parseHexColor(j.optString("fc", "#00000000"), Color.TRANSPARENT),
+                    j.optString("fs", "none"));
+        }
+
+        /** Value equality — the round-trip regression test for C-23 needs it, and nothing else
+         * relies on identity for this type. */
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof ShapeStyle)) return false;
+            ShapeStyle s = (ShapeStyle) o;
+            return strokeColor == s.strokeColor
+                    && Float.compare(strokeWidthPx, s.strokeWidthPx) == 0
+                    && fillColor == s.fillColor
+                    && String.valueOf(strokeDash).equals(String.valueOf(s.strokeDash))
+                    && String.valueOf(fillStyle).equals(String.valueOf(s.fillStyle));
+        }
+
+        @Override
+        public int hashCode() {
+            int h = strokeColor;
+            h = 31 * h + Float.floatToIntBits(strokeWidthPx);
+            h = 31 * h + fillColor;
+            h = 31 * h + String.valueOf(strokeDash).hashCode();
+            h = 31 * h + String.valueOf(fillStyle).hashCode();
+            return h;
+        }
+
+        @Override
+        public String toString() {
+            return "ShapeStyle{sc=" + Integer.toHexString(strokeColor) + ",sw=" + strokeWidthPx
+                    + ",sd=" + strokeDash + ",fc=" + Integer.toHexString(fillColor)
+                    + ",fs=" + fillStyle + "}";
         }
     }
 

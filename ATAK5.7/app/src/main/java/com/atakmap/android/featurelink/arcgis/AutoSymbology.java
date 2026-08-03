@@ -5,6 +5,7 @@ import android.graphics.Color;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -16,6 +17,8 @@ import java.util.Map;
  * network I/O, no install side effects, pure JSON parsing.
  */
 public final class AutoSymbology {
+
+    private static final String TAG = "AutoSymbology";
 
     public static final class StrokeStyle {
         public final int color;
@@ -73,9 +76,15 @@ public final class AutoSymbology {
             this.singleStroke = singleStroke;
             this.singleFill = singleFill;
             this.singleMarker = singleMarker;
-            this.strokeByValue = strokeByValue;
-            this.fillByValue = fillByValue;
-            this.markerByValue = markerByValue;
+            // extract() runs on a background thread and forAutoIcons() reads these maps on the
+            // main thread. Unmodifiable copies make that safe by construction rather than by
+            // accident of a post() happens-before edge (Appendix A §3).
+            this.strokeByValue = Collections.unmodifiableMap(
+                    new LinkedHashMap<>(strokeByValue == null ? Collections.emptyMap() : strokeByValue));
+            this.fillByValue = Collections.unmodifiableMap(
+                    new LinkedHashMap<>(fillByValue == null ? Collections.emptyMap() : fillByValue));
+            this.markerByValue = Collections.unmodifiableMap(
+                    new LinkedHashMap<>(markerByValue == null ? Collections.emptyMap() : markerByValue));
         }
 
         public boolean isEmpty() {
@@ -116,9 +125,12 @@ public final class AutoSymbology {
                     for (int i = 0; i < infos.length(); i++) {
                         JSONObject info = infos.optJSONObject(i);
                         if (info == null) continue;
+                        // An empty string is a legitimate uniqueValue key in ArcGIS
+                        // ("unclassified"); only an *absent* value entry is skipped.
+                        if (!info.has("value") || info.isNull("value")) continue;
                         String value = info.optString("value", "");
                         JSONObject symbol = info.optJSONObject("symbol");
-                        if (value.isEmpty() || symbol == null) continue;
+                        if (symbol == null) continue;
                         StrokeStyle s = strokeFrom(symbol);
                         FillStyle f = fillFrom(symbol);
                         MarkerStyle m = markerFrom(symbol);
@@ -140,11 +152,12 @@ public final class AutoSymbology {
                 // usable as a single style for the whole layer.
                 JSONObject fallback = renderer.optJSONObject("defaultSymbol");
                 if (fallback == null) {
-                    JSONArray infos = renderer.optJSONArray("classBreakInfos");
-                    if (infos != null && infos.length() > 0) {
-                        JSONObject first = infos.optJSONObject(0);
-                        if (first != null) fallback = first.optJSONObject("symbol");
-                    }
+                    // Deliberately NOT classBreakInfos[0]: break 0 is the lowest-value class, so
+                    // using it styles the whole layer as if every feature were in the bottom
+                    // bucket — a map that looks authoritative and is not (Appendix A §3).
+                    // Refuse to style rather than mislead.
+                    android.util.Log.d(TAG, "classBreaks renderer has no defaultSymbol — "
+                            + "declining to style (numeric range matching is not implemented)");
                 }
                 if (fallback != null) {
                     singleStroke = strokeFrom(fallback);
@@ -170,43 +183,121 @@ public final class AutoSymbology {
     // Symbol JSON -> style struct
     // -------------------------------------------------------------------------
 
-    private static StrokeStyle strokeFrom(JSONObject symbol) {
-        if (symbol == null || !"esriSLS".equals(symbol.optString("type", ""))) return null;
+    static StrokeStyle strokeFrom(JSONObject symbol) {
+        if (symbol == null) return null;
+        String type = symbol.optString("type", "");
+        if (!"esriSLS".equals(type)) {
+            logUnhandled(type);
+            return null;
+        }
+        // esriSLSNull is a deliberately *invisible* line. It previously fell through to
+        // "solid" and a hidden boundary was drawn (Appendix A §3).
+        if ("esriSLSNull".equals(symbol.optString("style", ""))) return null;
         int color = esriColor(symbol.optJSONArray("color"), Color.BLUE);
-        float width = (float) symbol.optDouble("width", 1.0);
+        // Esri stroke widths are in POINTS, not pixels. 1pt = 1/72in and Android's density
+        // baseline is 160dpi, so 1pt ≈ 160/72 ≈ 2.222 px at density 1.0. Callers apply this as
+        // a dp-equivalent width, which is the closest thing ATAK's Polyline API accepts.
+        float widthDp = ptToDp((float) symbol.optDouble("width", 1.0));
         String dash = dashFromEsriStyle(symbol.optString("style", ""));
-        return new StrokeStyle(color, width, dash);
+        return new StrokeStyle(color, widthDp, dash);
     }
 
-    private static FillStyle fillFrom(JSONObject symbol) {
-        if (symbol == null || !"esriSFS".equals(symbol.optString("type", ""))) return null;
+    static FillStyle fillFrom(JSONObject symbol) {
+        if (symbol == null) return null;
+        String type = symbol.optString("type", "");
+        if (!"esriSFS".equals(type)) {
+            logUnhandled(type);
+            return null;
+        }
+        String esriStyle = symbol.optString("style", "");
         int color = esriColor(symbol.optJSONArray("color"), Color.YELLOW);
-        String style = "esriSFSNull".equals(symbol.optString("style", "")) ? "none" : "solid";
+        String style;
+        if ("esriSFSNull".equals(esriStyle)) {
+            style = "none";
+        } else if (isHatch(esriStyle)) {
+            // ATAK has no hatch fill. Rendering a hatched hazard/exclusion polygon as an opaque
+            // block obscures the map underneath — on a tactical display that is a safety-relevant
+            // misrepresentation, so downgrade to a low-alpha wash and say so (Appendix A §3).
+            style = "solid";
+            color = (color & 0x00FFFFFF) | (0x40 << 24);
+            android.util.Log.d(TAG, "Hatch fill " + esriStyle
+                    + " downgraded to a 25% translucent solid fill");
+        } else {
+            style = "solid";
+        }
         StrokeStyle outline = strokeFrom(symbol.optJSONObject("outline"));
         return new FillStyle(color, style, outline);
     }
 
-    private static MarkerStyle markerFrom(JSONObject symbol) {
-        if (symbol == null || !"esriSMS".equals(symbol.optString("type", ""))) return null;
+    static MarkerStyle markerFrom(JSONObject symbol) {
+        if (symbol == null) return null;
+        String type = symbol.optString("type", "");
+        if (!"esriSMS".equals(type)) {
+            logUnhandled(type);
+            return null;
+        }
         int color = esriColor(symbol.optJSONArray("color"), Color.RED);
         String shape = markerShapeFromEsri(symbol.optString("style", ""));
-        float size = (float) symbol.optDouble("size", 8.0);
-        return new MarkerStyle(color, shape, size);
+        // esriSMS.size is in points, same as esriSLS.width.
+        float sizeDp = ptToDp((float) symbol.optDouble("size", 8.0));
+        return new MarkerStyle(color, shape, sizeDp);
+    }
+
+    /** Points → density-independent pixels. 1pt = 1/72in; Android's dp baseline is 160dpi. */
+    static float ptToDp(float pt) {
+        return pt * (160f / 72f);
+    }
+
+    private static boolean isHatch(String esriStyle) {
+        if (esriStyle == null) return false;
+        switch (esriStyle) {
+            case "esriSFSBackwardDiagonal":
+            case "esriSFSCross":
+            case "esriSFSDiagonalCross":
+            case "esriSFSForwardDiagonal":
+            case "esriSFSHorizontal":
+            case "esriSFSVertical":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** Symbol types this extractor does not model (esriTS text, esriPFS picture fill, …). Logged
+     * once per type per process so a silently-unstyled layer is at least diagnosable. */
+    private static final java.util.Set<String> LOGGED_UNHANDLED =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
+
+    private static void logUnhandled(String type) {
+        if (type == null || type.isEmpty()) return;
+        if ("esriSLS".equals(type) || "esriSFS".equals(type) || "esriSMS".equals(type)
+                || "esriPMS".equals(type)) {
+            return;   // esriPMS is AutoIconset's job, not ours
+        }
+        if (LOGGED_UNHANDLED.add(type)) {
+            android.util.Log.d(TAG, "Unhandled Esri symbol type '" + type
+                    + "' — no stroke/fill/marker style extracted");
+        }
     }
 
     /** ArcGIS symbol colors are [r,g,b,a] (alpha last, 0-255); unlike DisplayConfig's own
      * esriSymbolColor helper (which drops alpha), this preserves it — translucent polygon
-     * fills are common ArcGIS styling and worth carrying over. */
-    private static int esriColor(JSONArray arr, int fallback) {
+     * fills are common ArcGIS styling and worth carrying over. Channels are clamped: ArcGIS
+     * does not guarantee them in range and an unclamped value corrupts adjacent channels. */
+    static int esriColor(JSONArray arr, int fallback) {
         if (arr == null || arr.length() < 3) return fallback;
         int r = arr.optInt(0, 0);
         int g = arr.optInt(1, 0);
         int b = arr.optInt(2, 0);
         int a = arr.length() >= 4 ? arr.optInt(3, 255) : 255;
-        return Color.argb(a, r, g, b);
+        return (clamp8(a) << 24) | (clamp8(r) << 16) | (clamp8(g) << 8) | clamp8(b);
     }
 
-    private static String dashFromEsriStyle(String esriStyle) {
+    private static int clamp8(int v) {
+        return v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
+
+    static String dashFromEsriStyle(String esriStyle) {
         if (esriStyle == null) return "solid";
         switch (esriStyle) {
             case "esriSLSDash":

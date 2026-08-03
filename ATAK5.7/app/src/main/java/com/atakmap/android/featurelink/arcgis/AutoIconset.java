@@ -16,6 +16,7 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,6 +49,9 @@ public final class AutoIconset {
 
     private static final String TAG = "FeatureLink.AutoIconset";
     public static final int SPEC_VERSION = 1;
+
+    /** Lower-case hex alphabet for {@link #uid} — see the Locale note there (C-39). */
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     /** Outcome of a successful generation. */
     public static final class Result {
@@ -108,8 +112,14 @@ public final class AutoIconset {
             String authority = u.getAuthority();
             String path = u.getRawPath();
             if (scheme == null || authority == null || path == null) return null;
-            scheme = scheme.toLowerCase();
-            authority = authority.toLowerCase();
+            // C-39 — Locale.ROOT is mandatory. Bare toLowerCase() uses the DEFAULT locale, so
+            // on a Turkish-locale device "I" folds to the dotless "ı", producing a different
+            // canonical URL, a different SHA-256 and therefore a different iconset UID than
+            // every other device and every other platform implementation. That silently breaks
+            // the entire federated icon-matching guarantee, and the regeneration path never
+            // converges because it keeps computing the wrong UID.
+            scheme = scheme.toLowerCase(Locale.ROOT);
+            authority = authority.toLowerCase(Locale.ROOT);
             path = path.replaceAll("/{2,}", "/").replaceAll("/+$", "");
 
             java.util.regex.Matcher m = java.util.regex.Pattern
@@ -139,7 +149,12 @@ public final class AutoIconset {
             byte[] d = md.digest((canonicalUrl + "/" + (fieldName == null ? "" : fieldName))
                     .getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder(d.length * 2);
-            for (byte b : d) sb.append(String.format("%02x", b));
+            // Locale.ROOT for the same reason: under a locale whose default numbering system is
+            // not Latin (ar-EG-u-nu-arab, hi-IN-u-nu-deva) "%x" can emit non-ASCII digits and the
+            // UID diverges. Hand-rolled hex avoids the formatter entirely.
+            for (byte b : d) {
+                sb.append(HEX[(b >> 4) & 0xF]).append(HEX[b & 0xF]);
+            }
             return sb.toString();
         } catch (Exception e) {
             throw new RuntimeException("SHA-256 unavailable", e);
@@ -308,15 +323,17 @@ public final class AutoIconset {
         if (canonicalUrl == null) return null;
 
         JSONObject renderer = rendererOverride;
+        // Held so the group-name lookup below reuses this response instead of issuing a second
+        // identical metadata GET for every generation (Appendix A §12.14).
+        JSONObject meta = null;
         if (renderer == null) {
-            JSONObject meta;
             try {
                 meta = client.fetchJson(canonicalUrl, token);
             } catch (Exception e) {
                 Log.e(TAG, "renderer fetch failed for " + canonicalUrl, e);
                 return null;
             }
-            if (meta == null || meta.has("error")) {
+            if (meta == null) {
                 Log.w(TAG, "no layer metadata for " + canonicalUrl);
                 return null;
             }
@@ -337,11 +354,13 @@ public final class AutoIconset {
         if (groupOverride != null && !groupOverride.isEmpty()) {
             group = groupOverride;
         } else {
-            JSONObject meta2;
-            try {
-                meta2 = client.fetchJson(canonicalUrl, token);
-            } catch (Exception e) {
-                meta2 = null;
+            JSONObject meta2 = meta;
+            if (meta2 == null) {
+                try {
+                    meta2 = client.fetchJson(canonicalUrl, token);
+                } catch (Exception e) {
+                    meta2 = null;
+                }
             }
             String layerName = meta2 != null ? meta2.optString("name", meta2.optString("serviceDescription", "Layer")) : "Layer";
             group = sanitizeGroupBase(layerName) + " Icons";
@@ -387,10 +406,32 @@ public final class AutoIconset {
      */
     private static File buildAndInstall(Context ctx, String uid, String group, Map<String, byte[]> files) {
         File dir = new File(Environment.getExternalStorageDirectory(), "atak/iconsets");
-        //noinspection ResultOfMethodCallIgnored
-        dir.mkdirs();
-        // group is already [A-Za-z0-9 _-]-safe (spec §5.1) so it's a valid file name.
+        if (!dir.isDirectory() && !dir.mkdirs()) {
+            // Previously the ignored mkdirs() result meant a missing storage permission or a full
+            // disk produced a caught-and-logged FileNotFoundException and the operator saw
+            // nothing at all — the whole auto-iconset feature failed silently (Appendix A §7).
+            Log.e(TAG, "cannot create iconset directory " + dir.getAbsolutePath()
+                    + " — auto-iconset generation cannot proceed");
+            return null;
+        }
+        // group is already [A-Za-z0-9 _-]-safe (spec §5.1) so it's a valid file name. The
+        // canonical-path assertion is belt and braces: it does not rely on that one regex being
+        // correct forever, and it is the check a reviewer will look for (Appendix A §4).
+        // NOTE: the filename stays "{group}.zip" — FeatureLinkDropDownReceiver.sendLayerShare()
+        // locates this device's installed zip by exactly that name when bundling a share, so
+        // adding a uid discriminator here (which would fix the two-layers-same-display-name
+        // collision, Appendix A §4) requires changing the share lookup in the same commit.
+        // Tracked as an open item rather than half-applied.
         File zip = new File(dir, group + ".zip");
+        try {
+            if (!zip.getCanonicalPath().startsWith(dir.getCanonicalPath() + File.separator)) {
+                Log.e(TAG, "refusing to write iconset zip outside " + dir.getCanonicalPath());
+                return null;
+            }
+        } catch (java.io.IOException ioe) {
+            Log.e(TAG, "cannot canonicalise iconset zip path", ioe);
+            return null;
+        }
 
         try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zip))) {
             // iconset.xml (root) — non-empty name+uid so ATAK trusts the uid verbatim (spec §0.1/§7)

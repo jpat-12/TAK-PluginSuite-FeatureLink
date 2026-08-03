@@ -3,8 +3,28 @@
     tools:ignore="GoogleAppIndexingWarning">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!--
+      C-02 — signature-level permission guarding every internal broadcast this plugin sends
+      (IMPORT_CONFIG from ImportConfigActivity, OAUTH_CALLBACK from OAuthCallbackActivity).
+
+      The receiver is registered with Context.RECEIVER_EXPORTED because the sender runs in the
+      plugin's own app process, which is a different process from ATAK's. Exported with no
+      permission meant ANY app on the device could broadcast
+      com.atakmap.android.featurelink.IMPORT_CONFIG with an arbitrary "config" extra, which
+      landed in applyScannedPayload() and added attacker-chosen feature layers to the operator's
+      map, fetched attacker-chosen URLs and rendered attacker-controlled markers with no
+      confirmation anywhere — a remote map-injection primitive reachable from any unprivileged
+      app. protectionLevel="signature" means only an app signed with this plugin's own key can
+      hold it, which is this plugin and nothing else.
+    -->
+    <permission
+        android:name="com.atakmap.android.featurelink.permission.INTERNAL_BROADCAST"
+        android:label="@string/perm_internal_broadcast_label"
+        android:description="@string/perm_internal_broadcast_desc"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.atakmap.android.featurelink.permission.INTERNAL_BROADCAST" />
 
     <uses-feature android:name="android.hardware.camera2" android:required="false" />
 
@@ -20,6 +40,9 @@
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:description="@string/app_desc"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false"
+        android:supportsRtl="false"
         android:theme="@style/AppTheme">
 
         <meta-data android:name="plugin-api" android:value="${atakApiVersion}"/>
