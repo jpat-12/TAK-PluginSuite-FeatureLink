@@ -1,0 +1,48 @@
+# Infra-TAK FeatureLink Display Configurator — component-level ignores.
+#
+# This file did not previously exist (audit Appendix E §2.1); the Python artefacts of a
+# Flask module were caught only by the root file's blanket rules, which is fragile — a
+# contributor tightening a root rule would silently un-ignore build output here.
+#
+# Everything the root .gitignore already covers (OS junk, editor state, logs, .env) is NOT
+# repeated here. Only genuine component deltas belong in this file.
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# ── Lint / test / type-check caches ──────────────────────────────────────────
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ── Flask / runtime instance state ───────────────────────────────────────────
+instance/
+*.sqlite
+*.sqlite3
+*.db
+
+# ── Install-script backups ───────────────────────────────────────────────────
+# install.sh rewrites the console's app.py in place; the remediated version writes a
+# timestamped backup beside each file it patches. Those backups are host state, not source.
+*.featurelink-backup
+*.featurelink-backup.*
+
+# ── NOT ignored, deliberately ────────────────────────────────────────────────
+# featurelink_displayconfig_assets/icons/ is 7,461 tracked files that this component ships.
+# See docs/remediation/wp5-crosscutting.md for the deduplication proposal — it is a real
+# ~7 MB duplication of TAKPortal/assets/featurelink-configurator/icons/, but it must stay
+# tracked until a shared corpus exists, or the component stops working.

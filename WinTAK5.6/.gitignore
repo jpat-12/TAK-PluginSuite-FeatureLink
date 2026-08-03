@@ -1,24 +1,20 @@
-# Build output
-bin/
-obj/
+# WinTAK 5.6 plugin — component-level ignores.
+#
+# This file and WinTAK5.7/.gitignore were byte-identical (273 b each) and duplicated the
+# root .gitignore's .NET section (audit Appendix E §2.4). Collapsed to genuine deltas:
+# bin/, obj/, packages/, .vs/, *.user, IDE and OS junk are all covered once at the
+# repository root and must not be restated here.
 
-# WinTAK SDK DLLs — populate from your local WinTAK install
-# See README for which files go here
+# ── Genuine component delta: the vendored WinTAK SDK assemblies ──────────────
+# `libs/` holds WinTAK SDK DLLs (TAK.Engine.dll and friends) copied from a local WinTAK
+# install. They are correctly UNTRACKED — `git ls-files "*.dll"` returns 0 — but note that
+# their redistribution terms are undocumented, and whether the built .wpk may legally embed
+# them is an open licensing question. See THIRD-PARTY-NOTICES.md ("Unresolved") and
+# QUESTIONS-FOR-OWNER.md. Populate from your local WinTAK install; see README.md.
 libs/
 
-# NuGet restore output
-packages/
-
-# Visual Studio
-.vs/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-
-# Rider
-.idea/
-
-# OS
-Thumbs.db
-.DS_Store
+# ── .wpk build output ────────────────────────────────────────────────────────
+# build-wpk.py writes the plugin package here. The packaged artefact is a release output,
+# not source; CI produces it and attaches a SHA-256 checksum (C-18, C-35).
+*.wpk
+dist/

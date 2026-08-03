@@ -1,33 +1,57 @@
-# TAK-PluginSuite-FeatureLink — root .gitignore covering all components
-# (ATAK5.6, ATAK5.7 — Android/Gradle; WinTAK5.6, WinTAK5.7 — Visual Studio/.NET/C++;
-# Infra-TAK — Python/Flask console module)
+# TAK-PluginSuite-FeatureLink — root .gitignore covering all seven components
+# (ATAK5.6, ATAK5.7 — Android/Gradle; WinTAK5.6, WinTAK5.7 — Visual Studio/.NET/WPF;
+#  CloudTAK, TAKPortal — Node/TypeScript; Infra-TAK — Python/Flask)
+#
+# Rules here are ANCHORED wherever an unanchored pattern would over-match. The repository
+# tracks 14,900 icon PNGs under paths that include directory names like `release`, so a bare
+# `[Rr]elease/` is a live footgun rather than a theoretical one (audit Appendix E §2.4).
 
 # ── Gradle / Android (ATAK5.6, ATAK5.7) ─────────────────────────────────────
 .gradle/
 **/build/
-**/app/build/
+# (`**/build/` above already subsumes the former `**/app/build/` line — removed as redundant.)
 gradle.properties
 local.properties
 *.apk
 *.aab
 *.dex
 *.class
-*.zip
 out/
 gen/
 captures/
 proguard/
 
+# Build-tool-generated cache file. `api.hash` is a real input and IS tracked, but the
+# leading timestamp comment is rewritten on every build, so these two files show as
+# modified with a comment-only diff and pad every review (audit Appendix E §4.2).
+# NOTE: both files are already tracked, and an ignore rule does not affect a tracked file.
+# Closing this fully needs `git rm --cached ATAK5.{6,7}/.takdev/plugin.properties` plus a
+# committed, non-generated record of the two api.hash values — that touches the ATAK trees
+# and is filed as a cross-package request in docs/remediation/wp5-crosscutting.md.
+**/.takdev/plugin.properties
+
 # ── Signing keys ─────────────────────────────────────────────────────────────
 *.jks
 *.keystore
 
-# ── Visual Studio / .NET / C++ (WinTAK5.6, WinTAK5.7) ───────────────────────
+# ── Visual Studio / .NET / WPF (WinTAK5.6, WinTAK5.7) ───────────────────────
 .vs/
-bin/
-obj/
-[Dd]ebug/
-[Rr]elease/
+# Anchored: a bare `bin/`/`obj/` matches a Python `bin/` or any icon subdirectory at any
+# depth. These are the only .NET build roots in the repository.
+WinTAK5.6/bin/
+WinTAK5.6/obj/
+WinTAK5.7/bin/
+WinTAK5.7/obj/
+# Anchored for the same reason — `[Dd]ebug/`/`[Rr]elease/` unanchored matched any directory
+# named debug/release at any depth, including under an icon corpus.
+WinTAK5.6/bin/[Dd]ebug/
+WinTAK5.6/bin/[Rr]elease/
+WinTAK5.7/bin/[Dd]ebug/
+WinTAK5.7/bin/[Rr]elease/
+WinTAK5.6/[Dd]ebug/
+WinTAK5.6/[Rr]elease/
+WinTAK5.7/[Dd]ebug/
+WinTAK5.7/[Rr]elease/
 x64/
 x86/
 *.user
@@ -43,6 +67,19 @@ packages/
 CMakeFiles/
 CMakeCache.txt
 
+# ── Node / TypeScript (CloudTAK, TAKPortal) ─────────────────────────────────
+# The root file previously had NO node_modules rule at all — only CloudTAK/.gitignore did.
+# An `npm install` inside TAKPortal/ would have staged thousands of files (Appendix E §2.1).
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-error.log*
+.npm/
+*.tsbuildinfo
+
+# Lockfiles are deliberately NOT ignored. `package-lock.json` is what makes `npm ci`
+# reproducible and is the input to the CycloneDX SBOM generated in CI (C-30).
+
 # ── Python (Infra-TAK) ───────────────────────────────────────────────────────
 __pycache__/
 *.pyc
@@ -50,6 +87,11 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # ── IDE ──────────────────────────────────────────────────────────────────────
 .idea/
@@ -65,13 +107,38 @@ venv/
 *.hprof
 
 # ── OS junk ──────────────────────────────────────────────────────────────────
-.DS_Store
+# (`**/.DS_Store` subsumes the former bare `.DS_Store` line — removed as redundant.)
 **/.DS_Store
 Thumbs.db
 desktop.ini
 
 # ── Backup files ─────────────────────────────────────────────────────────────
-README.md.bak
+# Was the exact literal `README.md.bak`, which did not match `README2.md.bak` (13,173 b) —
+# leaving a stale duplicate of the project's front page one `git add -A` from being
+# committed. Both .bak files have since been deleted (Appendix E §2.4, §3.6).
+*.bak
+*.orig
+*.rej
+*~
+
+# ── Release artifacts ────────────────────────────────────────────────────────
+# Was a blanket `*.zip`, which correctly kept the nine release zips out of the index but
+# would also silently swallow any legitimately-needed archive — a generated iconset
+# fixture, a test-data package, a `.wpk`-adjacent bundle — with no negation anywhere.
+# Scoped to the two places build output actually lands (Appendix E §2.4).
+/*.zip
+**/build/**/*.zip
+**/dist/**/*.zip
+*.wpk
+
+# ── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+secrets.json
 
 # ── Keep these SDK support files — required by the ATAK builds ─────────────
 !ATAK5.6/.takdev/
@@ -79,19 +146,35 @@ README.md.bak
 !ATAK5.6/.takdev/aars/*.aar
 !ATAK5.6/buildtools/
 !ATAK5.6/buildtools/atak-gradle-takdev.jar
-!ATAK5.6/app/featurelink.keystore
 !ATAK5.7/.takdev/
 !ATAK5.7/.takdev/aars/
 !ATAK5.7/.takdev/aars/*.aar
 !ATAK5.7/buildtools/
 !ATAK5.7/buildtools/atak-gradle-takdev.jar
+
+# DEPRECATED NEGATIONS — scheduled for removal under C-40.
+# These re-add the committed signing keystores. Appendix F §2.1 adjudicates C-40 as MEDIUM
+# (the blob is the stock ATAK SDK dev key `wintec_mapping` / O=WinTec Arrowmaker, md5
+# de161723bca27d5da9dd16052ee18cae, identical to the SDK's own android_keystore — it is
+# already public worldwide, so there is no confidentiality loss and NO history rewrite is
+# warranted). The negations are retained for now ONLY because removing an ignore rule does
+# not untrack an already-tracked file: the real fix is `git rm --cached` on both blobs plus
+# env-var-sourced signing passwords in ATAK5.{6,7}/app/build.gradle, which lives in another
+# work package's tree. Removing these lines before that lands would change nothing except
+# to make re-adding the file require `-f`. Tracked as a cross-package request.
+!ATAK5.6/app/featurelink.keystore
 !ATAK5.7/app/featurelink.keystore
 
 # gradle.properties is ignored everywhere above (may carry machine-specific paths/secrets
-# elsewhere), except here — this one only sets a JVM heap size for R8, needed on any CI
+# elsewhere), except these two — they only set a JVM heap size for R8, needed on any CI
 # runner (GitHub Actions, TAK Product Center's submission pipeline) since a release build's
 # R8 minification pass has hit OutOfMemoryError on the default heap.
 !ATAK5.6/gradle.properties
+# `!ATAK5.7/gradle.properties` was MISSING. ATAK5.7/gradle.properties was tracked only
+# because it was already added (ignore rules do not affect tracked files) and because
+# ATAK5.7/.gitignore's own `!gradle.properties` happened to win by specificity. If it were
+# ever `git rm --cached`'d it could not be re-added without `-f` (Appendix E §2.4).
+!ATAK5.7/gradle.properties
 
 # Internal pre-award audit deliverable (capability/defect/test checklist).
 # Local working artifact only - not part of the shipped suite, and it enumerates
