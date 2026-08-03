@@ -48,45 +48,63 @@
   const cardsEl = document.getElementById('configCards');
   const emptyEl = document.getElementById('configsEmpty');
 
-  function escapeHtml(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
-
-  // Confirmed via `adb shell am start -a android.intent.action.VIEW -d
-  // "featurelink://import?..."` that Android resolves and launches
-  // ImportConfigActivity cleanly — the plugin side was never the problem.
-  // Tried nesting under tak:// instead (matching the enrollment flow's
-  // pattern) — confirmed via adb that ATAK core claims the entire "tak"
-  // scheme centrally regardless of host and swallows it before our plugin
-  // ever sees it, so that's a dead end. Reverted to featurelink://, but as a
-  // BARE link (no intent:// wrapper) — the real-tap fix so far was only
-  // tested with the intent:// wrapped form, not this exact combination.
+  // Why the link is a bare `featurelink://` URI rather than an `intent://` wrapper — including
+  // the tak:// scheme dead end — is recorded in docs/ rather than shipped to every field user's
+  // browser. (Appendix D §6: nine lines of adb experiment notes were being served on this page.)
   function buildImportUri(config) {
     return 'featurelink://import?config=' + encodeURIComponent(JSON.stringify(config));
   }
 
+  function span(cls, text) {
+    const el = document.createElement('span');
+    if (cls) el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+
+  /**
+   * C-05 sweep: `c.id` was interpolated raw into `data-id="..."` inside an innerHTML string. Ids
+   * are hex-only server-side today, so this was not exploitable — but it is the same
+   * asserted-rather-than-enforced pattern as the confirmed XSS on the admin page, one service
+   * change away from being live. Built with DOM nodes instead.
+   */
   function renderCard(c) {
     const div = document.createElement('div');
     div.className = 'fl-card';
-    const actions = c.hasLiveLayer
-      ? '<a class="btn openAtakBtn" data-id="' + c.id + '" href="#" aria-disabled="true">Loading...</a>' +
-        '<a class="btn" href="/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download">Download</a>'
-      : '<span class="muted">No live FeatureLayer configured yet</span>';
-    div.innerHTML =
-      '<span class="fl-card-name">' + escapeHtml(c.name) + '</span>' +
-      '<span class="muted">' + (c.fieldCount || 0) + ' fields · ' + (c.featureCount || 0).toLocaleString() + ' features</span>' +
-      '<span class="muted">Updated ' + (c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—') + '</span>' +
-      '<div class="fl-card-actions">' + actions + '</div>';
 
-    const openLink = div.querySelector('.openAtakBtn');
-    if (openLink) {
-      openLink.addEventListener('click', (e) => {
-        if (openLink.getAttribute('aria-disabled') === 'true') e.preventDefault();
-      });
-      // Pre-fetch now, so the link is a real, already-live href by the time the
-      // user can tap it — no async work happens inside the click itself.
+    div.appendChild(span('fl-card-name', c.name == null ? '' : String(c.name)));
+    const fields = Number(c.fieldCount) || 0;
+    const features = Number(c.featureCount) || 0;
+    div.appendChild(span('muted', fields + ' fields · ' + features.toLocaleString() + ' features'));
+    div.appendChild(span('muted', 'Updated ' + (c.updatedAt ? new Date(c.updatedAt).toLocaleDateString() : '—')));
+
+    const actions = document.createElement('div');
+    actions.className = 'fl-card-actions';
+    div.appendChild(actions);
+
+    if (!c.hasLiveLayer) {
+      actions.appendChild(span('muted', 'No display styling exported yet'));
+      return div;
+    }
+
+    const openLink = document.createElement('a');
+    openLink.className = 'btn openAtakBtn';
+    openLink.href = '#';
+    openLink.setAttribute('aria-disabled', 'true');
+    openLink.textContent = 'Loading...';
+    openLink.dataset.id = c.id;
+    openLink.addEventListener('click', (e) => {
+      if (openLink.getAttribute('aria-disabled') === 'true') e.preventDefault();
+    });
+    actions.appendChild(openLink);
+
+    const dl = document.createElement('a');
+    dl.className = 'btn';
+    dl.href = '/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download';
+    dl.textContent = 'Download';
+    actions.appendChild(dl);
+
+    div.__prefetch = () =>
       fetch('/api/featurelink/configs/' + encodeURIComponent(c.id) + '/download', { credentials: 'same-origin' })
         .then((r) => r.json())
         .then((config) => {
@@ -95,8 +113,23 @@
           openLink.removeAttribute('aria-disabled');
         })
         .catch(() => { openLink.textContent = 'Failed to load'; });
-    }
     return div;
+  }
+
+  /**
+   * Appendix D §4.9: this page issued ONE fetch per config on load, each returning a full exported
+   * config. With 200 configs that is 200 parallel requests. Bounded to 4 in flight.
+   */
+  function prefetchAll(cards) {
+    const queue = cards.filter((el) => typeof el.__prefetch === 'function');
+    let active = 0;
+    const pump = () => {
+      while (active < 4 && queue.length) {
+        active++;
+        queue.shift().__prefetch().finally(() => { active--; pump(); });
+      }
+    };
+    pump();
   }
 
   fetch('/api/featurelink/configs', { credentials: 'same-origin' })
@@ -108,8 +141,10 @@
         emptyEl.style.display = '';
         return;
       }
-      configs.forEach((c) => cardsEl.appendChild(renderCard(c)));
+      const cards = configs.map(renderCard);
+      cards.forEach((el) => cardsEl.appendChild(el));
       cardsEl.style.display = 'grid';
+      prefetchAll(cards);
     })
     .catch(() => {
       loadingEl.style.display = 'none';

@@ -1148,14 +1148,17 @@
   </div>
 </div>
 
-<!-- SheetJS for Excel support -->
-<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<!-- SheetJS for Excel support. Vendored locally (C-38): these two libraries used to load from
+     public CDNs with no Subresource Integrity inside an authenticated admin page. That is both a
+     supply-chain hole and, for a DDIL/air-gapped TAK deployment, a functional break — Excel
+     import and every QR code stopped working with no fallback. See vendor/VENDOR.md. -->
+<script src="/featurelink-configs/configurator/vendor/xlsx-0.20.3.full.min.js"></script>
 <!-- QR code generation. Pinned to 1.4.4: qrcode@1.5.x removed the standalone
      browser bundle from build/qrcode.min.js (it's now an unbundled CommonJS
      shim requiring a bundler — throws "QRCode is not defined" when loaded
      directly via <script>). 1.4.4's build/ is a real self-contained UMD
      bundle; same toCanvas() API this page uses. -->
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
+<script src="/featurelink-configs/configurator/vendor/qrcode-1.4.4.min.js"></script>
 
 <script>
 // ══════════════════════════════════════════
@@ -1163,6 +1166,32 @@
 // ══════════════════════════════════════════
 // Absolute, not relative — this page can be reached with or without a
 // trailing slash (/featurelink/featurelink-display-config), and a relative
+// ══════════════════════════════════════════
+//  C-05 — output encoding helpers
+// ══════════════════════════════════════════
+// Every value rendered by this page can come from an uploaded file, from a remote ArcGIS service,
+// or from ANOTHER USER's saved dataset loaded through ?load=<id> — which is exactly the link the
+// "Saved Dataset Link" QR mode exists to share. Values were interpolated raw into innerHTML and
+// into title="..." attributes, and column/field names were interpolated into
+// onclick="sortBy('...')" / onclick="selectField('...')", so a column named
+//     a');alert(1);('
+// executed on click, from a crafted CSV/GeoJSON/FeatureServer. Escape on the way out, and use
+// data-* attributes with delegated listeners instead of inline handlers.
+function flEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+/** One delegated click listener per container, attached at most once. */
+function flBind(el, selector, handler) {
+  if (!el || el.__flBound) return;
+  el.__flBound = true;
+  el.addEventListener('click', function (ev) {
+    var t = ev.target && ev.target.closest ? ev.target.closest(selector) : null;
+    if (t && el.contains(t)) handler(t, ev);
+  });
+}
+
 // "icons/..." path resolves differently in each case. Anchoring to an
 // absolute path sidesteps that entirely.
 const ICONS_BASE = '/featurelink-configs/configurator/icons/';
@@ -1769,9 +1798,10 @@ function inferFields(rows) {
 function renderFileChip(name, count) {
   const chip = document.getElementById('file-chip');
   chip.style.display = 'flex';
-  chip.innerHTML = `<span class="fc-name" title="${name}">📄 ${name}</span>
-    <span class="fc-rows">${count.toLocaleString()} rows</span>
-    <button title="Remove file" onclick="clearFile()">✕</button>`;
+  chip.innerHTML = `<span class="fc-name" title="${flEsc(name)}">📄 ${flEsc(name)}</span>
+    <span class="fc-rows">${Number(count || 0).toLocaleString()} rows</span>
+    <button title="Remove file" data-fl-clear="1">✕</button>`;
+  flBind(chip, '[data-fl-clear]', function () { clearFile(); });
   document.getElementById('drop-zone').style.display = 'none';
   document.getElementById('url-zone').style.display = 'none';
   document.getElementById('fields-label').style.display = 'block';
@@ -1806,17 +1836,20 @@ function clearFile() {
 function renderFieldList() {
   const el = document.getElementById('field-list');
   el.innerHTML = state.fields.map(f => `
-    <div class="field-item" id="fi-${f.name}" onclick="selectField('${f.name}')">
-      <div class="fi-type ${f.type}">${f.type.toUpperCase()}</div>
-      <div class="fi-name" title="${f.name}">${f.name}</div>
-      <div class="fi-sample" title="${f.samples.join(', ')}">${f.samples[0] ?? ''}</div>
+    <div class="field-item" data-field="${flEsc(f.name)}">
+      <div class="fi-type ${flEsc(f.type)}">${flEsc(String(f.type || '').toUpperCase())}</div>
+      <div class="fi-name" title="${flEsc(f.name)}">${flEsc(f.name)}</div>
+      <div class="fi-sample" title="${flEsc(f.samples.join(', '))}">${flEsc(f.samples[0] ?? '')}</div>
     </div>`).join('');
+  flBind(el, '.field-item', function (t) { selectField(t.dataset.field); });
 }
 
 function selectField(name) {
   state.selectedField = name;
-  document.querySelectorAll('.field-item').forEach(el => el.classList.remove('selected'));
-  document.getElementById('fi-' + name)?.classList.add('selected');
+  // Was getElementById('fi-' + name): a field named "x" produced id="fi-x", so a field name
+  // containing markup both broke the lookup and was an injection point.
+  document.querySelectorAll('.field-item').forEach(el =>
+    el.classList.toggle('selected', el.dataset.field === name));
 }
 
 // ══════════════════════════════════════════
@@ -1855,21 +1888,23 @@ function paintTable(data) {
   const thead = cols.map(c => {
     const sorted = state.sortCol === c;
     const icon = sorted ? (state.sortAsc ? '▲' : '▼') : '⇅';
-    return `<th class="${sorted?'sorted':''}" onclick="sortBy('${c}')">
-      ${c} <span class="sort-icon">${icon}</span>
+    return `<th class="${sorted?'sorted':''}" data-col="${flEsc(c)}">
+      ${flEsc(c)} <span class="sort-icon">${icon}</span>
     </th>`;
   }).join('');
 
   const tbody = displayed.map(row => `<tr>${cols.map(c => {
     const v = row[c];
     const isNull = v === null || v === undefined || v === '';
-    return `<td class="${isNull?'null-val':''}" title="${isNull?'':v}">${isNull ? 'null' : v}</td>`;
+    return `<td class="${isNull?'null-val':''}" title="${isNull?'':flEsc(v)}">${isNull ? 'null' : flEsc(v)}</td>`;
   }).join('')}</tr>`).join('');
 
   const note = data.length > MAX ? `<div style="padding:8px 12px;font-size:11px;color:var(--text-muted)">Showing first ${MAX} of ${data.length.toLocaleString()} rows</div>` : '';
 
-  document.getElementById('table-wrap').innerHTML =
+  const wrapEl = document.getElementById('table-wrap');
+  wrapEl.innerHTML =
     `<table class="data-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>${note}`;
+  flBind(wrapEl, 'th[data-col]', function (t) { sortBy(t.dataset.col); });
 }
 
 function sortBy(col) {
@@ -2047,7 +2082,7 @@ function renderSymbologyTab() {
     const uvHtml = s.uniqueValues.slice(0, 50).map((uv, i) => `
       <div class="uv-item">
         <input type="color" value="${uv.color}" oninput="setUVColor(${i}, this.value)" />
-        <span class="uv-val" title="${uv.value}">${uv.value || '(blank)'}</span>
+        <span class="uv-val" title="${flEsc(uv.value)}">${flEsc(uv.value) || '(blank)'}</span>
         <span class="uv-count">${uv.count}</span>
       </div>`).join('');
     const truncNote = s.uniqueValues.length > 50 ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px">Showing 50 of ${s.uniqueValues.length} unique values</div>` : '';
@@ -3042,7 +3077,9 @@ function generateLinkQR() {
     errorCorrectionLevel: 'M',
     color: { dark: '#000000', light: '#ffffff' },
   }, err => {
-    if (err) wrap.innerHTML = `<div style="color:#e57373;font-size:12px">${err.message}</div>`;
+    if (err) { wrap.textContent = ''; const d = document.createElement('div');
+      d.style.cssText = 'color:#e57373;font-size:12px'; d.textContent = err.message || 'QR generation failed';
+      wrap.appendChild(d); }
   });
 }
 
@@ -3730,7 +3767,10 @@ function generateQR() {
     color: { dark: '#000000', light: '#ffffff' },
   }, err => {
     if (err) {
-      wrap.innerHTML = `<div class="qr-placeholder" style="color:#e57373">QR generation failed:<br>${err.message}</div>`;
+      wrap.textContent = ''; const qrErr = document.createElement('div');
+      qrErr.className = 'qr-placeholder'; qrErr.style.color = '#e57373';
+      qrErr.textContent = 'QR generation failed: ' + (err.message || '');
+      wrap.appendChild(qrErr);
     }
   });
 }
