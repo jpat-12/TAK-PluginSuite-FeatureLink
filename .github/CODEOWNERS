@@ -1,0 +1,71 @@
+# CODEOWNERS — mandatory reviewers for TAK-PluginSuite-FeatureLink.
+#
+# Closes the "no CODEOWNERS" gap (Appendix E §7). The specific risk it addresses: the
+# cross-cutting contract files — CONFIG-FORMAT.md and AUTO-ICONSET-SPEC.md — are depended on
+# by all seven components, and had no mandatory reviewer at all. A change to either can
+# silently break four implementations the author never opened.
+#
+# CODEOWNERS only has teeth when branch protection requires review from code owners.
+# See CONTRIBUTING.md § "Branch protection" for the settings that must be enabled.
+#
+# !! PLACEHOLDER OWNERS !!
+# @featurelink-maintainers and the team handles below DO NOT EXIST yet. GitHub silently
+# ignores an unresolvable owner, so this file is inert until real accounts or teams are
+# substituted. Replacing them is an owner action tracked in QUESTIONS-FOR-OWNER.md (WP5).
+# Until then, treat the assignments as documentation of intent, not as an enforced control.
+
+# ── Default ──────────────────────────────────────────────────────────────────
+*                                   @featurelink-maintainers
+
+# ── Cross-cutting interop contracts — the highest-leverage files in the repo ──
+# A change here alters behaviour in five independent implementations across four languages
+# (Java x2, TypeScript, C#, Python) shipping on independent release cadences.
+/CONFIG-FORMAT.md                   @featurelink-maintainers @featurelink-contract-owners
+/AUTO-ICONSET-SPEC.md               @featurelink-maintainers @featurelink-contract-owners
+/VERSIONING.md                      @featurelink-maintainers @featurelink-contract-owners
+/VERSION                            @featurelink-maintainers @featurelink-contract-owners
+
+# ── Security, privacy and licensing posture ──────────────────────────────────
+# PRIVACY.md governs what leaves a responder's device. It is not a docs change.
+/SECURITY.md                        @featurelink-maintainers @featurelink-security
+/PRIVACY.md                         @featurelink-maintainers @featurelink-security
+/LICENSE                            @featurelink-maintainers
+/NOTICE                             @featurelink-maintainers
+/THIRD-PARTY-NOTICES.md             @featurelink-maintainers
+
+# ── Build, CI and supply chain ───────────────────────────────────────────────
+# A change to a workflow can exfiltrate every secret the pipeline holds; a change to a
+# pinned digest can substitute code that executes inside the release build.
+/.github/                           @featurelink-maintainers @featurelink-security
+/.github/workflows/                 @featurelink-maintainers @featurelink-security
+/.github/pinned-binaries.sha256     @featurelink-maintainers @featurelink-security
+/.gitattributes                     @featurelink-maintainers
+/.gitignore                         @featurelink-maintainers
+
+# ── Signing and secrets adjacency ────────────────────────────────────────────
+# Any change touching signing configuration needs a security reviewer, not just a build one.
+**/app/build.gradle                 @featurelink-maintainers @featurelink-security
+**/featurelink.keystore             @featurelink-maintainers @featurelink-security
+
+# ── Per-component ownership ──────────────────────────────────────────────────
+# ATAK 5.6 and 5.7 are forks of one another; so are WinTAK 5.6 and 5.7. Any fix to one MUST
+# be applied to the other unless the divergence is deliberate and documented — the PR
+# template carries the checklist that enforces this by review.
+/ATAK5.6/                           @featurelink-atak
+/ATAK5.7/                           @featurelink-atak
+/WinTAK5.6/                         @featurelink-wintak
+/WinTAK5.7/                         @featurelink-wintak
+/CloudTAK/                          @featurelink-cloudtak
+/TAKPortal/                         @featurelink-server
+/Infra-TAK/                         @featurelink-server
+
+# ── The shared OAuth relay ───────────────────────────────────────────────────
+# This single page serves BOTH CloudTAK and TAK Portal. It is the C-01 site: a change here
+# affects the authorization-code flow for two components at once.
+/docs/featurelink-oauth-relay.html  @featurelink-maintainers @featurelink-security
+
+# ── Icon corpora ─────────────────────────────────────────────────────────────
+# Two byte-identical 7,461-file copies. Nothing but review and the CI parity job stops them
+# from diverging, and divergence breaks the iconset UID contract silently.
+/TAKPortal/assets/featurelink-configurator/icons/    @featurelink-maintainers
+/Infra-TAK/featurelink_displayconfig_assets/icons/   @featurelink-maintainers
