@@ -112,3 +112,46 @@ Branch: `audit-remediation`. Baseline: `a8f6f4a`.
   the standing decision is patch-not-archive, but the patching was descoped from this session.
   **Default taken:** the DOM XSS in its configurator and its CDN scripts were fixed; the rest is
   documented as deferred and the console is flagged trusted-users-only in the test plan.
+- **WP2 (CloudTAK) — your ArcGIS session no longer survives closing the browser tab.** C-20 rated
+  the plaintext `localStorage` storage of BOTH the access and the refresh token CRITICAL for
+  CloudTAK specifically, because any XSS in the origin reads both and the refresh token grants
+  long-lived offline access to the whole ArcGIS account. **Default taken:** access token held in
+  memory only and never persisted; refresh token moved to `sessionStorage` (per-tab, cleared on
+  close). The cost is one extra sign-in per browser session. Alternatives if that is too disruptive
+  in the field: a CloudTAK-server-side token broker (removes the refresh token from the browser
+  entirely — strictly better, more work), or reverting the refresh token to `localStorage` (restores
+  the convenience and the exposure).
+- **WP2 (CloudTAK) — unclassified features now render as UNKNOWN, not FRIENDLY.** Features whose
+  layer supplies no CoT type defaulted to `a-f-G` (friendly ground), i.e. an unclassified feature
+  was presented to the operator as a friendly unit on a tactical display. **Default taken:** `a-u-G`
+  (unknown). This visibly changes every existing unclassified layer — confirm before fielding.
+- **WP2 (CloudTAK) — plain-HTTP ArcGIS service URLs are now rejected outright.** `http://` is mixed
+  content inside CloudTAK and previously failed with an opaque "Failed to fetch". **Default taken:**
+  refuse with an explanatory message. Confirm no fielded deployment relies on a plain-HTTP ArcGIS
+  Enterprise on a trusted LAN.
+- **WP2 (CloudTAK) — minimum auto-refresh interval clamped to 30 s (max 24 h).** An imported config
+  could previously install a 1-second refresh loop against the org's ArcGIS service — a
+  self-inflicted DoS and a fast route to API-credit exhaustion. **Default taken:** clamp to
+  [30 s, 24 h], reject `NaN`, and reflect the accepted value back into the input. Confirm 30 s is
+  not too coarse for any operational layer.
+- **WP2 (CloudTAK) — ArcGIS Enterprise is still effectively unsupported and that is now explicit.**
+  `AccountView` has no portal field, so sign-in always targets `arcgis.com` while layer search
+  targets `store.portalUrl` — the two halves can point at different portals, despite the README
+  implying Enterprise works. **Default taken:** not fixed; it needs a product decision (add a portal
+  field, or document Enterprise as unsupported). Flagged in `docs/testing/cloudtak.md`.
+- **WP2 (CloudTAK) — the highest-impact CloudTAK finding is still OPEN.** The untrusted-import
+  consent gate (C-02), the ZIP-bomb and size caps (C-19) and the review queue were descoped when
+  this package was narrowed. `importConfig.ts`, `importIngest.ts` and `zipReader.ts` are unchanged
+  from baseline: auto-ingest still applies third-party config with **no consent prompt** and can
+  still silently redirect your PLI position feed to an attacker's Feature Service, triggered by
+  anyone who can drop a package named `FeatureLink…` into your Import Manager. The token-exfiltration
+  end of that chain IS closed (C-33 — a token is never sent to a host off your signed-in portal).
+  **Do not test the auto-import path against a shared TAK server you do not control.** Estimate to
+  close: 1–1.5 days.
+- **WP2 (CloudTAK) — NEW risk introduced by the C-21 fix: a CORS preflight that did not exist
+  before.** Moving the token out of `?token=` and into `X-Esri-Authorization: Bearer` makes the
+  browser send an `OPTIONS` preflight before every authenticated ArcGIS request. ArcGIS Online
+  answers these correctly; an ArcGIS **Enterprise** deployment behind a locked-down reverse proxy
+  might not. Symptom would be: public layers fine, every private layer fails. This is the single
+  change most in need of live testing — see `docs/testing/cloudtak.md` §4.1. Fallback if it bites:
+  move the token to a POST form field instead.
