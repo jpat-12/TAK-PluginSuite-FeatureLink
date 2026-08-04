@@ -228,7 +228,22 @@ function requestOnce({ url, address, timeoutMs, maxBytes, headers }) {
  * C-21: the caller passes the ArcGIS token as a Bearer header — never as a `?token=` query
  * parameter — and no URL is ever logged by this module.
  */
-async function safeFetchArcgisJson(rawUrl, { token, timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES } = {}) {
+async function safeFetchArcgisJson(
+  rawUrl,
+  {
+    token,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxBytes = DEFAULT_MAX_BYTES,
+    // Dependency injection, not a bypass: the resolver is the component that decides which
+    // address a hostname is allowed to reach. Production always uses resolveAndVet. The test
+    // suite substitutes one that applies the same scheme/credential/allowlist rules but pins the
+    // address to a local stub server, so the redirect loop, the timeout, the size cap, the
+    // Bearer-token path and the ArcGIS-error-body guard are all exercised end to end offline —
+    // without weakening the production path or adding an environment flag that could be flipped
+    // in the field.
+    resolver = resolveAndVet,
+  } = {}
+) {
   const patterns = allowedHostPatterns();
   if (!patterns.length) {
     throw new BlockedRequestError(
@@ -240,7 +255,7 @@ async function safeFetchArcgisJson(rawUrl, { token, timeoutMs = DEFAULT_TIMEOUT_
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
   for (let hop = 0; hop <= REDIRECT_LIMIT; hop++) {
-    const vetted = await resolveAndVet(target, patterns); // re-validated on EVERY hop
+    const vetted = await resolver(target, patterns); // re-validated on EVERY hop
     const res = await requestOnce({
       url: vetted.url,
       address: vetted.address,
