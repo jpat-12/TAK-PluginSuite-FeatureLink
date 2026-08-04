@@ -155,3 +155,159 @@ Branch: `audit-remediation`. Baseline: `a8f6f4a`.
   might not. Symptom would be: public layers fine, every private layer fails. This is the single
   change most in need of live testing — see `docs/testing/cloudtak.md` §4.1. Fallback if it bites:
   move the token to a POST form field instead.
+- **WP5 (cross-cutting) — the suite version number.** `VERSIONING.md` requires one SemVer number
+  shared by all seven components, anchored in a new root `VERSION` file. The working tree carried
+  `2.7.24`, which is incoherent (a MINOR bump that preserved the PATCH, making `2.6.x` and `2.7.x`
+  indistinguishable in a sorted release list). **Default taken: `2.7.0`**, because the policy
+  requires a MINOR bump to reset PATCH to 0. If you would rather the auto-symbology work be a
+  patch on the 2.6 line, set `VERSION` to `2.6.25` instead — the CI gate follows the file.
+- **WP5 — `CODEOWNERS` owner handles are placeholders and the file is currently inert.**
+  `@featurelink-maintainers`, `@featurelink-security`, `@featurelink-atak`, `@featurelink-wintak`,
+  `@featurelink-cloudtak`, `@featurelink-server` and `@featurelink-contract-owners` do not exist.
+  **GitHub silently ignores an unresolvable code owner**, so the file enforces nothing until real
+  accounts or teams are substituted — and "require review from Code Owners" branch protection will
+  appear satisfied while reviewing nobody. **Default taken:** placeholders committed with a
+  prominent in-file warning, so the intent is recorded and substitution is a one-line edit.
+- **WP5 — `SECURITY.md` has no monitored security contact address.** The document currently routes
+  reporters to GitHub private vulnerability reporting only. A public-safety project should publish
+  a monitored address. **Default taken:** GitHub PVR as the primary channel, with the gap flagged
+  in-file. Register an address and replace the PLACEHOLDER block.
+- **WP5 — PLI retention is unbounded in the implementation, not merely undocumented, and this
+  needs a decision before any operational deployment.** Verified across all three clients: there
+  is **no purge command, no TTL, no delete path and no operator-visible control** over PLI data
+  already written to the hosted ArcGIS layer. `PliHistoryOverlay` caps the *on-device* breadcrumb
+  at 5 markers, which bounds nothing already sent. Normal operation updates one row in place per
+  device, but three things defeat that: ArcGIS editor-tracking/archiving (a per-layer setting
+  FeatureLink neither reads nor sets) retains **every 30-second edit as history**; changing the
+  PLI layer orphans the previous row forever; and an update failure orphans a row and adds a new
+  one. Only an ArcGIS administrator can erase — a responder cannot remove their own data, and a
+  team lead cannot clear an incident. For CAP/SAR this is a records-retention and personal-safety
+  exposure. **Default taken:** documented truthfully in `PRIVACY.md` §6 with interim mitigations
+  (one dedicated PLI layer per incident, delete the layer at incident close, do not enable editor
+  tracking) and the purge capability specified but **not implemented** — it lives in three other
+  work packages' trees. **Decide:** is a purge capability a release blocker for 2.7.0?
+- **WP5 — there is no config export/backup in any client, and the C-15 fix makes that bite.**
+  Giving each ATAK target a distinct `applicationId` (required, or the two builds mutually
+  overwrite) means the new package is a *different application* to Android: it installs alongside
+  the old one rather than over it, and the old one must be uninstalled by hand. **Uninstalling
+  destroys all locally saved layers, display configs and PLI settings**, and no client can export
+  or restore them. **Default taken:** documented in `VERSIONING.md` §7 with the recommendation
+  that no version-scheme change reach a fielded device before export/import ships. **Decide:**
+  ship export/import first, or accept a one-time data loss on upgrade with a written operator
+  procedure to re-enter settings?
+- **WP5 — icon corpus: 3 unexplained files and 2 genuine name collisions, plus a ~75% dedup
+  opportunity.** The orphan analysis nobody had run is now done. Per corpus: 7,450 PNGs, of which
+  only **3,771 are referenced by `manifest.json`**; of the 3,679 unreferenced, **3,676 are a
+  deliberate second copy** of a referenced icon under its group subdirectory (not junk). Genuinely
+  unexplained: `Responder Icons/NIMS Positions/BLANK.png`,
+  `Responder Icons/Natural Hazards/Hazard--Other.png`, `Responder Icons/PrePlan/Foam.png`. **Two
+  real latent bugs:** `Hazard--Other.png` and `Foam.png` each resolve to **different bytes**
+  depending on whether a consumer uses the flat or the grouped path. Overall the 14,900 tracked
+  PNGs represent only **3,659 unique images / 3.45 MB** — a shared corpus would cut ~75%.
+  **Decide:** deduplicate to a single shared corpus, and which of each colliding pair is correct?
+- **WP5 — icon provenance and licensing is UNRESOLVED and was not attempted (descoped).** 11
+  third-party iconsets (Default, FalconView, FEMA Icons, Generic Icons, GeoOps, Google, Incident
+  Management Icons, OSM, Public Safety Air, Responder Icons, TAK-UserIcons) totalling 7,461 files
+  per corpus are redistributed under a repository declaring Apache-2.0, with **no attribution, no
+  licence record and no provenance**. Several names (Google, OSM, FEMA, FalconView) strongly imply
+  third-party terms that Apache-2.0 does not grant. **No default could be taken** — this needs the
+  original source of each set established in writing before award.
+- **WP5 — WinTAK SDK redistribution rights are undocumented.** `WinTAK5.{6,7}/libs/` holds SDK
+  assemblies (`TAK.Engine.dll` and friends). They are correctly untracked, but whether the built
+  `.wpk` may legally embed them is unaddressed anywhere. Obtain written confirmation before
+  shipping any `.wpk`.
+- **WP5 — `gitleaks-action` needs a licence key if this repository is organisation-owned.** Free
+  for personal public repositories. If the repo sits under an org and `GITLEAKS_LICENSE` is not
+  set, the `secret-scan` job fails with a *licence* error rather than a findings error — easily
+  misread as a detected secret. **Default taken:** the workflow passes the secret through and the
+  trap is documented in `docs/testing/ci-and-repo.md` §2.4.
+- **WP5 — the keystore `.gitignore` negations were deliberately LEFT IN PLACE.** Appendix F §2.1's
+  remediation calls for deleting `!…featurelink.keystore` from all four ignore files and
+  `git rm --cached`ing both blobs. Removing an ignore rule does **not** untrack an already-tracked
+  file, so doing only my half would have changed nothing except to require `-f` to re-add — while
+  risking another agent's in-flight build. **Default taken:** negations retained, annotated in-file
+  as DEPRECATED-pending-C-40, and both blobs pinned by SHA-256 in `.github/pinned-binaries.sha256`
+  so a substitution is detectable. The `git rm --cached` plus env-var signing passwords in
+  `build.gradle` remain to be done together, in one commit.
+- **WP5 — `origin/main` is still at the initial commit while `dev` is 33 commits ahead.** Anyone
+  cloning the default branch, and every "view on GitHub" landing, gets an essentially empty
+  project. Merge `dev` into `main` or repoint the default branch, then apply the branch protection
+  in `CONTRIBUTING.md`. Also: `jpat-laptop` is a machine-named personal branch published to the
+  shared remote, and `atak5.6/ui` is not an ancestor of `dev` and carries unmerged work of unknown
+  status. **And `stash@{0}` ("wip: featurelink-configurator index.html") exists — inspect it with
+  `git stash show -p`, do NOT apply it blindly; it predates the remediation and will conflict.**
+- **WP5 — the checklist's own §1 process item could not be actioned as written.** It cites
+  mis-tagged `SEV-CRITICAL` items at `audit-server.md:346-417`, `audit-cloudtak.md:474-477,635-637`,
+  `audit-wintak.md:491-494` and `audit-atak.md:535-537`. **Those standalone files do not exist** —
+  `git ls-files | grep -i audit` returns only four icon PNGs named `location-auditorium.png`. The
+  content survives only as Appendices A–D inside `FEATURELINK-AUDIT-CHECKLIST.md`, which the brief
+  forbids me to edit. Line ranges are reported to the integrator in
+  `docs/remediation/wp5-crosscutting.md` for re-tagging to `TEST` / `REMEDIATION`.
+- **WP3 — ship WinTAK 5.7 at all?** A full re-fork of 5.7 from current 5.6 (C-17) was descoped as
+  too large; the gap is ~6–7 engineer-days, laid out phase by phase in
+  `docs/remediation/wp3-wintak-57-parity.md`. The tree **cannot compile as delivered** (`libs/` is
+  empty on disk while the csproj references nine assemblies by `HintPath`), so it is not usable
+  today regardless. **Default taken:** kept, given a distinct identity
+  (`FeatureLink.WinTAK57` / `0.9.0-pre`, was `FeatureLink` / `2.6.9` — *byte-identical to 5.6*),
+  and marked "INCOMPLETE PORT — not for release" in the manifest, the assembly description and an
+  MSBuild warning on every Release build. **Decide:** fund the port, or state in writing that
+  WinTAK 5.7 is out of scope for this delivery.
+- **WP3 — the `shp` wire-format key names need ratifying in `CONFIG-FORMAT.md`.** WinTAK now reads
+  and writes a compact shape-styling block — `{"f":field,"s":{…},"bv":{value:{…}}}` with style keys
+  `sc`/`sw`/`sd`/`fc`/`fs` and colours as `#aarrggbb`. It is the **only** implementation that
+  exists today, so it is the de facto format, but `CONFIG-FORMAT.md` documents no `shp` block at
+  all and has no producer/consumer matrix — which is exactly what made Appendix F §5's interop
+  break unfalsifiable from the documentation. **Default taken:** the shape above, mirroring the
+  existing `sym`/`lbl`/`popup` conventions. Needs agreeing with WP1 before ATAK's
+  `toCompactJson()` starts emitting it.
+- **WP3 — WinTAK deliberately implements the C-24 precedence the *opposite* way to ATAK and
+  CloudTAK.** Per the brief, `ResolveShapeStyle` tries the per-value `shapeStyleByValue` lookup
+  first and falls back to `singleShapeStyle`. ATAK (`DisplayConfig.java:277`) and CloudTAK
+  (`displayConfig.ts:306`) still return the single style first, which makes every per-value entry
+  dead code whenever a `defaultSymbol` exists. **Until those are fixed, the same config renders
+  differently on WinTAK than on the other two platforms.** That is a real, visible cross-platform
+  divergence — intentional and correct on WinTAK's side, but it should not be discovered in the
+  field. Confirm the fix lands on ATAK and CloudTAK.
+- **WP3 — shape styling on WinTAK renders as a first-vertex marker, not a real line or polygon.**
+  WinTAK's plugin SDK exposes no polyline/polygon map-item API that I could verify exists, so a
+  line/area feature is still plotted as a marker at its first vertex (the same simplification the
+  ATAK downloader makes). **Default taken:** resolve the style, apply the resolved stroke colour to
+  that marker, and log/count/surface the fact. That closes the "silently and completely dropped,
+  with no warning and no log line" half of Appendix F §5, but it is a *partial*. If a WinTAK
+  polyline item type does exist, this becomes a small follow-up — please confirm either way.
+- **WP3 — the ArcGIS OAuth client ID is still the ATAK app's, and sign-in may not work at all.**
+  `ArcGisAuthService.cs` uses `RXtGmClVuYd1Sp7d`, and the code's own comment admits it was never
+  confirmed that the app registration allowlists the loopback redirect URI this desktop flow
+  requires. **This is untested against production and could be a total sign-in failure.**
+  **Default taken:** left in place but overridable via the `FEATURELINK_ARCGIS_CLIENT_ID`
+  environment variable. A dedicated "FeatureLink for WinTAK" registration should be minted, and the
+  loopback redirect verified, **before** any delivery.
+- **WP3 — is `CotItem.SetAttribute` XML-escaping its input? This must be settled before delivery.**
+  Peer-controlled data (a feature callsign, remarks, an `iconsetpath` from a received share)
+  reaches broadcast CoT. Whether the WinTAK SDK escapes it is undocumented and could not be tested
+  without the SDK. **Default taken:** FeatureLink now strips control characters, caps lengths and
+  validates the iconset path format at its own boundary — but that is mitigation, not proof. A
+  manual capture procedure is in `docs/testing/wintak.md` §11.2. If the captured XML is malformed,
+  it is a CRITICAL finding: XML injection into a federated message bus.
+- **WP3 — package version and copyright holder were chosen, not given.** **Defaults taken:**
+  WinTAK 5.6 → `2.7.0` (was `2.6.9`, while its README claimed to track the ATAK line, which was 15
+  patch versions ahead); WinTAK 5.7 → `0.9.0-pre`; `AssemblyCompany` /
+  copyright → `Civil Air Patrol — FeatureLink project`; licence → Apache-2.0 per the repo
+  `LICENSE`. Replace if the correct legal entity differs — the binary was previously unattributed
+  (`AssemblyCompany("")`, `Copyright © 2026` with no holder), which fails software-provenance
+  requirements.
+- **WP3 — a peer-supplied auto-refresh interval is now clamped to a 30-second minimum.** A received
+  share carrying `{"freq":{"iv":1}}` previously drove a full layer re-download every second,
+  forever, on a network peer's say-so — resource exhaustion and ArcGIS credit burn on the
+  operator's own account. **Default taken:** 30 s floor. Adjust to taste; the point is that `iv:1`
+  must not be honoured.
+- **WP3 — the `.wpk` is still unsigned.** No Authenticode signature on `FeatureLink.dll` and the
+  package is a plain ZIP, so there is no tamper evidence and it will likely fail plugin-store
+  submission. **Default taken:** not done — it needs a code-signing certificate, which is an owner
+  decision rather than a code change.
+- **WP3 — nothing in `WinTAK5.6/` or `WinTAK5.7/` was ever compiled.** This machine has no
+  `msbuild` and no WinTAK SDK. `FeatureLinkDockPane.cs` went from 1455 to ~2160 lines without a
+  compiler seeing it. The 216 passing tests cover only the SDK-independent logic. **Expect a build
+  pass before behaviour testing**, and treat `selfEvent?.Point?.CE90`/`.LE90` in `SendPliUpdateAsync`
+  as the single most likely compile failure (replace both with `double.NaN` if those members do not
+  exist). Risk-ordered hand-test plan: `docs/testing/wintak.md`.
