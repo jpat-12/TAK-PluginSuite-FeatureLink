@@ -177,7 +177,10 @@ namespace FeatureLink.Tests
         [Fact]
         public void SanitizeDisplayName_CapsLengthAndStripsControlCharacters()
         {
-            Assert.Equal("a b", UrlGuard.SanitizeDisplayName("a\r\nb"));
+            // Each control character becomes one space (a 1:1 substitution, not a collapse), so a
+            // peer cannot use CR/LF to fake extra lines in the consent dialog or a status message.
+            Assert.Equal("a  b", UrlGuard.SanitizeDisplayName("a\r\nb"));
+            Assert.Equal("a b", UrlGuard.SanitizeDisplayName("a\nb"));
             Assert.Equal(20, UrlGuard.SanitizeDisplayName(new string('x', 1000), 20).Length);
             Assert.Null(UrlGuard.SanitizeDisplayName(null));
         }

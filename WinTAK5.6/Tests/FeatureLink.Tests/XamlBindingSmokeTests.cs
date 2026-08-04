@@ -45,8 +45,12 @@ namespace FeatureLink.Tests
             @"^\s*public\s+(?<type>[A-Za-z_][\w<>,\.\[\]\? ]*?)\s+(?<name>[A-Z]\w*)\s*(=>|\{)",
             RegexOptions.Multiline | RegexOptions.Compiled);
 
+        /// <summary>Captures the whole dotted path, because the layer-row DataTemplate reaches the
+        /// dock-pane commands through <c>DataContext.DownloadLayerCommand</c> on a
+        /// <c>RelativeSource AncestorType=ItemsControl</c> — a leading-segment-only match would
+        /// have reported every per-row command as unbound.</summary>
         private static readonly Regex BindingPath = new Regex(
-            @"\{Binding\s+(?:Path\s*=\s*)?(?<path>[A-Za-z_]\w*)", RegexOptions.Compiled);
+            @"\{Binding\s+(?:Path\s*=\s*)?(?<path>[A-Za-z_][\w\.]*)", RegexOptions.Compiled);
 
         private static List<(string Type, string Name)> PublicProperties()
         {
@@ -62,9 +66,16 @@ namespace FeatureLink.Tests
             return list;
         }
 
-        private static HashSet<string> BoundPaths() =>
-            new HashSet<string>(BindingPath.Matches(XamlSource).Cast<Match>()
-                .Select(m => m.Groups["path"].Value), StringComparer.Ordinal);
+        /// <summary>Every identifier that appears anywhere in a binding path, so a dotted path
+        /// contributes each of its segments.</summary>
+        private static HashSet<string> BoundPaths()
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Match m in BindingPath.Matches(XamlSource))
+                foreach (var segment in m.Groups["path"].Value.Split('.'))
+                    if (segment.Length > 0) set.Add(segment);
+            return set;
+        }
 
         [Fact]
         public void StatusText_IsActuallyBound_NotJustAStyleKey()
@@ -123,8 +134,8 @@ namespace FeatureLink.Tests
                 "RecurrenceInterval", "RecurrenceUnit", "IsPliLayer", "Visible", "EyeIconSource",
                 // RecentCotItem
                 "Uid", "Callsign", "CotType", "LastSeen", "LastSeenLabel",
-                // WPF intrinsics reached via RelativeSource / PlacementTarget
-                "DataContext", "PlacementTarget", "IsChecked", "SelectedItem",
+                // WPF/BCL intrinsics reached via RelativeSource, PlacementTarget or a collection
+                "DataContext", "PlacementTarget", "IsChecked", "SelectedItem", "Count",
             };
 
             var vmMembers = new HashSet<string>(PublicProperties().Select(p => p.Name), StringComparer.Ordinal);
