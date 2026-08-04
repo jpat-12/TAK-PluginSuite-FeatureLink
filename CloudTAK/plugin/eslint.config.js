@@ -33,6 +33,10 @@ export default tseslint.config(
             'vue/singleline-html-element-content-newline': 'off',
             'vue/html-indent': ['error', 4],
             'vue/attributes-order': 'off',
+            // Purely stylistic template-formatting rules. Enabling them would rewrite every SFC
+            // for no behavioural gain and bury the rules that actually catch defects.
+            'vue/html-self-closing': 'off',
+            'vue/multiline-html-element-content-newline': 'off',
             '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
             // An empty catch is exactly the defect class C-32 covers; make it an error so a
             // regression cannot land silently.

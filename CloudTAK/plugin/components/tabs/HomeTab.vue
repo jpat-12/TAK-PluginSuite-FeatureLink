@@ -63,7 +63,7 @@ const expanded = ref(true);
 const loading = ref(false);
 
 const isAuthed = computed(() => { void authState.username; return isAuthenticated(); });
-const pliConnected = computed(() => { void authState.username; return isPliConnected(isAuthenticated()); });
+const pliConnected = computed(() => { void authState.username; return isPliConnected(); });
 // Browse-list ("My ArcGIS Layers") entries are deliberately excluded here — they haven't been
 // downloaded onto this device yet, so they don't have real feature data to count. Their feature
 // counts (shown in the Layers tab itself) come from a count-only query, not a download; folding

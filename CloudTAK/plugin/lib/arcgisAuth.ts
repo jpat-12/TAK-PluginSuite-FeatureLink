@@ -192,7 +192,7 @@ function waitForRelayMessage(popup: Window, expectedState: string): Promise<Rela
         const closedCheck = window.setInterval(() => {
             // `popup.closed` can throw under some cross-origin isolation policies; an unguarded
             // read threw every 500 ms forever with no handler (§10.7).
-            let closed = false;
+            let closed: boolean;
             try { closed = popup.closed; } catch { closed = false; }
             if (closed) finish(() => reject(new Error('Sign-in window was closed before completing')));
         }, 500);
