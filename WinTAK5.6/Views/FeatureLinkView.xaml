@@ -864,6 +864,19 @@
 
                                     <StackPanel Margin="0,8,0,0" Visibility="{Binding PliLayerExpanded, Converter={StaticResource BoolToVis}}">
 
+                                        <!-- The configured PLI destination. Found by the C-16
+                                             binding smoke test: PliLayerUrl was a public property
+                                             with no binding anywhere, so an operator could not see
+                                             which layer their position was being sent to (or
+                                             confirm it was the one they meant) — the same class of
+                                             defect as the unbound StatusText, just quieter. -->
+                                        <TextBlock Text="{Binding PliLayerUrl, Mode=OneWay}"
+                                                   Style="{StaticResource HintText}"
+                                                   TextWrapping="Wrap" Margin="0,0,0,8"
+                                                   ToolTip="{Binding PliLayerUrl, Mode=OneWay}"
+                                                   AutomationProperties.Name="Configured PLI feature layer URL"
+                                                   Visibility="{Binding IsPliConfigured, Converter={StaticResource BoolToVis}}"/>
+
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <RadioButton Content="Create New Layer" GroupName="PliMode"
                                                          IsChecked="{Binding IsPliCreateMode, Mode=TwoWay}"

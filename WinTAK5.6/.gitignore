@@ -18,3 +18,7 @@ libs/
 # not source; CI produces it and attaches a SHA-256 checksum (C-18, C-35).
 *.wpk
 dist/
+
+# .NET test build output
+Tests/**/bin/
+Tests/**/obj/

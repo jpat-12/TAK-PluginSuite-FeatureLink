@@ -195,9 +195,17 @@ namespace FeatureLink.Services
                             if (!(b is JObject brk)) continue;
                             // Per-entry guard: one malformed break must not abort the whole layer
                             // download (it previously threw FormatException out of ResolveColor).
-                            double min = Num(brk, "mn", double.NegativeInfinity);
-                            double max = Num(brk, "mx", double.PositiveInfinity);
-                            if (double.IsNaN(min) || double.IsNaN(max) || min > max) continue;
+                            // A key that is PRESENT but unparseable must skip the entry, not fall
+                            // back to ±infinity — that would silently turn a typo into a
+                            // catch-all break that swallows every feature.
+                            double min, max;
+                            if (!TryBound(brk, "mn", double.NegativeInfinity, out min)
+                                || !TryBound(brk, "mx", double.PositiveInfinity, out max))
+                            {
+                                Log.Warn("Skipping a colour break with an unparseable bound.");
+                                continue;
+                            }
+                            if (min > max) continue;
                             if (dval >= min && dval < max)
                                 return BlendOpacity(ParseHexColor(Str(brk, "c", null), baseColor), opacity);
                         }
@@ -571,6 +579,25 @@ namespace FeatureLink.Services
             if (t.Type == JTokenType.String) return (string)t;
             if (t.Type == JTokenType.Object || t.Type == JTokenType.Array) return fallback;
             return ((JValue)t).ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>Reads a class-break bound. Returns false when the key exists but cannot be
+        /// read as a finite number; an absent key legitimately means "unbounded on this side".</summary>
+        private static bool TryBound(JObject o, string key, double whenAbsent, out double value)
+        {
+            var t = o?[key];
+            if (t == null || t.Type == JTokenType.Null) { value = whenAbsent; return true; }
+            if (t.Type == JTokenType.Integer || t.Type == JTokenType.Float)
+            {
+                value = (double)t;
+                return !double.IsNaN(value);
+            }
+            if (t.Type == JTokenType.String
+                && double.TryParse((string)t, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+                && !double.IsNaN(value))
+                return true;
+            value = whenAbsent;
+            return false;
         }
 
         private static double Num(JObject o, string key, double fallback)
