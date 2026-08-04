@@ -61,3 +61,54 @@ Branch: `audit-remediation`. Baseline: `a8f6f4a`.
   `coreLibraryDesugaring`: ATAK 5.x already requires Android 8 so no real device is lost, and
   desugared library classes interact badly with the plugin classloader and the
   `-repackageclasses` ProGuard step.
+- **WP4 (server) — unowned dataset records are now ADMIN-ONLY, and this is breaking.**
+  `isOwnedBy()` returned `true` when `created_by` was unset, so every record written before
+  ownership tracking existed — and **everything the Infra-TAK Flask module writes, which has no
+  ownership model at all** — was readable, editable and deletable by any logged-in user. That is
+  fail-open authorization on exactly the legacy data most likely to matter. **Default taken:**
+  fail closed; an unowned record is manageable by admins only. Operators may report "my old
+  configs vanished"; an admin re-saving each one stamps an owner. If you would rather have a
+  one-time migration that assigns ownership up front, say so — the counting command is in
+  `docs/testing/server.md` §11.5.
+- **WP4 (server) — the OAuth relay ships with an EMPTY origin allowlist and will refuse all
+  sign-ins until you edit it.** C-01's fix replaces `state.split('::')[0]` with a
+  deployment-controlled `REGISTERED_ORIGINS` list in `docs/featurelink-oauth-relay.html`.
+  **Default taken:** ship empty and fail closed, rather than guessing your hostnames and shipping
+  a list that might be wrong. You must add every CloudTAK/TAK Portal origin before OAuth works —
+  `docs/testing/server.md` §0.3.
+- **WP4 (server) — outbound ArcGIS traffic is now allowlisted to Esri's public cloud only.**
+  C-04's SSRF guard defaults to `*.arcgis.com, *.arcgisonline.com, *.esri.com`. **Default taken:**
+  an ArcGIS **Enterprise** deployment must add its own portal host via
+  `FEATURELINK_ARCGIS_ALLOWED_HOSTS`, because the default must not be able to reach anything on
+  your own network. If icon generation stops working after this upgrade, that is why; the error
+  names the refused host.
+- **WP4 (server) — the host portal's session cookie flags are outside this module's control.**
+  `SameSite=Lax` is set on our own `fl_csrf` cookie, but the Authentik session cookie belongs to
+  TAK Portal upstream. **Default taken:** secure our own cookie, add an independent Origin/Referer
+  assertion so we do not depend on the host's flags, and document the gap. Please confirm with the
+  TAK Portal maintainer that the session cookie is `SameSite=Lax; Secure; HttpOnly`.
+- **WP4 (server) — `GET /api/featurelink/configs/:id/download` is still open to every logged-in
+  user.** There is no `published`/`visibility` flag, so a half-finished config is downloadable the
+  moment it is saved. **Default taken:** unchanged, because this is the advertised field-user
+  browse surface and adding a visibility flag is a schema change affecting all four clients.
+- **WP4 (server) — upload limits reduced and SVG dropped.** Per-file 25 MB → 8 MB, per-request 200
+  files → 25, plus a 200 MB/user/day quota (the old ceiling was 5 GB of disk per request with no
+  quota and no rate limit). SVG was removed from the accepted icon types because it is served as
+  `image/svg+xml` from the portal origin and executes scripts, and ATAK cannot render it as a
+  marker anyway. **Default taken:** both. Confirm against your operators' largest real iconsets.
+- **WP4 (server) — C-12 install/uninstall remains UNFIXED and is the highest-severity item still
+  open in this scope.** `uninstall.sh` still leaves behind `featurelinkCustomIcons.routes.js`,
+  `featurelinkCustomIcons.service.js` and `featurelinkArcgisIconset.service.js` — **exactly the
+  SSRF and zip-bomb sinks** — and its `server.js` unpatcher prints "removed …" unconditionally
+  whether or not anything matched, so a mismatch can leave a `require` pointing at a deleted file
+  and **the portal permanently down after an uninstall, with a success message printed.** Neither
+  script backs anything up. Also note `install.sh` still does not install `multer`/`unzipper`;
+  until it does, run `npm install --save multer@^2 unzipper@^0.12` in the portal directory by hand
+  before every install or upgrade. **Test only on a disposable instance.**
+- **WP4 (server) — Infra-TAK still carries three unfixed CRITICALs.** Its Jinja XSS
+  (`featurelink_displayconfig.py:248`, which also means the QR button is functionally broken for
+  every dataset), no CSRF on any of its 8 Flask routes, and no ownership model at all. Its
+  installer still enforces root and self-updates from a remote with no verification. Per item I-4
+  the standing decision is patch-not-archive, but the patching was descoped from this session.
+  **Default taken:** the DOM XSS in its configurator and its CDN scripts were fixed; the rest is
+  documented as deferred and the console is flagged trusted-users-only in the test plan.

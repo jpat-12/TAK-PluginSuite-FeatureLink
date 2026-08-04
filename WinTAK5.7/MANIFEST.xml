@@ -1,13 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <wintakPluginPackage>
   <metadata>
-    <id>FeatureLink</id>
-    <version>2.6.9</version>
+    <!-- C-17: this package previously declared <id>FeatureLink</id> and <version>2.6.9</version>,
+         BYTE-IDENTICAL to WinTAK5.6/MANIFEST.xml, while containing a materially different and
+         REGRESSED binary. Two different plugins with the same identity are indistinguishable to
+         the plugin manager and to any support engineer reading a manifest, so a 5.7 build could
+         silently masquerade as (or displace) a 5.6 one. Both fields are now distinct.
+
+         The version is deliberately NOT 2.7.0: this tree is not at parity with 5.6 and must not
+         claim to be. "0.9.0-pre" says what it is. See
+         docs/remediation/wp3-wintak-57-parity.md for the file-by-file gap list.
+
+         DO NOT SHIP THIS PACKAGE. It is missing Mission Package layer share, send-item-to-PLI,
+         live marker visibility, the orphan-marker sweep, display-style resolution, and every fix
+         applied to 5.6 during the audit remediation. -->
+    <id>FeatureLink.WinTAK57</id>
+    <version>0.9.0-pre</version>
     <sdkVersion>5.7.0.144</sdkVersion>
     <takVariants>
     </takVariants>
-    <description>FeatureLink: browse and sync ArcGIS Feature Layers to the map, and send this device's Position Location Information (PLI) to an ArcGIS Feature Layer via OAuth2 sign-in. Ported from the ATAK FeatureLink plugin.</description>
+    <description>FeatureLink (WinTAK 5.7 PORT — INCOMPLETE, NOT FOR RELEASE): browse and sync ArcGIS Feature Layers to the map, and send this device's Position Location Information (PLI) to an ArcGIS Feature Layer via OAuth2 sign-in. This 5.7 tree is a stale fork of an older 5.6 and is missing layer share, send-item-to-PLI, live marker visibility, orphan-marker cleanup and display-style resolution. Use the WinTAK 5.6 package unless you are specifically testing the 5.7 port.</description>
     <dependencies>
     </dependencies>
+    <license>Apache-2.0</license>
+    <licenseUrl>https://www.apache.org/licenses/LICENSE-2.0</licenseUrl>
+    <copyright>Copyright © 2026 Civil Air Patrol — FeatureLink project</copyright>
   </metadata>
 </wintakPluginPackage>

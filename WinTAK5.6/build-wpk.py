@@ -61,13 +61,50 @@ def read_manifest(manifest_path, version, sdk_version):
     fail("MANIFEST.xml not found at %r -- it is the single source of manifest truth" % manifest_path)
 
 
+def comment_spans(xml_text):
+    """(start, end) offsets of every <!-- ... --> region."""
+    spans = []
+    pos = 0
+    while True:
+        start = xml_text.find("<!--", pos)
+        if start < 0:
+            return spans
+        end = xml_text.find("-->", start)
+        if end < 0:
+            return spans + [(start, len(xml_text))]
+        spans.append((start, end + 3))
+        pos = end + 3
+
+
+def find_outside_comments(xml_text, needle, spans, from_index=0):
+    """First occurrence of `needle` that is not inside an XML comment."""
+    pos = from_index
+    while True:
+        found = xml_text.find(needle, pos)
+        if found < 0:
+            return -1
+        if not any(s <= found < e for s, e in spans):
+            return found
+        pos = found + 1
+
+
 def replace_element(xml_text, tag, value):
+    """Substitutes the text of the first REAL <tag> element.
+
+    Comments are skipped deliberately. The 5.7 manifest documents the C-17 identity collision by
+    quoting the old `<id>` and `<version>` elements verbatim, and a naive find() rewrote the text
+    inside that comment instead of the live element -- producing a .wpk whose declared id was the
+    one the comment was warning about. Caught by running this script against the real 5.7 manifest.
+    """
+    spans = comment_spans(xml_text)
     open_tag = "<%s>" % tag
     close_tag = "</%s>" % tag
-    start = xml_text.find(open_tag)
-    end = xml_text.find(close_tag)
-    if start < 0 or end < 0 or end < start:
+    start = find_outside_comments(xml_text, open_tag, spans)
+    if start < 0:
         fail("MANIFEST.xml has no <%s> element to substitute" % tag)
+    end = find_outside_comments(xml_text, close_tag, spans, start)
+    if end < 0:
+        fail("MANIFEST.xml has an unterminated <%s> element" % tag)
     return xml_text[: start + len(open_tag)] + value + xml_text[end:]
 
 
