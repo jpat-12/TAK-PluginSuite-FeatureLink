@@ -72,7 +72,11 @@ describe('C-07 / FIX-1 — symbology resolves on the DOWNLOAD path', () => {
         const byValue = Object.fromEntries((config!.sym?.vs ?? []).map(e => [e.v, e.up]));
         expect(Object.keys(byValue)).toEqual(expect.arrayContaining(['FIRE', 'POLICE']));
         // {uid}/{group}/{file} — the cross-platform string-identity contract.
-        expect(byValue.FIRE).toMatch(/^[0-9a-f]{64}\/Roads Icons\/Fire Station\.png$/);
+        // AUTO-ICONSET-SPEC §5.1 keeps spaces in the GROUP ("Roads Icons"); §5.2 replaces them in
+        // the FILENAME ("Fire Station" -> "Fire_Station.png"). ATAK and TAK Portal must produce
+        // byte-identical strings, so both halves are asserted exactly.
+        expect(byValue.FIRE).toMatch(/^[0-9a-f]{64}\/Roads Icons\/Fire_Station\.png$/);
+        expect(byValue.POLICE).toMatch(/^[0-9a-f]{64}\/Roads Icons\/Police\.png$/);
         expect(layer.stylingStatus).toBe('ok');
     });
 
@@ -81,7 +85,7 @@ describe('C-07 / FIX-1 — symbology resolves on the DOWNLOAD path', () => {
         routeLayer(fake, PMS_RENDERER);
         fake.install();
 
-        const { store, layerActions, types } = await freshModules();
+        const { store, types } = await freshModules();
         const layer = types.newLayer('Roads', LAYER_0, 'public');
         layer.lastSync = 1; // already downloaded once, so the recurrence check considers it
         layer.recurrenceInterval = 30;
