@@ -209,6 +209,19 @@ public class ArcGISAuthManager {
         if (current != null && !isExpiringSoon()) {
             return current;
         }
+        // A refresh is a network call, and on the main thread that throws
+        // NetworkOnMainThreadException. That exception was caught below and turned into a `null`
+        // return, so the caller issued an UNAUTHENTICATED request and ArcGIS answered 499 — which
+        // reads to the operator as "your session expired" no matter how many times they sign in.
+        // Combined with invalidateAccessToken() forcing a refresh after every 499, that became a
+        // permanent loop. Never attempt the network here; hand back whatever is cached (possibly
+        // null) and let the caller retry from a background thread.
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            Log.e(TAG, "getToken() called on the main thread — cannot refresh here."
+                    + " Move the call inside the background task (returning cached token: "
+                    + (current != null) + ")");
+            return current;
+        }
         synchronized (refreshLock) {
             // Re-check inside the lock: another thread may have just refreshed.
             current = accessToken;

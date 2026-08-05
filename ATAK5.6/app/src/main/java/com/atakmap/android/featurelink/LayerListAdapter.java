@@ -56,12 +56,23 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
     private final OnShareListener shareListener;
     private final OnDeleteListener deleteListener;
     private final Set<String> styledLayerUrls;
+    /**
+     * True when this adapter renders a BROWSE section ("My ArcGIS Layers"/"Shared with me"), which
+     * is a listing of the operator's ArcGIS account rather than layers held on this device.
+     *
+     * <p>Section membership, not {@code lastSync}, is what decides whether share/remove apply. A
+     * layer whose download FAILED still lives in an on-device section with {@code lastSync == 0};
+     * keying off the timestamp stranded exactly those rows with no remove button while the
+     * recurrence scheduler retried them every 30 seconds.
+     */
+    private final boolean browseSection;
 
     public LayerListAdapter(Context context, List<ArcGISLayer> layers,
             OnLayerActionListener listener, OnVisibilityToggleListener visibilityListener,
             OnIntervalChangeListener intervalChangeListener, OnShareListener shareListener,
-            OnDeleteListener deleteListener, Set<String> styledLayerUrls) {
+            OnDeleteListener deleteListener, Set<String> styledLayerUrls, boolean browseSection) {
         super(context, 0, layers);
+        this.browseSection          = browseSection;
         this.listener               = listener;
         this.visibilityListener     = visibilityListener;
         this.intervalChangeListener = intervalChangeListener;
@@ -115,7 +126,7 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         // is built from downloaded features — and nothing to remove, since the row is just a
         // listing of the operator's ArcGIS account. Showing them there offered two actions that
         // could not do anything useful, and "remove" in particular read as "delete from ArcGIS".
-        boolean onDevice = layer.lastSync > 0;
+        boolean onDevice = !browseSection;
         shareBtn.setVisibility(onDevice ? View.VISIBLE : View.GONE);
         shareBtn.setOnClickListener(v -> {
             if (shareListener != null) shareListener.onShare(layer);

@@ -983,13 +983,18 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void fetchUserLayers() {
-        String token    = authManager.getToken();
         String username = authManager.getUsername();
         String portal   = prefs.getString(PREF_PORTAL_URL, "https://www.arcgis.com");
-        if (token == null || username == null) return;
+        if (username == null || !authManager.isAuthenticated()) return;
 
         authStatusText.setText("Loading layers…");
         submit(executor, () -> {
+            // Off the UI thread: getToken() can need a network refresh (see ArcGISAuthManager).
+            final String token = authManager.getToken();
+            if (token == null) {
+                postToUi(() -> authStatusText.setText("Sign in to load your ArcGIS layers"));
+                return;
+            }
             List<ArcGISLayer> owned  = restClient.searchUserLayers(portal, token, username);
             List<ArcGISLayer> shared = restClient.searchSharedWithMeLayers(portal, token, username);
             Log.d(TAG, "fetchUserLayers: username=" + username + " owned=" + owned.size()
@@ -1135,9 +1140,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         boolean authed = authManager.isAuthenticated();
         myArcGisLayersCard.setVisibility(authed ? View.VISIBLE : View.GONE);
         if (!authed) return;
-        populateLayerList(privateLayersList, privateLayers);
+        populateLayerList(privateLayersList, privateLayers, true);
         sharedWithMeCountBadge.setText(String.valueOf(sharedWithMeLayers.size()));
-        populateLayerList(sharedWithMeList, sharedWithMeLayers);
+        populateLayerList(sharedWithMeList, sharedWithMeLayers, true);
     }
 
     private void refreshSharedPrivateLayers() {
@@ -1152,12 +1157,21 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      * its natural height and the whole Layers page scrolls as one unit.
      */
     private void populateLayerList(LinearLayout container, List<ArcGISLayer> layers) {
+        populateLayerList(container, layers, false);
+    }
+
+    /**
+     * @param browseSection true for the "My ArcGIS Layers"/"Shared with me" listings, which are a
+     *                      view of the operator's ArcGIS account rather than on-device layers.
+     */
+    private void populateLayerList(LinearLayout container, List<ArcGISLayer> layers,
+            boolean browseSection) {
         container.removeAllViews();
         Set<String> styledLayerUrls = layerDisplayConfigs.keySet();
         LayerListAdapter adapter = new LayerListAdapter(
                 pluginContext, layers, this::onLayerAction, this::toggleLayerVisibility,
                 this::onLayerIntervalChanged, this::onLayerShare, this::onLayerDelete,
-                styledLayerUrls);
+                styledLayerUrls, browseSection);
         for (int i = 0; i < layers.size(); i++) {
             container.addView(adapter.getView(i, null, container));
             if (i < layers.size() - 1) {
@@ -1791,7 +1805,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      *             background pool for an automatic recurrence refresh (C-28).
      */
     private void downloadLayer(ArcGISLayer layer, ExecutorService pool) {
-        final String token = "private".equals(layer.type) ? authManager.getToken() : null;
+        final boolean needsToken = "private".equals(layer.type);
         // Snapshot the fields the background half needs, rather than reading the shared mutable
         // ArcGISLayer off-thread (Appendix A §5).
         final String layerUrl = layer.url;
@@ -1799,6 +1813,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
         submit(pool, () -> {
             try {
+                // Resolved HERE, on the background thread, not before submit(). getToken() may
+                // need to refresh, which is a network call: on the main thread that threw
+                // NetworkOnMainThreadException, was swallowed into a null token, and the download
+                // then went out unauthenticated and came back 499 "Token Required" — presented to
+                // the operator as an expired session that signing in again did not fix.
+                final String token = needsToken ? authManager.getToken() : null;
                 // One-time lazy backfill for layers added before geometryType existed, or whose
                 // browse-list search result (a portal item, not layer metadata) never carried it.
                 String geometryType = layer.geometryType;
@@ -2084,10 +2104,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     // -------------------------------------------------------------------------
 
     private void createPliLayer() {
-        String token    = authManager.getToken();
         String username = authManager.getUsername();
         String portal   = prefs.getString(PREF_PORTAL_URL, "https://www.arcgis.com");
-        if (token == null || username == null) return;
+        if (username == null || !authManager.isAuthenticated()) return;
 
         String layerName = pliLayerNameEdit.getText().toString().trim();
         pliActionBtn.setEnabled(false);
@@ -2097,6 +2116,15 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         // old shared 2-thread pool that single call starved every other network action in the
         // plugin. It runs on the background pool now.
         submit(bgExecutor, () -> {
+            // Off the UI thread — a refresh here is a network call.
+            final String token = authManager.getToken();
+            if (token == null) {
+                postToUi(() -> {
+                    pliActionBtn.setEnabled(true);
+                    pliStatusText.setText("Sign in to ArcGIS first");
+                });
+                return;
+            }
             String serviceUrl = restClient.createPliFeatureService(
                     portal, username, token, layerName.isEmpty() ? null : layerName);
             postToUi(() -> {
@@ -2714,9 +2742,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         MapItem item = getMapView().getMapItem(uid);
         if (item == null) return;
 
-        String token = authManager.getToken();
         submit(executor, () -> {
             try {
+                // Off the UI thread — a refresh here is a network call.
+                final String token = authManager.getToken();
                 GeoPoint pt = null;
                 if (item instanceof PointMapItem) pt = ((PointMapItem) item).getPoint();
                 if (pt == null) return;
