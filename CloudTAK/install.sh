@@ -64,8 +64,12 @@ echo
 
 # --- optional self-update ----------------------------------------------------------
 if [ "$DO_PULL" -eq 1 ]; then
-    [ -d "$REPO_DIR/.git" ] || { echo "ERROR: --pull given but $REPO_DIR is not a git checkout." >&2; exit 1; }
-    echo "Pulling latest plugin source..."; git -C "$REPO_DIR" pull; echo
+    # Resolve the repository ROOT rather than assuming this script sits at it. This plugin used
+    # to be its own repo; inside the suite it lives at <root>/CloudTAK/, so the old
+    # `[ -d "$REPO_DIR/.git" ]` test always failed and --pull could not be used at all.
+    GIT_ROOT="$(git -C "$REPO_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+    [ -n "$GIT_ROOT" ] || { echo "ERROR: --pull given but $REPO_DIR is not inside a git checkout." >&2; exit 1; }
+    echo "Pulling latest plugin source into $GIT_ROOT..."; git -C "$GIT_ROOT" pull; echo
     _no_pull=()
     for _a in "${ORIGINAL_ARGS[@]}"; do [ "$_a" != "--pull" ] && _no_pull+=("$_a"); done
     exec bash "$BASH_SOURCE" "${_no_pull[@]}"
@@ -82,6 +86,17 @@ else
     # Replace the dir wholesale so removed files don't linger, and so the entry lands
     # at the correct depth: api/web/plugins/<NAME>/index.ts
     rm -rf "$WEB_DEST"; cp -R "$REPO_DIR/plugin" "$WEB_DEST"
+
+    # Strip dev-only files from the DEPLOYED copy. CloudTAK runs `npm run lint` and
+    # `npm run check` (vue-tsc) across ./plugins/ as part of the api image build, so anything
+    # left here is compiled by CloudTAK — and these files import vitest, @vue/test-utils and
+    # @vitejs/plugin-vue, none of which exist inside that image. They are for developing this
+    # plugin in isolation and have no business in the bundle. node_modules is stripped for the
+    # same reason plus size: `cp -R` would otherwise copy a local `npm install` into CloudTAK.
+    rm -rf "$WEB_DEST/node_modules" "$WEB_DEST/test"
+    rm -f  "$WEB_DEST/vitest.config.ts" "$WEB_DEST/eslint.config.js" \
+           "$WEB_DEST/tsconfig.json" "$WEB_DEST/package.json" "$WEB_DEST/package-lock.json"
+
     echo "Installed web plugin: api/web/plugins/$INSTALL_DIR_NAME"
 fi
 echo
