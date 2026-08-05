@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import vue from '@vitejs/plugin-vue';
 import { fileURLToPath } from 'node:url';
 
 const hostStub = fileURLToPath(new URL('./test/stubs/cloudtakHost.ts', import.meta.url));
@@ -9,6 +10,10 @@ const hostStub = fileURLToPath(new URL('./test/stubs/cloudtakHost.ts', import.me
 // in the real build. Jest would need ts-jest + a Vue transformer + ESM flags to reach parity with
 // a toolchain the product does not otherwise use. (Appendix B §0.1 / C-14.)
 export default defineConfig({
+    // Compiles `<script setup>` SFCs so components can be mounted under test — without it, which
+    // logic lives in a .vue file and which lives in lib/ decides whether it is testable at all,
+    // and row-level rules like "share/remove only on on-device rows" live in the template.
+    plugins: [vue()],
     resolve: {
         alias: [
             // lib/cot.ts dynamically imports two modules that exist only inside a CloudTAK

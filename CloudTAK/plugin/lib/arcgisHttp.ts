@@ -16,6 +16,7 @@
 // portal's own deployment, and every request has a deadline.
 
 import { isTokenTrustedHost, redactUrl } from './arcgisUrl.ts';
+import { invalidateAccessToken } from './arcgisAuth.ts';
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -141,6 +142,12 @@ export async function arcgisJson<T>(baseUrl: string, opts: ArcGISRequestOptions 
         ...authHeaders(url, opts.token, opts.portalUrl),
     };
 
+    // Whether the token was actually ATTACHED, not merely supplied: authHeaders() drops it for an
+    // untrusted host, and public layers are fetched with no token at all. A 403 on a request that
+    // carried no token means "this layer is not public", not "your token is dead" — invalidating
+    // there would force a pointless refresh on every public-layer permission error.
+    const tokenAttached = 'Authorization' in headers;
+
     let body: BodyInit | undefined;
     if (opts.formData) {
         body = opts.formData;
@@ -163,6 +170,13 @@ export async function arcgisJson<T>(baseUrl: string, opts: ArcGISRequestOptions 
     }
 
     if (!res.ok) {
+        // ArcGIS normally reports an invalid token as a 200 + `error` envelope, handled below. A
+        // bearer token rejected by the portal's own gateway or an Enterprise reverse proxy never
+        // gets that far and comes back as a transport 401 — same meaning, so treat it the same.
+        if (tokenAttached && res.status === 401) {
+            invalidateAccessToken();
+            throw new ArcGISError('auth', res.statusText || 'HTTP 401', { url, status: res.status });
+        }
         throw new ArcGISError('http', res.statusText || `HTTP ${res.status}`, { url, status: res.status });
     }
 
@@ -184,7 +198,13 @@ export async function arcgisJson<T>(baseUrl: string, opts: ArcGISRequestOptions 
     if (envelope.error) {
         const code = typeof envelope.error.code === 'number' ? envelope.error.code : null;
         const message = envelope.error.message ?? 'unspecified ArcGIS error';
-        throw new ArcGISError(classify(code, message), message, {
+        const kind = classify(code, message);
+        // REACTIVE invalidation. The expiry clock in arcgisAuth is an estimate from `expires_in`;
+        // a 498/499 is ArcGIS saying that estimate is wrong. Drop the cached token here so the very
+        // next getToken() refreshes, instead of re-presenting the rejected token until our own clock
+        // catches up. Parity with ATAK's describeFailure() → authManager.invalidateAccessToken().
+        if (kind === 'auth' && tokenAttached) invalidateAccessToken();
+        throw new ArcGISError(kind, message, {
             url, status: res.status, code, details: envelope.error.details ?? [],
         });
     }

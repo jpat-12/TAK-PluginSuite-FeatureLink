@@ -30,7 +30,7 @@
                 <button class='fl-btn small' :disabled='refreshing' @click='doRefreshPrivate'>{{ refreshing ? 'Refreshing…' : 'Refresh' }}</button>
                 <div v-if='!store.browseLayers.length' class='fl-empty'>No layers found in your ArcGIS account</div>
                 <LayerRow
-                    v-for='l in store.browseLayers' :key='l.url' :layer='l'
+                    v-for='l in store.browseLayers' :key='l.url' :layer='l' :browse-section='true'
                     @toggle-visible='toggleLayerVisibility(l)'
                     @interval-change='seconds => setLayerRecurrence(l, seconds)'
                     @action='downloadLayer(l).catch(() => {})'

@@ -1,7 +1,8 @@
 <!-- Port of LayerListAdapter.java's per-row rendering: visibility toggle, interval editor
      (always committed in whole seconds, per the ATAK version's later UI simplification —
      recurrenceMillis() still tolerates legacy min/hr values loaded from older saved layers),
-     and a type-specific primary action (download/refresh for private, delete for public). -->
+     and a type-specific primary action (download/refresh for private, share for public). Share and
+     remove are on-device-only; see `browseSection` below. -->
 <template>
     <div class='fl-row'>
         <div class='fl-row-main'>
@@ -18,8 +19,8 @@
                 <input type='number' min='0' :value='layer.recurrenceInterval' @change='onIntervalChange' />s
             </label>
             <button v-if='layer.type === "private"' class='fl-icon-btn' :title='layer.lastSync ? "Refresh now" : "Download now"' @click='$emit("action")'>{{ layer.lastSync ? '↻' : '⬇' }}</button>
-            <button v-if='layer.type === "public"' class='fl-icon-btn' title='Share config' @click='$emit("share")'>📤</button>
-            <button class='fl-icon-btn danger' title='Remove' @click='onDeleteClick'>🗑</button>
+            <button v-if='onDevice && layer.type === "public"' class='fl-icon-btn' title='Share config' @click='$emit("share")'>📤</button>
+            <button v-if='onDevice' class='fl-icon-btn danger' title='Remove' @click='onDeleteClick'>🗑</button>
         </div>
     </div>
 </template>
@@ -29,8 +30,24 @@ import { computed } from 'vue';
 import { store } from '../lib/store.ts';
 import type { ArcGISLayer } from '../lib/types.ts';
 
-const props = defineProps<{ layer: ArcGISLayer }>();
+const props = withDefaults(defineProps<{
+    layer: ArcGISLayer;
+    /**
+     * True when this row belongs to a BROWSE section ("My ArcGIS Layers") — a listing of the
+     * operator's ArcGIS account rather than a layer held on this device.
+     */
+    browseSection?: boolean;
+}>(), { browseSection: false });
 const emit = defineEmits<{ toggleVisible: []; intervalChange: [seconds: number]; action: []; share: []; delete: [] }>();
+
+// Share and Remove apply only to on-device layers. On a browse row there is nothing to share —
+// the share config is built from downloaded features — and nothing to remove, since the row is
+// only a listing of the ArcGIS account; "Remove" there reads as "delete from ArcGIS".
+//
+// Gated on SECTION MEMBERSHIP, not on `lastSync`. A layer whose download FAILED still sits in an
+// on-device section with `lastSync === 0`; keying off the timestamp (as ATAK first did) stranded
+// exactly those rows with no way to remove them while the scheduler retried them on every tick.
+const onDevice = computed(() => !props.browseSection);
 
 const lastSyncLabel = computed(() => (props.layer.lastSync ? new Date(props.layer.lastSync).toLocaleTimeString() : 'never synced'));
 // Always-visible bubble: whether this layer has a display config (icons/colors/labels/popups)

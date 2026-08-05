@@ -158,6 +158,25 @@ export async function getToken(): Promise<string | null> {
     });
 }
 
+/**
+ * Marks the cached access token unusable without touching the refresh token, so the next
+ * {@link getToken} performs a silent refresh instead of handing back a token the server has
+ * already rejected.
+ *
+ * Called from arcgisHttp whenever ArcGIS answers 498/499/403 to a request that actually carried
+ * the token. `accessTokenExpiry` is only ever an ESTIMATE derived from `expires_in` at issue time;
+ * the server is the authority, and a 498/499 is the server telling us that estimate is wrong.
+ * Without this, revocation, a portal-side invalidation or device clock drift left the plugin
+ * re-presenting the same dead token until its own clock caught up — which is what made an ATAK
+ * session appear to "keep logging itself out". Port of ArcGISAuthManager.invalidateAccessToken().
+ */
+export function invalidateAccessToken(): void {
+    if (accessToken === null) return;
+    accessToken = null;
+    accessTokenExpiry = 0;
+    console.debug('[featurelink] access token invalidated by server rejection — will refresh on next use');
+}
+
 /** True when a token acquisition would need user interaction. Distinct from isAuthenticated(), which only reports UI state (§10.7). */
 export function isSessionValid(): boolean {
     if (accessToken && Date.now() + EXPIRY_SKEW_MS < accessTokenExpiry) return true;

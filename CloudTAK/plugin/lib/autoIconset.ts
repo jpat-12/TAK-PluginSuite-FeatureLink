@@ -92,48 +92,113 @@ interface EsriRendererJson {
 
 interface PmsEntry { value: string | null; rawLabel: string | null; imageData: string; isDefault: boolean }
 
-function pmsFrom(symbol: EsriPmsSymbol | undefined, value: string | null, rawLabel: string | null, isDefault: boolean): PmsEntry | null {
-    if (!symbol || symbol.type !== 'esriPMS' || !symbol.imageData) return null;
+/**
+ * Why a renderer produced the icon count it did. Without this the far more common
+ * found-only-the-default case was completely silent: a layer declaring 10 symbols of which 3 were
+ * extractable rendered as one repeated marker with nothing anywhere saying so, and diagnosing it
+ * took a device, a pulled log and a source read. Port of AutoIconset.java's Extraction counters.
+ */
+export interface ExtractionDiagnostics {
+    /** Renderer `type` as declared ('simple' when absent). '' when there is no renderer at all. */
+    rendererType: string;
+    /** Per-value / per-break symbols the renderer declared, excluding defaultSymbol. */
+    declared: number;
+    /** Symbols that yielded a usable icon (including the default symbol, if it did). */
+    extracted: number;
+    /** Whether `extracted` includes a usable defaultSymbol — which is why it can exceed `declared`. */
+    defaultExtracted: boolean;
+    /** Distinct symbol `type` values that were not usable, in first-seen order. */
+    skipped: string[];
+}
+
+/**
+ * @param skipped records why a symbol was not usable. A symbol is usable only if it is an
+ *                `esriPMS` carrying embedded `imageData`. Symbols authored in the modern ArcGIS
+ *                Map Viewer are typically `CIMSymbolReference` and are NOT handled here — that is
+ *                the single most common reason a richly-styled layer yields only Other.png.
+ */
+function pmsFrom(symbol: EsriPmsSymbol | undefined, value: string | null, rawLabel: string | null, isDefault: boolean, skipped?: Set<string>): PmsEntry | null {
+    if (!symbol) { skipped?.add('(absent)'); return null; }
+    if (symbol.type !== 'esriPMS') { skipped?.add(symbol.type || '(untyped)'); return null; }
+    if (!symbol.imageData) { skipped?.add('esriPMS(no imageData)'); return null; }
     return { value, rawLabel, imageData: symbol.imageData, isDefault };
+}
+
+/**
+ * One line explaining the extraction. Debug on the clean path; a warning whenever declared symbols
+ * were dropped, because that outcome is invisible to the operator otherwise — the layer simply
+ * renders every feature with the same default marker.
+ */
+function logExtraction(canonicalUrl: string, d: ExtractionDiagnostics): void {
+    // `declared` counts per-value/per-break symbols only, so a renderer whose defaultSymbol was
+    // also usable legitimately reports extracted > declared — said out loud so the line does not
+    // read as a miscount to whoever finds it in a console dump.
+    const plusDefault = d.defaultExtracted ? ' (includes the default symbol)' : '';
+    const head = `renderer '${d.rendererType}' for ${canonicalUrl}: declared=${d.declared} extracted=${d.extracted}${plusDefault}`;
+    if (!d.skipped.length) { console.debug(`[featurelink] ${head}`); return; }
+    let why = '';
+    if (d.skipped.includes('esriSMS')) {
+        why += ' esriSMS is a geometric marker (shape + colour, no embedded image), so there are no'
+            + ' icon bytes to extract — those values are styled as shapes instead of an iconset.';
+    }
+    if (d.skipped.includes('CIMSymbolReference')) {
+        why += ' CIMSymbolReference is the modern ArcGIS Map Viewer encoding and is not parsed by this extractor.';
+    }
+    console.warn(`[featurelink] ${head} — SKIPPED symbol types [${d.skipped.join(', ')}].`
+        + ` Only esriPMS with embedded imageData yields an icon.${why}`
+        + ' Values using a skipped type fall back to the default marker.');
 }
 
 // §3: driving field + ordered esriPMS entries. esriSMS (colored shape) symbols are skipped —
 // those are the existing color/shape display-config path's job. Renderer array order is
 // preserved (needed for deterministic §5.3 collision suffixes).
-function extractPmsEntries(renderer: EsriRendererJson | undefined, fieldOverride: string | undefined): { field: string; single: boolean; entries: PmsEntry[] } {
+export function extractPmsEntries(renderer: EsriRendererJson | undefined, fieldOverride: string | undefined): { field: string; single: boolean; entries: PmsEntry[]; diagnostics: ExtractionDiagnostics } {
     const entries: PmsEntry[] = [];
     let field = fieldOverride || '';
     let single = false;
-    if (!renderer) return { field, single, entries };
+    const skipped = new Set<string>();
+    let defaultExtracted = false;
+    const diag = (rendererType: string, declared: number): ExtractionDiagnostics =>
+        ({ rendererType, declared, extracted: entries.length, defaultExtracted, skipped: [...skipped] });
+
+    if (!renderer) return { field, single, entries, diagnostics: diag('', 0) };
 
     const type = renderer.type || 'simple';
     const pushDefault = (): void => {
-        const d = pmsFrom(renderer.defaultSymbol, null, renderer.defaultLabel || null, !renderer.defaultLabel);
-        if (d) entries.push(d);
+        // A renderer that declares no defaultSymbol at all is not a skip — only an unusable one is.
+        if (!renderer.defaultSymbol) return;
+        const d = pmsFrom(renderer.defaultSymbol, null, renderer.defaultLabel || null, !renderer.defaultLabel, skipped);
+        if (d) { entries.push(d); defaultExtracted = true; }
     };
 
+    let declared: number;
     if (type === 'uniqueValue' || type === 'uniqueValueRenderer') {
         field = renderer.field1 || renderer.field || '';
-        for (const info of renderer.uniqueValueInfos ?? []) {
-            const e = pmsFrom(info.symbol, info.value ?? '', info.label ?? info.value ?? '', false);
+        const infos = renderer.uniqueValueInfos ?? [];
+        declared = infos.length;
+        for (const info of infos) {
+            const e = pmsFrom(info.symbol, info.value ?? '', info.label ?? info.value ?? '', false, skipped);
             if (e) entries.push(e);
         }
         pushDefault();
     } else if (type === 'classBreaks' || type === 'classBreaksRenderer') {
         field = renderer.field || '';
-        for (const info of renderer.classBreakInfos ?? []) {
-            const e = pmsFrom(info.symbol, null, info.label ?? '', false);
+        const infos = renderer.classBreakInfos ?? [];
+        declared = infos.length;
+        for (const info of infos) {
+            const e = pmsFrom(info.symbol, null, info.label ?? '', false, skipped);
             if (e) entries.push(e);
         }
         pushDefault();
     } else {
+        declared = 1;
         const label = renderer.label || '';
-        const e = pmsFrom(renderer.symbol, null, label || null, !label);
+        const e = pmsFrom(renderer.symbol, null, label || null, !label, skipped);
         if (e) { entries.push(e); single = true; }
     }
 
     if (fieldOverride) field = fieldOverride;
-    return { field, single, entries };
+    return { field, single, entries, diagnostics: diag(type, declared) };
 }
 
 // ── CloudTAK iconset registration (the fragile, unofficial part) ───────────────
@@ -232,6 +297,8 @@ export interface AutoIconsetResult {
     displayConfig: DisplayConfig;
     /** Non-fatal problems (icons that failed to upload, symbols that failed to decode). */
     warnings: string[];
+    /** Declared vs extracted vs skipped, for diagnosing "why did my styled layer render flat". */
+    diagnostics: ExtractionDiagnostics;
 }
 
 export interface AutoIconsetOptions {
@@ -281,7 +348,10 @@ export async function generateAutoIconset(
     }
     if (!layerName) layerName = 'Layer';
 
-    const { field: iconField, single, entries } = extractPmsEntries(renderer ?? undefined, fieldOverride);
+    const { field: iconField, single, entries, diagnostics } = extractPmsEntries(renderer ?? undefined, fieldOverride);
+    // Logged for EVERY extraction, not just the zero-icon case: "declared 10, extracted 3" is the
+    // outcome that actually reaches the field, and it used to be entirely silent.
+    logExtraction(canonicalUrl, diagnostics);
     const shapeResult = extractAutoSymbology(renderer ?? undefined, fieldOverride);
     const hasShapeStyle = !isAutoSymbologyEmpty(shapeResult);
     if (!entries.length && !hasShapeStyle) return null;
@@ -334,7 +404,7 @@ export async function generateAutoIconset(
 
     const field = entries.length ? iconField : shapeResult.field;
     return {
-        uid, group, iconCount, field, warnings,
+        uid, group, iconCount, field, warnings, diagnostics,
         displayConfig: buildAutoDisplayConfig(canonicalUrl, field, singleIconPath, pathByValue, shapeResult),
     };
 }
