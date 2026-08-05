@@ -1221,9 +1221,14 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      * it behaves like any other on-device layer in that section instead of staying in the browse
      * list. */
     private void moveMyArcGisLayerOnDownload(ArcGISLayer layer) {
+        // Remember which browse section this came from, so removing the on-device copy later can
+        // put the row back where the operator found it instead of making the layer disappear
+        // from the plugin entirely.
         if (sharedWithMeLayers.remove(layer)) {
+            layer.browseOrigin = "shared";
             saveSharedWithMeLayers();
         } else {
+            layer.browseOrigin = "mine";
             privateLayers.remove(layer);
             savePrivateLayers();
         }
@@ -1386,14 +1391,40 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      * so it doesn't need that same tracking. */
     private void onLayerDelete(ArcGISLayer layer) {
         boolean isMyArcGis = privateLayers.contains(layer) || sharedWithMeLayers.contains(layer);
+        // A downloaded layer that came from the operator's ArcGIS account is not deleted, it is
+        // "un-downloaded": the on-device copy and its markers go, and the row returns to the browse
+        // list ready to download again. Only a layer with nowhere to return to is excluded.
+        boolean returnsToBrowse = !isMyArcGis && layer.isFromBrowseList();
         new AlertDialog.Builder(getMapView().getContext())
-                .setTitle("Remove Layer?")
+                .setTitle(returnsToBrowse ? "Remove Downloaded Layer?" : "Remove Layer?")
                 .setMessage("Remove \"" + layer.name + "\" from your layer list here? "
                         + (isMyArcGis ? "It stays in your ArcGIS account — this only hides it on this device. "
                                       : "")
+                        + (returnsToBrowse
+                                ? "It stays in your ArcGIS account and returns to "
+                                  + ("shared".equals(layer.browseOrigin)
+                                          ? "\"Shared with me\"" : "\"My ArcGIS Layers\"")
+                                  + " so you can download it again. "
+                                : "")
                         + "Any markers it added to the map will also be removed.")
                 .setPositiveButton("Remove", (d, w) -> {
-                    if (sharedWithMeLayers.remove(layer)) {
+                    if (returnsToBrowse) {
+                        String origin = layer.browseOrigin;
+                        boolean wasPublic = publicLayers.remove(layer);
+                        if (wasPublic) savePublicLayers();
+                        else { sharedPrivateLayers.remove(layer); saveSharedPrivateLayers(); }
+                        // Reset before re-listing so the row reads as "available to download"
+                        // again: no sync time, no feature count, and no share/remove buttons.
+                        layer.resetToBrowseState();
+                        layer.type = "private";
+                        if ("shared".equals(origin)) {
+                            sharedWithMeLayers.add(layer);
+                            saveSharedWithMeLayers();
+                        } else {
+                            privateLayers.add(layer);
+                            savePrivateLayers();
+                        }
+                    } else if (sharedWithMeLayers.remove(layer)) {
                         saveSharedWithMeLayers();
                         addExcludedPrivateUrl(layer.url);
                     } else if (isMyArcGis) {
@@ -1407,7 +1438,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     removeLayerItems(layer);
                     layerDisplayConfigs.remove(layer.url);
                     saveDisplayConfigs();
-                    if (isMyArcGis) refreshPrivateLayers(); else refreshSharedPrivateLayers();
+                    if (returnsToBrowse) {
+                        refreshLayersList();     // both the source and destination sections changed
+                    } else if (isMyArcGis) {
+                        refreshPrivateLayers();
+                    } else {
+                        refreshSharedPrivateLayers();
+                    }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1474,6 +1511,14 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      *              returned an auth error and silently produced no symbology at all.
      */
     private DisplayConfig resolveSymbology(String layerUrl, String token) {
+        return resolveSymbology(layerUrl, token, null);
+    }
+
+    /**
+     * @param itemId portal item ID when known, so styling applied on the item's Visualization tab
+     *               can be found. See {@link ArcGISRestClient#fetchItemRenderer}.
+     */
+    private DisplayConfig resolveSymbology(String layerUrl, String token, String itemId) {
         JSONObject renderer = null;
         String canonicalUrl = AutoIconset.canonicalize(layerUrl);
         if (canonicalUrl == null) {
@@ -1490,6 +1535,23 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             Log.w(TAG, "renderer fetch failed for " + layerUrl + " — layer will render unstyled", e);
             return null;
         }
+
+        // An item-level override is what the operator actually sees in ArcGIS Online, so it wins
+        // over the service's published renderer. Styling saved on the item's Visualization tab
+        // never touches the service, so without this a layer styled by unique value still reports
+        // a single-symbol 'simple' renderer here and renders as one repeated marker.
+        if (itemId != null && !itemId.isEmpty()) {
+            String portal = authManager != null ? authManager.getPortalUrl() : null;
+            int subLayer = AutoIconset.layerIndexOf(canonicalUrl);
+            JSONObject override = restClient.fetchItemRenderer(portal, itemId, subLayer, token);
+            if (override != null) {
+                Log.d(TAG, "resolveSymbology: using item-level renderer override from item "
+                        + itemId + " (service renderer was '"
+                        + (renderer != null ? renderer.optString("type", "?") : "absent") + "')");
+                renderer = override;
+            }
+        }
+
         if (renderer == null) {
             Log.d(TAG, "resolveSymbology: layer declares no renderer — " + layerUrl);
             return null;
@@ -1529,7 +1591,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         DisplayConfig existing = layerDisplayConfigs.get(layer.url);
         if (!needsSymbologyResolution(existing)) return existing;
 
-        DisplayConfig resolved = resolveSymbology(layer.url, token);
+        DisplayConfig resolved = resolveSymbology(layer.url, token, layer.itemId);
         if (resolved == null) return existing;
 
         Log.d(TAG, "ensureSymbology: resolved symbology for " + layer.url
@@ -1845,6 +1907,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         if (e instanceof ArcGISRestClient.ArcGisException) {
             ArcGISRestClient.ArcGisException ae = (ArcGISRestClient.ArcGisException) e;
             if (ae.isAuthFailure()) {
+                // The server is the authority on token validity; our expiry clock is only an
+                // estimate from expires_in. A 498/499 means that estimate is wrong, so drop the
+                // cached token and let the next call refresh silently. Without this the plugin
+                // kept presenting the same rejected token until its own clock caught up, which
+                // is what made the session appear to log itself out repeatedly.
+                if (authManager != null) authManager.invalidateAccessToken();
                 return "Your ArcGIS session is no longer valid (error " + ae.code + "). "
                         + "Open the Account page and sign in again.";
             }

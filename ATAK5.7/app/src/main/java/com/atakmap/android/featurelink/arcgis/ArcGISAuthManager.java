@@ -52,6 +52,13 @@ public class ArcGISAuthManager {
      * the operator out (Appendix A §5). */
     private final Object refreshLock = new Object();
 
+    /**
+     * Renew this far ahead of the advertised expiry rather than waiting for it to lapse. ArcGIS
+     * access tokens are typically issued for 30 minutes, so five minutes is a generous margin that
+     * still leaves the overwhelming majority of the token's life in use.
+     */
+    private static final long EXPIRY_MARGIN_MS = 5 * 60 * 1000L;
+
     public ArcGISAuthManager(SharedPreferences prefs) {
         this.prefs = prefs;
         this.secureStore = new SecureTokenStore(prefs);
@@ -170,8 +177,19 @@ public class ArcGISAuthManager {
                         .putLong(PREF_TOKEN_EXPIRY, tokenExpiry)
                         .remove(PREF_CODE_VERIFIER)
                         .apply();
-                secureStore.put(PREF_REFRESH_TOKEN, tokens.refreshToken);
-                Log.d(TAG, "OAuth authenticated as: " + tokens.username);
+                // Guarded: put(null) *removes* the entry, so an exchange that returned no refresh
+                // token would silently wipe a good one and leave no trace. Log either way — whether
+                // the portal issues refresh tokens at all is the first thing worth knowing when a
+                // session will not persist.
+                if (tokens.refreshToken != null && !tokens.refreshToken.isEmpty()) {
+                    secureStore.put(PREF_REFRESH_TOKEN, tokens.refreshToken);
+                } else {
+                    Log.w(TAG, "token exchange returned NO refresh_token — the session cannot be"
+                            + " renewed silently and will require re-login when it expires");
+                }
+                Log.d(TAG, "OAuth authenticated as: " + tokens.username
+                        + " (expires_in=" + tokens.expiresInSeconds + "s, refreshToken="
+                        + (tokens.refreshToken != null && !tokens.refreshToken.isEmpty()) + ")");
                 mainHandler.post(onSuccess);
             } catch (Exception e) {
                 Log.e(TAG, "handleAuthCode failed", e);
@@ -188,16 +206,23 @@ public class ArcGISAuthManager {
      */
     public String getToken() {
         String current = accessToken;
-        if (current != null && System.currentTimeMillis() < tokenExpiry) {
+        if (current != null && !isExpiringSoon()) {
             return current;
         }
         synchronized (refreshLock) {
             // Re-check inside the lock: another thread may have just refreshed.
             current = accessToken;
-            if (current != null && System.currentTimeMillis() < tokenExpiry) return current;
+            if (current != null && !isExpiringSoon()) return current;
 
             String refreshToken = secureStore.get(PREF_REFRESH_TOKEN);
-            if (refreshToken == null || refreshToken.isEmpty()) return null;
+            if (refreshToken == null || refreshToken.isEmpty()) {
+                // Previously returned null silently, which surfaced to the operator as a bare
+                // "session no longer valid" with nothing in the log to say why. If this fires,
+                // the portal never issued a refresh token (or it was discarded) and no amount of
+                // retrying will help — only a fresh sign-in will.
+                Log.w(TAG, "no refresh token stored — cannot refresh silently, re-login required");
+                return null;
+            }
             String portal = prefs.getString(PREF_PORTAL_URL, "https://www.arcgis.com");
             try {
                 OAuthHelper.OAuthTokens tokens =
@@ -221,6 +246,43 @@ public class ArcGISAuthManager {
                 return null;
             }
         }
+    }
+
+    /**
+     * True when the cached access token is gone, already expired, or close enough to expiry that a
+     * request issued now could arrive after the server considers it dead.
+     *
+     * <p>The margin matters: previously the check was a bare {@code now < tokenExpiry}, so the
+     * token was only renewed <em>after</em> it had already lapsed. Any request in flight near the
+     * boundary, any device clock drift, and any portal that expires a token marginally earlier than
+     * the {@code expires_in} it advertised all produced a 499 that nothing recovered from.
+     */
+    private boolean isExpiringSoon() {
+        return System.currentTimeMillis() + EXPIRY_MARGIN_MS >= tokenExpiry;
+    }
+
+    /**
+     * Marks the cached access token unusable without touching the refresh token, so the next
+     * {@link #getToken()} performs a silent refresh instead of handing back a token the server has
+     * already rejected.
+     *
+     * <p>Call this whenever ArcGIS answers 498/499. The expiry clock is only ever an
+     * <em>estimate</em> derived from {@code expires_in} at issue time; the server is the authority,
+     * and a 499 is the server telling us our estimate is wrong. Without this the plugin would keep
+     * presenting the same dead token until its own clock caught up, which is what made the session
+     * look like it "kept logging out".
+     */
+    public void invalidateAccessToken() {
+        synchronized (refreshLock) {
+            accessToken = null;
+            tokenExpiry = 0;
+        }
+        Log.d(TAG, "access token invalidated by server rejection — will refresh on next use");
+    }
+
+    /** Portal this session is signed in to, defaulting to ArcGIS Online. */
+    public String getPortalUrl() {
+        return prefs.getString(PREF_PORTAL_URL, "https://www.arcgis.com");
     }
 
     public boolean isAuthenticated() {

@@ -36,6 +36,49 @@ public class ArcGISLayer {
      * "layer 3 of 5" and so a service root can be re-enumerated later. -1 = not yet resolved.
      */
     public int layerId = -1;
+
+    /**
+     * Portal item ID, when this layer was discovered through portal search. Empty for a layer added
+     * by pasting a raw FeatureServer URL, which has no item behind it.
+     *
+     * <p>Needed because a layer's symbology can live in <b>either</b> of two documents. Styling
+     * applied on the item's Visualization tab in ArcGIS Online is saved as an item-level override
+     * at {@code /sharing/rest/content/items/{itemId}/data}, and does <b>not</b> alter the service's
+     * own {@code drawingInfo}. Reading only the service therefore returns whatever the layer was
+     * originally published with — typically one default symbol — and the operator sees a single
+     * repeated marker in place of the styling they configured.
+     */
+    public String itemId = "";
+
+    /**
+     * Which browse section this layer came from when it was downloaded, so removing it can send it
+     * back there rather than making it vanish.
+     *
+     * <p>{@code "mine"} for "My ArcGIS Layers", {@code "shared"} for "Shared with me", empty for a
+     * layer that never came from the browse list (a pasted URL, or one received in a Mission
+     * Package). Only a layer with a non-empty value is restored on removal; anything else is
+     * genuinely gone, because there is no list for it to return to.
+     */
+    public String browseOrigin = "";
+
+    /** True when this layer originated in the operator's own ArcGIS account browse list. */
+    public boolean isFromBrowseList() {
+        return browseOrigin != null && !browseOrigin.isEmpty();
+    }
+
+    /**
+     * Returns this layer to its pre-download state so it reads as "available to download" again in
+     * the browse list. Keeps identity ({@code name}/{@code url}/{@code itemId}) and drops
+     * everything that only describes an on-device copy.
+     */
+    public void resetToBrowseState() {
+        lastSync = 0;
+        featureCount = 0;
+        downloadEnabled = false;
+        lastDownloadTruncated = false;
+        visible = true;
+        browseOrigin = "";
+    }
     /** The service's advertised {@code maxRecordCount} (C-06). 0 = unknown. Surfaced in the UI
      * so an operator can tell a genuinely small layer from a paginated one. */
     public int maxRecordCount = 0;
@@ -116,6 +159,8 @@ public class ArcGISLayer {
         obj.put("visible",            visible);
         obj.put("layerId",            layerId);
         obj.put("maxRecordCount",     maxRecordCount);
+        obj.put("itemId",             itemId);
+        obj.put("browseOrigin",       browseOrigin);
         return obj;
     }
 
@@ -134,6 +179,8 @@ public class ArcGISLayer {
         layer.visible         = obj.optBoolean("visible", true);
         layer.layerId         = obj.optInt("layerId", -1);
         layer.maxRecordCount  = obj.optInt("maxRecordCount", 0);
+        layer.itemId          = obj.optString("itemId", "");
+        layer.browseOrigin    = obj.optString("browseOrigin", "");
 
         if (obj.has("recurrenceInterval")) {
             layer.recurrenceInterval = obj.optInt("recurrenceInterval", 0);

@@ -152,6 +152,7 @@ public class ArcGISRestClient {
                 // Portal item "access": "public" (shared to Everyone), "org", or "private" —
                 // used to decide which on-device section this layer lands in once downloaded.
                 layer.access = item.optString("access", "private");
+                layer.itemId = item.optString("id", "");
                 layers.add(layer);
             }
         } catch (Exception e) {
@@ -211,6 +212,7 @@ public class ArcGISRestClient {
                     ArcGISLayer layer = new ArcGISLayer(name, url, "private");
                     layer.access = item.optString("access", "org");
                     layer.sharedBy = owner;
+                    layer.itemId = item.optString("id", "");
                     byId.put(id, layer);
                 }
             }
@@ -359,6 +361,48 @@ public class ArcGISRestClient {
      * {@code drawingInfo.renderer}. Blocking — call from a background thread. Throws
      * {@link ArcGisException} for both transport failures and ArcGIS error bodies (C-22).
      */
+    /**
+     * Fetches the renderer an operator configured on the portal item's <b>Visualization</b> tab.
+     *
+     * <p>ArcGIS stores this as an item-level override at
+     * {@code /sharing/rest/content/items/{itemId}/data}, under
+     * {@code layers[].layerDefinition.drawingInfo.renderer}. It is a <b>different document</b> from
+     * the service's own {@code {serviceUrl}/{layerId}?f=json}, and saving it does not modify the
+     * service. A layer published with one default symbol and then styled by unique value in the
+     * web UI therefore still reports a {@code simple} renderer at the service endpoint, which is
+     * why such layers rendered as a single repeated marker.
+     *
+     * @param layerId sublayer index to match within {@code layers[]}; {@code -1} accepts the first.
+     * @return the override renderer, or {@code null} if the item has no data, no layer override, or
+     *         cannot be read. Callers fall back to the service renderer.
+     */
+    public JSONObject fetchItemRenderer(String portalUrl, String itemId, int layerId, String token) {
+        if (itemId == null || itemId.isEmpty()) return null;
+        String base = portalUrl == null || portalUrl.isEmpty() ? "https://www.arcgis.com" : portalUrl;
+        String url = base.replaceAll("/+$", "") + "/sharing/rest/content/items/"
+                + itemId + "/data?f=json";
+        try {
+            JSONObject data = fetchJson(url, token);
+            if (data == null) return null;
+            JSONArray layers = data.optJSONArray("layers");
+            if (layers == null || layers.length() == 0) return null;
+            for (int i = 0; i < layers.length(); i++) {
+                JSONObject l = layers.optJSONObject(i);
+                if (l == null) continue;
+                if (layerId >= 0 && l.has("id") && l.optInt("id", -1) != layerId) continue;
+                JSONObject def = l.optJSONObject("layerDefinition");
+                JSONObject di = def != null ? def.optJSONObject("drawingInfo") : null;
+                JSONObject renderer = di != null ? di.optJSONObject("renderer") : null;
+                if (renderer != null) return renderer;
+            }
+        } catch (Exception e) {
+            // An item with no /data (or no read access to it) is entirely normal — the caller
+            // simply uses the service renderer. Debug, not warn.
+            Log.d(TAG, "no item-level renderer for item " + itemId + ": " + e.getMessage());
+        }
+        return null;
+    }
+
     public JSONObject fetchJson(String url, String token) throws Exception {
         if (url == null || url.isEmpty()) return null;
         return parseChecked(httpGet(appendQuery(url, "f=json"), token));

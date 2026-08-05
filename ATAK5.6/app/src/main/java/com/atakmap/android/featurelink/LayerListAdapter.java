@@ -110,7 +110,13 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
         featureCountBadge.setText(layer.featureCount < 0 ? "error"
                 : layer.featureCount + (layer.featureCount == 1 ? " feature" : " features"));
 
-        shareBtn.setVisibility(View.VISIBLE);
+        // Share and remove only apply to a layer that actually exists on this device. On a browse
+        // row ("My ArcGIS Layers"/"Shared with me") there is nothing to share — the Mission Package
+        // is built from downloaded features — and nothing to remove, since the row is just a
+        // listing of the operator's ArcGIS account. Showing them there offered two actions that
+        // could not do anything useful, and "remove" in particular read as "delete from ArcGIS".
+        boolean onDevice = layer.lastSync > 0;
+        shareBtn.setVisibility(onDevice ? View.VISIBLE : View.GONE);
         shareBtn.setOnClickListener(v -> {
             if (shareListener != null) shareListener.onShare(layer);
         });
@@ -168,7 +174,7 @@ public class LayerListAdapter extends ArrayAdapter<ArcGISLayer> {
             actionBtn.setOnClickListener(v -> {
                 if (listener != null) listener.onAction(layer);
             });
-            deleteBtn.setVisibility(View.VISIBLE);
+            deleteBtn.setVisibility(onDevice ? View.VISIBLE : View.GONE);
             deleteBtn.setOnClickListener(v -> {
                 if (deleteListener != null) deleteListener.onDelete(layer);
             });
