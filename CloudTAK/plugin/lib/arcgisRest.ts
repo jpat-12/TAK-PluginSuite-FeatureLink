@@ -55,6 +55,10 @@ interface RawLayerMeta {
     drawingInfo?: { renderer?: EsriRendererJson };
 }
 
+interface ItemDataJson {
+    layers?: { id?: number; layerDefinition?: { drawingInfo?: { renderer?: EsriRendererJson } } }[];
+}
+
 interface CacheEntry { at: number; meta: LayerMeta }
 
 const META_TTL_MS = 5 * 60_000;
@@ -88,6 +92,42 @@ export async function fetchLayerMeta(serviceUrl: string, token: string | null): 
     };
     metaCache.set(url, { at: Date.now(), meta });
     return meta;
+}
+
+/**
+ * The renderer an operator configured on the portal item's **Visualization** tab.
+ *
+ * ArcGIS stores this as an item-level override at `/sharing/rest/content/items/{itemId}/data`,
+ * under `layers[].layerDefinition.drawingInfo.renderer`. It is a DIFFERENT document from the
+ * service's own `{serviceUrl}/{layerId}?f=json`, and saving it does not modify the service. A layer
+ * published with one default symbol and then styled by unique value in the web UI therefore still
+ * reports a `simple` renderer at the service endpoint, which is why such layers rendered as a
+ * single repeated marker.
+ *
+ * Returns null when the item has no data, no layer override, or cannot be read — the caller falls
+ * back to the service renderer. Never throws: an item without an override is entirely normal.
+ */
+export async function fetchItemRenderer(
+    itemId: string, layerId: number, token: string | null,
+): Promise<EsriRendererJson | null> {
+    if (!itemId) return null;
+    const portal = normalizePortalUrl(getPortalUrl());
+    try {
+        const data = await arcgisJson<ItemDataJson>(
+            `${portal}/sharing/rest/content/items/${encodeURIComponent(itemId)}/data`,
+            { params: { f: 'json' }, token, portalUrl: portal },
+        );
+        for (const l of data.layers ?? []) {
+            // One item can override several sublayers independently, so match the index when the
+            // entry declares one; an entry without an id is accepted as the only candidate.
+            if (layerId >= 0 && typeof l.id === 'number' && l.id !== layerId) continue;
+            const renderer = l.layerDefinition?.drawingInfo?.renderer;
+            if (renderer) return renderer;
+        }
+    } catch (e) {
+        console.debug('[featurelink] no item-level renderer for item', itemId, e);
+    }
+    return null;
 }
 
 // ── Sublayer enumeration (C-08) ───────────────────────────────────────────────
@@ -148,7 +188,7 @@ function quoteSearchTerm(v: string): string {
 }
 
 interface SearchResponse {
-    results?: { title?: string; url?: string; access?: string }[];
+    results?: { title?: string; url?: string; access?: string; id?: string }[];
     nextStart?: number;
     total?: number;
 }
@@ -167,7 +207,7 @@ export async function searchUserLayers(portalUrl: string, token: string, usernam
     const portal = normalizePortalUrl(portalUrl);
     const q = `type:"Feature Service" AND owner:${quoteSearchTerm(username)}`;
 
-    const items: { title: string; url: string; access: LayerAccess }[] = [];
+    const items: { title: string; url: string; access: LayerAccess; id: string }[] = [];
     let start = 1;
     for (let page = 0; page < SEARCH_MAX_PAGES; page++) {
         const json = await arcgisJson<SearchResponse>(`${portal}/sharing/rest/search`, {
@@ -180,7 +220,7 @@ export async function searchUserLayers(portalUrl: string, token: string, usernam
             // which on-device section this layer lands in once downloaded.
             const access = item.access === 'public' || item.access === 'org' || item.access === 'private'
                 ? item.access : 'private';
-            items.push({ title: item.title ?? 'Unnamed', url: item.url, access });
+            items.push({ title: item.title ?? 'Unnamed', url: item.url, access, id: item.id ?? '' });
         }
         const next = json.nextStart ?? -1;
         if (next <= 0) break;
@@ -203,7 +243,9 @@ export async function searchUserLayers(portalUrl: string, token: string, usernam
         }));
         for (const { item, subs } of resolved) {
             if (subs.length === 0) {
-                out.push(newLayer(item.title, layerQueryUrl(item.url), 'private', item.access, true));
+                const only = newLayer(item.title, layerQueryUrl(item.url), 'private', item.access, true);
+                only.itemId = item.id;
+                out.push(only);
                 continue;
             }
             for (const sub of subs) {
@@ -211,6 +253,7 @@ export async function searchUserLayers(portalUrl: string, token: string, usernam
                 // indistinguishable; a single-layer service keeps the portal item's title.
                 const name = subs.length > 1 && sub.name ? `${item.title} — ${sub.name}` : item.title;
                 const layer = newLayer(name, sub.url, 'private', item.access, true);
+                layer.itemId = item.id;
                 layer.layerId = sub.id;
                 layer.geometryType = sub.geometryType;
                 out.push(layer);

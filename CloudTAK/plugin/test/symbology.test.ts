@@ -206,3 +206,71 @@ describe('C-08 — a multi-sublayer service produces one row per sublayer', () =
         expect(store.store.publicLayers.map(l => l.layerId)).toEqual([0, 1]);
     });
 });
+
+// ── Item-level renderer override ────────────────────────────────────────────────
+//
+// Styling applied on a portal item's Visualization tab is saved to
+// /sharing/rest/content/items/{id}/data, NOT to the service's drawingInfo. Reading only the
+// service returns the layer's published default — typically ONE symbol — so a uniqueValue-styled
+// layer rendered as a single repeated marker. Field-confirmed on ATAK against a live ArcGIS org:
+// the service reported simple/declared=1 while the item reported uniqueValue/declared=10.
+describe('item-level renderer override', () => {
+    let fake: FakeArcGIS;
+    beforeEach(() => { fake = new FakeArcGIS(); fake.install(); });
+    afterEach(() => { globalThis.fetch = realFetch; });
+
+    // The service deliberately advertises a single-symbol renderer, exactly like a layer that was
+    // published plain and then styled in the web UI.
+    const SERVICE_SIMPLE = { type: 'simple', symbol: { type: 'esriPMS', imageData: PNG_1PX } };
+
+    function routeItemData(itemId: string, renderer: unknown): void {
+        fake.route((u) => u.pathname.includes(`/sharing/rest/content/items/${itemId}/data`)
+            ? { body: { layers: [{ id: 0, layerDefinition: { drawingInfo: { renderer } } }] } }
+            : null);
+    }
+
+    it('prefers the item override over the service renderer', async () => {
+        const { store, layerActions, types } = await freshModules();
+        routeLayer(fake, SERVICE_SIMPLE);
+        routeItemData('abc123', PMS_RENDERER);
+
+        const layer = types.newLayer('Styled', LAYER_0, 'private', 'private', true);
+        layer.itemId = 'abc123';
+        await layerActions.downloadLayer(layer);
+
+        const config = store.store.displayConfigs[layer.url];
+        // Two distinct per-value icon entries prove the uniqueValue override won. The service's
+        // single-symbol renderer could only ever have produced one, with no driving field.
+        const perValue = config?.sym?.uv ?? config?.sym?.vs ?? [];
+        expect(perValue.length).toBeGreaterThan(1);
+        expect(config?.sym?.f).toBe('CATEGORY');
+    });
+
+    it('falls back to the service renderer when the item has no override', async () => {
+        const { store, layerActions, types } = await freshModules();
+        routeLayer(fake, PMS_RENDERER);
+        fake.route((u) => u.pathname.includes('/sharing/rest/content/items/')
+            ? { body: { layers: [] } } : null);
+
+        const layer = types.newLayer('Plain', LAYER_0, 'private', 'private', true);
+        layer.itemId = 'noOverride';
+        await layerActions.downloadLayer(layer);
+
+        expect(store.store.displayConfigs[layer.url]?.sym).toBeTruthy();
+    });
+
+    it('does not request item data for a layer with no itemId (pasted URL)', async () => {
+        const { layerActions, types } = await freshModules();
+        routeLayer(fake, PMS_RENDERER);
+        let itemDataRequested = false;
+        fake.route((u) => {
+            if (u.pathname.includes('/sharing/rest/content/items/')) itemDataRequested = true;
+            return null;
+        });
+
+        const layer = types.newLayer('Pasted', LAYER_0, 'private', 'private', false);
+        await layerActions.downloadLayer(layer);
+
+        expect(itemDataRequested).toBe(false);
+    });
+});

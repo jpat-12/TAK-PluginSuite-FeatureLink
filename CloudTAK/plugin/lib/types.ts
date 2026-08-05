@@ -19,6 +19,17 @@ export interface ArcGISLayer {
     // share. Lets removePrivateLayer/removePublicLayer send it back to the browse list on
     // removal instead of just discarding it, since it's still the user's own ArcGIS item.
     ownedByMe: boolean;
+    // Portal item ID, when this layer was discovered through portal search. Empty for a layer
+    // added by pasting a raw FeatureServer URL, which has no item behind it.
+    //
+    // A layer's symbology can live in EITHER of two documents. Styling applied on the item's
+    // Visualization tab in ArcGIS Online is saved as an item-level override at
+    // /sharing/rest/content/items/{itemId}/data and does NOT alter the service's own drawingInfo.
+    // Reading only the service therefore returns whatever the layer was published with — typically
+    // one default symbol — and the operator sees a single repeated marker instead of the styling
+    // they configured. Confirmed on ATAK against a live org: the same layer reported a `simple`
+    // renderer with 1 symbol at the service and a `uniqueValue` renderer with 10 at the item.
+    itemId: string;
     // Raw Esri geometryType of the layer ("esriGeometryPoint"/"esriGeometryPolyline"/
     // "esriGeometryPolygon"), resolved via fetchLayerInfo/fetchGeometryType and cached here so
     // it's only fetched once per layer. Empty until resolved — layerActions.downloadLayer()
@@ -47,6 +58,7 @@ export interface ArcGISLayer {
 export function newLayer(name: string, url: string, type: LayerKind, access: LayerAccess = 'org', ownedByMe = false): ArcGISLayer {
     return {
         name, url, type, access, ownedByMe,
+        itemId: '',
         geometryType: '',
         layerId: 0,
         featureCount: 0,

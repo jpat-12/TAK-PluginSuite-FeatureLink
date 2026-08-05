@@ -19,7 +19,7 @@
 
 import { store } from './store.ts';
 import { generateAutoIconset } from './autoIconset.ts';
-import { fetchLayerMeta } from './arcgisRest.ts';
+import { fetchLayerMeta, fetchItemRenderer } from './arcgisRest.ts';
 import { describeError } from './arcgisHttp.ts';
 import type { ArcGISLayer, DisplayConfig } from './types.ts';
 
@@ -78,10 +78,23 @@ export async function ensureLayerSymbology(layer: ArcGISLayer, token: string | n
         // A config imported from TAK Portal can carry the renderer/uid/group the exporter used;
         // honoring them is what keeps {uid}/{group}/{file} identical across platforms (FIX-4).
         const meta = await fetchLayerMeta(layer.url, token);
+
+        // Styling applied on the item's Visualization tab in ArcGIS Online is saved as an
+        // item-level override and never touches the service's own drawingInfo, so a layer styled
+        // by unique value still reports a single-symbol `simple` renderer here. The override is
+        // what the operator actually sees in ArcGIS, so it wins. Verified against a live org on
+        // ATAK: service said simple/1 symbol, item said uniqueValue/10.
+        const itemRenderer = await fetchItemRenderer(layer.itemId, layer.layerId, token);
+        if (itemRenderer) {
+            console.debug('[featurelink] using item-level renderer override from item', layer.itemId,
+                '(service renderer was', meta.renderer?.type ?? 'absent', ')');
+        }
+        const effectiveRenderer = itemRenderer ?? meta.renderer;
+
         const result = await generateAutoIconset(layer.url, {
             arcgisToken: token,
             layerName: meta.name,
-            rendererOverride: (existing?.rendererOverride ?? meta.renderer) as never,
+            rendererOverride: (existing?.rendererOverride ?? effectiveRenderer) as never,
             uidOverride: existing?.iconsetUid ?? null,
             groupOverride: existing?.iconsetGroup ?? null,
         });
@@ -94,7 +107,7 @@ export async function ensureLayerSymbology(layer: ArcGISLayer, token: string | n
 
         const derived: DisplayConfig = {
             ...result.displayConfig,
-            rendererHash: await rendererHash(meta.renderer),
+            rendererHash: await rendererHash(effectiveRenderer),
         };
         store.displayConfigs[layer.url] = mergeStyling(existing, derived);
         layer.stylingStatus = result.warnings.length ? 'failed' : 'ok';
