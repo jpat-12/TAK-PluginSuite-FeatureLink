@@ -1652,7 +1652,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         // to query it. Previously the add path always set type="public" and passed a null token,
         // so a private layer produced an ArcGIS error that nothing checked and the operator was
         // told "Downloaded: X (0 features)" (Appendix A §12.7).
-        String token = authManager.getToken();
+        // Only send the token to the portal the operator signed in to — a pasted URL is an
+        // arbitrary host until proven otherwise.
+        String token = (authManager.isAuthenticated() && authManager.holdsCredentialsFor(url))
+                ? authManager.getToken() : null;
 
         // C-08 — a FeatureServer root can expose many sublayers. Previously ensureLayerIndex()
         // hard-appended "/0", so a service with layers 0,1,2 appeared as ONE permanently-layer-0
@@ -2517,7 +2520,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
         addPublicLayerBtn.setEnabled(false);
         submit(executor, () -> {
-            ArcGISLayer layer = restClient.fetchLayerInfo(url);
+            // Same defect as the Add Layer path: a scanned secured layer needs the token for its
+            // metadata too, or the name lookup fails and the operator is told the QR is bad.
+            // Safe to resolve here — this lambda already runs on the executor, not the main thread.
+            String metaToken = (authManager.isAuthenticated() && authManager.holdsCredentialsFor(url))
+                    ? authManager.getToken() : null;
+            ArcGISLayer layer = restClient.fetchLayerInfo(url, metaToken);
             postToUi(() -> {
                 addPublicLayerBtn.setEnabled(true);
                 if (layer != null) {

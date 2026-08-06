@@ -298,6 +298,43 @@ public class ArcGISAuthManager {
         return prefs.getString(PREF_PORTAL_URL, "https://www.arcgis.com");
     }
 
+    /**
+     * True when {@code url} lives on the portal this session is signed in to, so the operator's
+     * token both belongs there and is required there.
+     *
+     * <p>An exact host match is not sufficient: ArcGIS Online signs you in at
+     * {@code www.arcgis.com} but serves feature layers from sibling hosts such as
+     * {@code services7.arcgis.com}, so the token has to travel across the {@code arcgis.com}
+     * family. Enterprise portals get exact-host matching instead, since their hostname carries no
+     * such family relationship.
+     *
+     * <p>Deliberately conservative — an unrecognised host gets no token, so a config someone else
+     * authored can never point the plugin at a server of their choosing and harvest the
+     * operator's credentials (the risk C-33 describes on the CloudTAK side).
+     */
+    public boolean holdsCredentialsFor(String url) {
+        String target = hostOf(url);
+        String portal = hostOf(getPortalUrl());
+        if (target == null || portal == null) return false;
+        if (target.equals(portal)) return true;
+        if (portal.equals(ARCGIS_ONLINE) || portal.endsWith("." + ARCGIS_ONLINE)) {
+            return target.equals(ARCGIS_ONLINE) || target.endsWith("." + ARCGIS_ONLINE);
+        }
+        return false;
+    }
+
+    private static final String ARCGIS_ONLINE = "arcgis.com";
+
+    private static String hostOf(String url) {
+        if (url == null) return null;
+        try {
+            String host = new java.net.URI(url.trim()).getHost();
+            return host == null ? null : host.toLowerCase(java.util.Locale.ROOT);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public boolean isAuthenticated() {
         return username != null;
     }
