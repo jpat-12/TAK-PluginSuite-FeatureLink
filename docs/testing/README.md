@@ -1,6 +1,6 @@
 # FeatureLink Suite — Master Test Plan
 
-**Branch under test:** `audit-remediation` (34 commits on top of `dev` @ `d5a7ad9`). Nothing pushed.
+**Branch under test:** `audit-remediation` (on top of `dev` @ `d5a7ad9`).
 **Rollback at any time:** `git checkout dev` — the branch is entirely additive.
 
 This document **sequences** the testing. It does not repeat it. Each phase points at a detailed

@@ -1,8 +1,6 @@
 # Contributing to FeatureLink
 
-FeatureLink is public-safety software. It is used by Civil Air Patrol and other SAR
-organisations, it streams responder position data, and it runs on devices in the field where
-a silent failure is not an inconvenience. Please read `PRIVACY.md` and `SECURITY.md` before
+FeatureLink is public-safety software. Please read `PRIVACY.md` and `SECURITY.md` before
 your first change.
 
 This document closes the "no `CONTRIBUTING.md`" gap in Appendix E §7: there was no single
