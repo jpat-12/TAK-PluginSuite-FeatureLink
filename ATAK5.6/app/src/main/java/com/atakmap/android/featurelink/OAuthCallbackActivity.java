@@ -74,7 +74,14 @@ public class OAuthCallbackActivity extends Activity {
         if (code != null)  broadcast.putExtra("code",  code);
         if (error != null) broadcast.putExtra("error", errorDesc != null ? errorDesc : error);
         if (state != null) broadcast.putExtra("state", state);
-        sendBroadcast(broadcast, INTERNAL_PERMISSION);
+        // C-02: the protection is on the RECEIVER registration
+        // (registerReceiver(..., INTERNAL_PERMISSION, ...)), which requires any SENDER to hold
+        // this plugin's signature-level permission — that is what keeps a third-party app from
+        // injecting a config. It must NOT also be passed here: sendBroadcast(intent, perm)
+        // demands the RECEIVER hold the permission, and the receiver lives inside ATAK, which
+        // never declares <uses-permission> for it and whose manifest we cannot edit. Passing it
+        // silently dropped every broadcast, so "Open in ATAK" launched ATAK and did nothing.
+        sendBroadcast(broadcast);
 
         finish();
     }

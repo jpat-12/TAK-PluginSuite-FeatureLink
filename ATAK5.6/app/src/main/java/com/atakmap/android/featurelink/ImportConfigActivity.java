@@ -69,7 +69,14 @@ public class ImportConfigActivity extends Activity {
             broadcast.setPackage(ATAK_PACKAGE_NAME);
             broadcast.putExtra("config", config);
             broadcast.putExtra("source", "featurelink://import deep link");
-            sendBroadcast(broadcast, INTERNAL_PERMISSION);
+            // C-02: the protection is on the RECEIVER registration
+            // (registerReceiver(..., INTERNAL_PERMISSION, ...)), which requires any SENDER to hold
+            // this plugin's signature-level permission — that is what keeps a third-party app from
+            // injecting a config. It must NOT also be passed here: sendBroadcast(intent, perm)
+            // demands the RECEIVER hold the permission, and the receiver lives inside ATAK, which
+            // never declares <uses-permission> for it and whose manifest we cannot edit. Passing it
+            // silently dropped every broadcast, so "Open in ATAK" launched ATAK and did nothing.
+            sendBroadcast(broadcast);
         }
 
         Intent atakIntent = getPackageManager().getLaunchIntentForPackage(ATAK_PACKAGE_NAME);
