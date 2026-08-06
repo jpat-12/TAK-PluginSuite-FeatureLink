@@ -231,6 +231,15 @@
                 </LinearLayout>
 
                 <Button
+                    android:id="@+id/update_all_layers_btn"
+                    style="@style/FL.Button.Small"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Update"
+                    android:contentDescription="Re-download every layer on this device"
+                    android:layout_marginEnd="@dimen/fl_space_sm" />
+
+                <Button
                     android:id="@+id/open_add_layer_btn"
                     style="@style/FL.Button.Small"
                     android:layout_width="wrap_content"

@@ -277,6 +277,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private boolean publicLayersExpanded  = false;
 
     // Data
+    // Bulk "Update" control on the Layers page, plus its re-entrancy flag: a second tap
+    // while a sweep is still running would double-dispatch every layer and race the two
+    // sets of markers through removeLayerItems() (the class of bug C-26 describes).
+    private Button updateAllLayersBtn;
+    private boolean updateAllInFlight;
+
     private final List<ArcGISLayer> privateLayers = new ArrayList<>();
     private final List<ArcGISLayer> publicLayers  = new ArrayList<>();
     private final List<ArcGISLayer> sharedPrivateLayers = new ArrayList<>();
@@ -1057,6 +1063,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         collapsePublicBtn      = layersPageView.findViewById(R.id.collapse_public_btn);
         Button openAddLayerBtn = layersPageView.findViewById(R.id.open_add_layer_btn);
         openAddLayerBtn.setOnClickListener(v -> showAddLayerPage());
+        updateAllLayersBtn = layersPageView.findViewById(R.id.update_all_layers_btn);
+        updateAllLayersBtn.setOnClickListener(v -> updateAllLayers());
         collapsePublicBtn.setOnClickListener(v -> togglePublicLayersSection());
 
         // "My ArcGIS Layers" section — browse list, only shown while signed in
@@ -1793,6 +1801,92 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     /**
+     * Re-downloads every layer that is actually on this device, in one pass.
+     *
+     * <p>Scope matches {@link #checkLayerRecurrence()} deliberately: {@code publicLayers} plus
+     * {@code sharedPrivateLayers}. {@code privateLayers} and {@code sharedWithMeLayers} are the
+     * "My ArcGIS Layers" and "Shared with me" <em>browse</em> lists, items the operator has never
+     * opted into, so sweeping those would download the operator's entire account onto the map.
+     *
+     * <p>Dispatches onto the background pool rather than the interactive one (C-28), so a sweep of
+     * many layers can never starve a tap the operator makes while it runs.
+     */
+    private void updateAllLayers() {
+        if (updateAllInFlight) {
+            Toast.makeText(pluginContext, "Update already running", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final List<ArcGISLayer> targets = new ArrayList<>(publicLayers);
+        targets.addAll(sharedPrivateLayers);
+        if (targets.isEmpty()) {
+            Toast.makeText(pluginContext, "No layers to update", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final int total = targets.size();
+        // Touched only from the main thread: DownloadOutcome is documented to fire there, and the
+        // dispatch-failure path below calls the sink inline, also on the main thread.
+        final int[] finished = {0};
+        final int[] succeeded = {0};
+        final int[] truncated = {0};
+        final List<String> failures = new ArrayList<>();
+
+        updateAllInFlight = true;
+        updateAllLayersBtn.setEnabled(false);
+        Toast.makeText(pluginContext,
+                "Updating " + total + (total == 1 ? " layer…" : " layers…"),
+                Toast.LENGTH_SHORT).show();
+
+        final DownloadOutcome sink = (name, ok, wasTruncated, detail) -> {
+            finished[0]++;
+            if (ok) succeeded[0]++;
+            else failures.add(name + " — " + detail);
+            if (wasTruncated) truncated[0]++;
+            if (finished[0] < total) return;
+
+            updateAllInFlight = false;
+            updateAllLayersBtn.setEnabled(true);
+            refreshLayersList();
+            reportUpdateAllResult(total, succeeded[0], truncated[0], failures);
+        };
+
+        for (ArcGISLayer layer : targets) {
+            if (!downloadLayer(layer, bgExecutor, sink)) {
+                // Pool refused the work (plugin shutting down). Count it here or the run never
+                // reaches `total` and the button stays disabled forever.
+                sink.onFinished(layer.name, false, false, "the plugin is shutting down");
+            }
+        }
+    }
+
+    /** Main thread. One summary for a whole {@link #updateAllLayers()} sweep. */
+    private void reportUpdateAllResult(int total, int succeeded, int truncated,
+            List<String> failures) {
+        if (failures.isEmpty()) {
+            String msg = "Updated " + succeeded + (succeeded == 1 ? " layer" : " layers");
+            if (truncated > 0) msg += " — " + truncated + " truncated";
+            Toast.makeText(pluginContext, msg, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // Anything failed gets a dialog, not a toast: a toast is ~2 s and is dropped outright when
+        // the app is backgrounded, and "your map is missing a layer" is not a message to miss.
+        StringBuilder body = new StringBuilder()
+                .append(succeeded).append(" of ").append(total).append(" layers updated.\n\n")
+                .append("Failed:").append('\n');
+        for (String f : failures) body.append("• ").append(f).append('\n');
+        if (truncated > 0) {
+            body.append('\n').append(truncated)
+                    .append(truncated == 1 ? " layer was truncated" : " layers were truncated")
+                    .append(" — those maps are incomplete.");
+        }
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Update finished with errors")
+                .setMessage(body.toString())
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
+    /**
      * Downloads a layer's features and applies them to the map.
      *
      * <p><b>C-07</b> — this method now resolves the layer's own renderer when no styling config
@@ -1808,13 +1902,43 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      *             background pool for an automatic recurrence refresh (C-28).
      */
     private void downloadLayer(ArcGISLayer layer, ExecutorService pool) {
-        final boolean needsToken = "private".equals(layer.type);
+        downloadLayer(layer, pool, null);
+    }
+
+    /**
+     * Per-layer outcome sink for a bulk update. A single user-initiated download passes
+     * {@code null} and keeps its own toast and dialog; a sweep passes a sink so N results fold
+     * into one summary instead of N toasts and a stack of modal dialogs.
+     *
+     * <p>Always invoked on the main thread.
+     */
+    private interface DownloadOutcome {
+        void onFinished(String layerName, boolean ok, boolean truncated, String detail);
+    }
+
+    /**
+     * @param outcome null for a single download (per-layer toast and dialog), non-null for a bulk
+     *                sweep (results reported to the sink, no per-layer UI)
+     * @return false when the pool refused the work, so a caller counting completions is never
+     *         left waiting on a task that will not run
+     */
+    private boolean downloadLayer(ArcGISLayer layer, ExecutorService pool,
+            DownloadOutcome outcome) {
+        // The token can NOT be gated on layer.type alone. commitAddedLayers() stamps every
+        // manually-added layer "public" (and fetchLayerInfoChecked() hardcodes the same), so a
+        // secured service pasted into Add Layer was added fine — the metadata fetch there does pass
+        // the token — and then downloaded with token == null, came back 499 "Token Required", and
+        // was reported to the operator as an expired session that signing in again never fixed.
+        // Ask the auth manager whether the token belongs to this host instead of trusting a field
+        // that no code path on the add route ever sets.
+        final boolean needsToken = "private".equals(layer.type)
+                || (authManager.isAuthenticated() && authManager.holdsCredentialsFor(layer.url));
         // Snapshot the fields the background half needs, rather than reading the shared mutable
         // ArcGISLayer off-thread (Appendix A §5).
         final String layerUrl = layer.url;
         final String layerName = layer.name;
 
-        submit(pool, () -> {
+        return submit(pool, () -> {
             try {
                 // Resolved HERE, on the background thread, not before submit(). getToken() may
                 // need to refresh, which is a network call: on the main thread that threw
@@ -1887,6 +2011,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     }
                     if (!added.isEmpty()) layerItems.put(layer.url, added);
 
+                    if (outcome != null) {
+                        // Bulk sweep — the caller reports once for the whole run.
+                        outcome.onFinished(layerName, true, result.truncated, null);
+                        if (currentPage == 1) refreshLayersList();
+                        return;
+                    }
+
                     StringBuilder msg = new StringBuilder("Downloaded: ").append(layerName)
                             .append(" (").append(result.size()).append(" features)");
                     if (result.skipped > 0) msg.append(", ").append(result.skipped).append(" skipped");
@@ -1912,11 +2043,17 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             } catch (Exception e) {
                 Log.e(TAG, "Download failed for " + layerName, e);
                 final String detail = describeFailure(e);
-                postToUi(() -> new AlertDialog.Builder(getMapView().getContext())
-                        .setTitle("Download failed")
-                        .setMessage("\"" + layerName + "\" could not be downloaded.\n\n" + detail)
-                        .setPositiveButton("OK", null)
-                        .show());
+                postToUi(() -> {
+                    if (outcome != null) {
+                        outcome.onFinished(layerName, false, false, detail);
+                        return;
+                    }
+                    new AlertDialog.Builder(getMapView().getContext())
+                            .setTitle("Download failed")
+                            .setMessage("\"" + layerName + "\" could not be downloaded.\n\n" + detail)
+                            .setPositiveButton("OK", null)
+                            .show();
+                });
             }
         });
     }
