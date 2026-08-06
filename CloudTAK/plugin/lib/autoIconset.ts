@@ -29,6 +29,9 @@ const FILE_BAD_RE = /[^A-Za-z0-9._-]/g;
 const MAX_ICONS = 256;
 const MAX_ICON_BYTES = 512 * 1024;
 
+/** CloudTAK's `Default.NameField` (api/lib/limits.ts) — applies to the iconset's display name. */
+const ICONSET_NAME_MAX = 64;
+
 // ── §2 — URL canonicalization ──────────────────────────────────────────────────
 
 // Canonicalization moved to arcgisUrl.ts so the REST client and the iconset generator cannot drift
@@ -215,7 +218,14 @@ async function apiPost(path: string, body: unknown, token: string): Promise<numb
     // 409 is returned when the deterministic UID already exists — which is the NORMAL case on a
     // second add of the same layer. Treating it as an error made re-adding a layer silently lose
     // its icons (§10.3).
-    if (!res.ok && res.status !== 409) throw new Error(`${path} → HTTP ${res.status}`);
+    if (!res.ok && res.status !== 409) {
+        // CloudTAK answers a schema violation with 400 and a body naming the offending field. The
+        // status alone said only "HTTP 400", which cost a long field investigation to learn that
+        // the payload was missing a required property — include what the server actually said.
+        let detail = '';
+        try { detail = (await res.text()).slice(0, 300); } catch { /* body already consumed/absent */ }
+        throw new Error(`${path} → HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+    }
     return res.status;
 }
 
@@ -237,8 +247,27 @@ function isPlausiblePng(base64: string): boolean {
 // against it and gets a 404 (§10.3). Failures are collected and reported rather than aborting
 // mid-set on the first one.
 async function registerIconset(uid: string, group: string, icons: IconToUpload[], token: string): Promise<{ uploaded: number; failed: string[] }> {
+    // The body must satisfy CloudTAK's TypeBox schema at api/routes/icons.ts's POST /iconset.
+    // Every field below was rejected with a bare HTTP 400 in production until it matched:
+    //
+    //   internal  REQUIRED (Type.Boolean, not Type.Optional). Omitting it failed validation. The
+    //             schema's `default: false` does not fill it in for us. False = show it in the UI.
+    //   scope     Type.Enum(ResourceCreationScope), whose VALUES are 'server'|'user' — TypeBox
+    //             validates the value, not the TS enum key, so the 'USER' we used to send was
+    //             never valid. 'user' because a plugin has no admin rights to create server-wide.
+    //   name      Default.NameField caps at 64 chars, but AUTO-ICONSET-SPEC §5.1's group is up to
+    //             66 ("<60-char base> Icons"), so a long layer name overflowed it. Clamped HERE
+    //             ONLY: `name` is the human-readable label, while `default_group` (unconstrained)
+    //             and the per-icon `{group}/{file}` paths keep the full spec string, so
+    //             cross-platform {uid}/{group}/{file} identity is preserved. Truncating the group
+    //             itself would silently break icon resolution against ATAK/WinTAK/TAK Portal.
     await apiPost('/api/iconset', {
-        uid, version: SPEC_VERSION, name: group, scope: 'USER', default_group: group,
+        uid,
+        version: SPEC_VERSION,
+        name: group.slice(0, ICONSET_NAME_MAX),
+        internal: false,
+        scope: 'user',
+        default_group: group,
     }, token);
 
     const failed: string[] = [];
@@ -393,9 +422,28 @@ export async function generateAutoIconset(
                 // ATAK logs and degrades here rather than failing the whole add (AutoIconset.java:374).
                 warnings.push('not signed into CloudTAK — icons could not be registered on this server');
             } else {
-                const { uploaded, failed } = await registerIconset(uid, group, icons, cloudtakToken);
-                iconCount = uploaded;
-                if (failed.length) warnings.push(`${failed.length} of ${icons.length} icons failed to upload: ${failed[0]}`);
+                // NON-FATAL, and this matters more than any single payload bug. Registration is an
+                // optional server-side step: it decides whether custom ICONS resolve, not whether
+                // the layer is styled at all. Letting it throw propagated out of generateAutoIconset
+                // into ensureLayerSymbology's catch, which stored NO display config — so one 400
+                // from /api/iconset cost the operator every colour, shape, label and popup on the
+                // layer too, and presented as "no symbology at all" rather than "no icons". ATAK
+                // degrades here (AutoIconset.java:374); now so do we.
+                try {
+                    const { uploaded, failed } = await registerIconset(uid, group, icons, cloudtakToken);
+                    iconCount = uploaded;
+                    if (failed.length) warnings.push(`${failed.length} of ${icons.length} icons failed to upload: ${failed[0]}`);
+                } catch (e) {
+                    warnings.push(`icons could not be registered on this CloudTAK server: ${e instanceof Error ? e.message : String(e)}`);
+                    console.warn('[featurelink] iconset registration failed — falling back to shape/colour styling', e);
+                }
+            }
+            // With no icons on the server, the {uid}/{group}/{file} paths would resolve to 404s and
+            // every marker would render blank. Drop them so buildAutoDisplayConfig falls through to
+            // the esriSMS colour/shape branch, which needs no server at all.
+            if (iconCount === 0) {
+                pathByValue.clear();
+                singleIconPath = null;
             }
         } else {
             warnings.push('all picture-marker symbols failed to decode');
