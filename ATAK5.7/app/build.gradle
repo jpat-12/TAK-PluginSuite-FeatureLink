@@ -7,7 +7,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 buildscript {
-    ext.PLUGIN_VERSION = "2.7.24"
+    // MUST equal the contents of the repository-root VERSION file (VERSIONING.md §1). Was
+    // "2.7.24": a MINOR bump that carried the old PATCH across, which §1.1 prohibits outright.
+    ext.PLUGIN_VERSION = "2.7.0"
     ext.ATAK_VERSION = '5.7.0'
 
     def takdevVersion = '3.+'
@@ -195,8 +197,14 @@ android {
     defaultConfig {
         minSdkVersion 21
         targetSdkVersion 34
-        versionCode 5
-        versionName PLUGIN_VERSION
+        // Derived, never hand-edited (VERSIONING.md §3). The literal 5 sat here across nine
+        // releases, freezing Android's only upgrade discriminator so no fielded device ever
+        // upgraded in place. The formula is a pure function of tracked source, so it is
+        // reproducible and strictly monotonic by construction.
+        versionCode derivedVersionCode()
+        // Build metadata identifies which ATAK target this APK is, which the filename alone
+        // could not do once installed (VERSIONING.md §2).
+        versionName PLUGIN_VERSION + "+atak" + atakMajorMinor()
 
         def runTasks = gradle.startParameter.taskNames
         if (runTasks.toString().contains('bundle')) {
@@ -249,6 +257,20 @@ afterEvaluate {
 // ATAK_VERSION trimmed to major.minor, e.g. "5.6.0" -> "5.6".
 def atakMajorMinor() {
     return ATAK_VERSION.tokenize('.').take(2).join('.')
+}
+
+/**
+ * versionCode = MAJOR*1_000_000 + MINOR*10_000 + PATCH*100 + ATAK target ordinal
+ * (VERSIONING.md §3). Reversible: given a code off a field device you can recover both the
+ * suite version and which ATAK target it was built for. Suite 2.7.0 gives 2070006 for ATAK 5.6
+ * and 2070007 for 5.7.
+ */
+def derivedVersionCode() {
+    def v = PLUGIN_VERSION.tokenize('+')[0].tokenize('.')
+    if (v.size() < 3)
+        throw new GradleException("PLUGIN_VERSION '${PLUGIN_VERSION}' is not MAJOR.MINOR.PATCH")
+    def ordinal = ATAK_VERSION.tokenize('.')[1] as int   // 5.6.0 -> 6, 5.7.0 -> 7
+    return (v[0] as int) * 1000000 + (v[1] as int) * 10000 + (v[2] as int) * 100 + ordinal
 }
 
 def getCommandFlavor() {

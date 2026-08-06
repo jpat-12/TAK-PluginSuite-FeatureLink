@@ -1,6 +1,6 @@
 {
   "name": "featurelink-takportal-module",
-  "version": "1.5.0",
+  "version": "2.7.0",
   "description": "FeatureLink Configs module for TAK Portal — display-config store, custom icon sets, and the ported Display Configurator.",
   "license": "Apache-2.0",
   "private": true,

@@ -33,7 +33,9 @@ from flask import (
     send_file, send_from_directory,
 )
 
-MODULE_VERSION = '1.4.0'
+# The suite version, per VERSIONING.md §1 (single suite version, no per-component line).
+# Must equal the repository-root VERSION file.
+MODULE_VERSION = '2.7.0'
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'featurelink_displayconfig_assets')
 
