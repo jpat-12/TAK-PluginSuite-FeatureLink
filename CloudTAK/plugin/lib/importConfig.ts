@@ -7,11 +7,42 @@
 import { store } from './store.ts';
 import * as rest from './arcgisRest.ts';
 import { parseDisplayConfig } from './displayConfig.ts';
-import { addPublicLayer, downloadLayer, findLayer } from './layerActions.ts';
+import { addPublicLayer, downloadLayer, findLayer, unexcludeLayer } from './layerActions.ts';
 import { setPliLayerUrl } from './store.ts';
+import { layerQueryUrl } from './arcgisUrl.ts';
 import type { OperationalPayload } from './types.ts';
 
 export interface ImportResult { ok: boolean; message: string }
+
+/**
+ * Where an import came from. `auto` is the 60-second /api/import poll (importIngest.ts); `manual`
+ * is an operator pasting or uploading a config, or opening one from Add Layer.
+ */
+export type ImportSource = 'manual' | 'auto';
+
+/**
+ * Whether a deliberate removal should block re-adding this layer.
+ *
+ * `removePublicLayer`/`removePrivateLayer`/`clearAllLayers` all record the URL in
+ * `store.excludedPrivateUrls`, and `fetchUserLayers` honours it — but this module never did. The
+ * auto-ingest poll re-applies any `FeatureLink - <layer>` package still sitting in CloudTAK's
+ * Import Manager, so a layer whose share package was received days ago came straight back within
+ * a minute of every delete, every time, with no way for the operator to make it stop. Deleting the
+ * layer, using Clear All Layers, and deleting the row all appeared to do nothing.
+ *
+ * A MANUAL import is the operator asking for it explicitly, so it clears the exclusion instead of
+ * being blocked by it — otherwise a layer removed once could never be re-imported by hand either.
+ */
+function blockedByRemoval(url: string, source: ImportSource): boolean {
+    const canonical = layerQueryUrl(url);
+    if (source !== 'auto') {
+        unexcludeLayer(canonical);
+        return false;
+    }
+    return store.excludedPrivateUrls.includes(canonical);
+}
+
+const REMOVED_MESSAGE = 'This layer was removed on this device — not re-adding it automatically.';
 
 function parseOperationalPayload(text: string): OperationalPayload | null {
     try {
@@ -30,7 +61,7 @@ function parseOperationalPayload(text: string): OperationalPayload | null {
     return null;
 }
 
-export async function applyConfigText(text: string): Promise<ImportResult> {
+export async function applyConfigText(text: string, source: ImportSource = 'manual'): Promise<ImportResult> {
     const trimmed = text.trim();
     if (!trimmed) return { ok: false, message: 'Nothing to import' };
 
@@ -40,6 +71,9 @@ export async function applyConfigText(text: string): Promise<ImportResult> {
             return { ok: false, message: 'This config has no layer URL — paste a full config that includes one' };
         }
         const url = displayConfig.url;
+        // Checked BEFORE the config is written: storing styling for a layer we then refuse to add
+        // would leave an orphan config that silently reappears if the layer is ever re-added.
+        if (blockedByRemoval(url, source)) return { ok: false, message: REMOVED_MESSAGE };
         store.displayConfigs[url] = displayConfig;
 
         const existing = findLayer(url);
@@ -75,6 +109,7 @@ export async function applyConfigText(text: string): Promise<ImportResult> {
             return { ok: true, message: `PLI layer set: ${payload.url}` };
         }
         if (payload.type === 'layer_config') {
+            if (blockedByRemoval(payload.url, source)) return { ok: false, message: REMOVED_MESSAGE };
             if (payload.private) {
                 const existing = findLayer(payload.url);
                 if (existing) {

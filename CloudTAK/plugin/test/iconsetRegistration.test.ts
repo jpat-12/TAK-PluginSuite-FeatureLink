@@ -57,6 +57,10 @@ describe('POST /api/iconset body satisfies CloudTAK\'s schema', () => {
         // 70 characters, so the spec's "<base> Icons" group overflows CloudTAK's 64-char limit.
         routeLayer(fake, MIXED_RENDERER, 'A'.repeat(70));
         let body: Record<string, unknown> | null = null;
+        // The existence probe must 404, or creation is skipped and nothing is captured. (The
+        // fixture's fallback answers 200 with an ArcGIS error envelope, which reads as "exists".)
+        fake.route((u) => (u.pathname.startsWith('/api/iconset/') && !u.pathname.endsWith('/icon'))
+            ? { status: 404, body: { message: 'not found' } } : null);
         fake.route((u, init) => {
             if (u.pathname !== '/api/iconset') return null;
             body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -129,6 +133,88 @@ describe('a rejected iconset must not cost the layer its other styling', () => {
         // nothing was stored, so every feature fell back to the hardcoded #3388ff marker.
         expect(store.store.displayConfigs[LAYER_0]).toBeDefined();
         expect(store.store.displayConfigs[LAYER_0]?.sym?.t).toBe('uv');
+    });
+});
+
+describe('an iconset that already exists is reused, not treated as a failure', () => {
+    // The UID is a deterministic hash of layer URL + field, so every add after the first collides.
+    // This server answers a duplicate with 400; the throw landed before the upload loop, leaving an
+    // iconset with zero icons on the server and every {uid}/{group}/{file} path 404ing. The only
+    // recovery was deleting the iconset by hand, which is exactly what happened in production.
+    it('deletes the stale set and rebuilds it from the current renderer', async () => {
+        const { autoIconset } = await freshModules();
+        const fake = new FakeArcGIS();
+        routeLayer(fake, MIXED_RENDERER);
+        const methods: string[] = [];
+        fake.route((u, init) => {
+            if (!u.pathname.startsWith('/api/iconset') || u.pathname.endsWith('/icon')) return null;
+            methods.push(String(init?.method ?? 'GET'));
+            return { body: { uid: 'existing' } };   // exists, and DELETE succeeds
+        });
+        fake.route((u) => u.pathname.endsWith('/icon') ? { body: { ok: true } } : null);
+        fake.install();
+
+        const result = await autoIconset.generateAutoIconset(LAYER_0, { arcgisToken: null });
+
+        expect(methods).toContain('DELETE');
+        expect(methods).toContain('POST');   // recreated after the delete
+        expect(result!.iconCount).toBe(1);
+        expect(result!.warnings).toEqual([]);
+        expect(JSON.stringify(result!.displayConfig)).toContain(result!.uid);
+    });
+
+    it('reuses the existing set when the delete is refused, rather than giving up', async () => {
+        const { autoIconset } = await freshModules();
+        const fake = new FakeArcGIS();
+        routeLayer(fake, MIXED_RENDERER);
+        // Someone else's iconset: exists, DELETE forbidden, POST conflicts.
+        fake.route((u, init) => {
+            if (u.pathname.endsWith('/icon')) return null;
+            const method = String(init?.method ?? 'GET');
+            if (u.pathname === '/api/iconset' && method === 'POST') return { status: 400, body: { message: 'duplicate key' } };
+            if (method === 'DELETE') return { status: 403, body: { message: 'not yours' } };
+            return { body: { uid: 'existing' } };
+        });
+        fake.route((u) => u.pathname.endsWith('/icon') ? { body: { ok: true } } : null);
+        fake.install();
+
+        const result = await autoIconset.generateAutoIconset(LAYER_0, { arcgisToken: null });
+        // A stale-but-present set still beats no icons.
+        expect(result!.iconCount).toBe(1);
+        expect(result!.warnings).toEqual([]);
+    });
+
+    it('recovers when the create loses a race but the iconset ends up present', async () => {
+        const { autoIconset } = await freshModules();
+        const fake = new FakeArcGIS();
+        routeLayer(fake, MIXED_RENDERER);
+        let probes = 0;
+        fake.route((u) => {
+            if (!u.pathname.startsWith('/api/iconset/') || u.pathname.endsWith('/icon')) return null;
+            probes++;
+            return probes === 1 ? { status: 404, body: { message: 'not found' } } : { body: { uid: 'now-there' } };
+        });
+        fake.route((u) => u.pathname === '/api/iconset' ? { status: 400, body: { message: 'duplicate key' } } : null);
+        fake.route((u) => u.pathname.endsWith('/icon') ? { body: { ok: true } } : null);
+        fake.install();
+
+        const result = await autoIconset.generateAutoIconset(LAYER_0, { arcgisToken: null });
+        expect(result!.iconCount).toBe(1);
+        expect(result!.warnings).toEqual([]);
+    });
+
+    it('still reports a create failure that is NOT a duplicate', async () => {
+        const { autoIconset } = await freshModules();
+        const fake = new FakeArcGIS();
+        routeLayer(fake, MIXED_RENDERER);
+        fake.route((u) => (u.pathname.startsWith('/api/iconset/') && !u.pathname.endsWith('/icon'))
+            ? { status: 404, body: { message: 'not found' } } : null);
+        fake.route((u) => u.pathname === '/api/iconset' ? { status: 400, body: { message: 'must have required property' } } : null);
+        fake.install();
+
+        const result = await autoIconset.generateAutoIconset(LAYER_0, { arcgisToken: null });
+        expect(result!.iconCount).toBe(0);
+        expect(result!.warnings.join(' ')).toMatch(/could not be registered/);
     });
 });
 

@@ -69,7 +69,9 @@ async function processPackage(item: ImportListItem, token: string): Promise<void
     const text = await findZipEntryText(zipBuf, ENTRY_SUFFIX);
     if (text === null) return; // named like a FeatureLink share but no matching entry inside — ignore
 
-    const result = await applyConfigText(text);
+    // 'auto': a background poll must respect a deliberate removal. Without this the package sitting
+    // in CloudTAK's Import Manager re-added the layer within 60 seconds of every delete, forever.
+    const result = await applyConfigText(text, 'auto');
     ingestState.status = result.ok ? 'ok' : 'error';
     ingestState.message = result.ok
         ? `Auto-imported "${item.name}": ${result.message}`

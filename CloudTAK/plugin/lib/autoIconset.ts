@@ -229,6 +229,39 @@ async function apiPost(path: string, body: unknown, token: string): Promise<numb
     return res.status;
 }
 
+/**
+ * Whether this iconset UID already exists on the server.
+ *
+ * The UID is a deterministic hash of the layer URL + field (spec §4), so the SECOND add of the
+ * same layer — by the same operator, another operator on this server, or a scheduled refresh —
+ * always collides. That is the normal case, not an error.
+ */
+async function iconsetExists(uid: string, token: string): Promise<boolean> {
+    try {
+        const res = await fetch(`/api/iconset/${encodeURIComponent(uid)}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(15_000),
+        });
+        return res.ok;
+    } catch {
+        return false; // treat an unreachable probe as "not there" and let the create decide
+    }
+}
+
+/** Deletes an iconset. Returns whether it worked — callers degrade rather than abort. */
+async function apiDelete(path: string, token: string): Promise<boolean> {
+    try {
+        const res = await fetch(path, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(30_000),
+        });
+        return res.ok;
+    } catch {
+        return false;
+    }
+}
+
 /** Rejects anything that is not a real PNG before it is pushed into the operator's account (§10.3). */
 function isPlausiblePng(base64: string): boolean {
     if (base64.length > MAX_ICON_BYTES * 2) return false;
@@ -261,14 +294,49 @@ async function registerIconset(uid: string, group: string, icons: IconToUpload[]
     //             and the per-icon `{group}/{file}` paths keep the full spec string, so
     //             cross-platform {uid}/{group}/{file} identity is preserved. Truncating the group
     //             itself would silently break icon resolution against ATAK/WinTAK/TAK Portal.
-    await apiPost('/api/iconset', {
-        uid,
-        version: SPEC_VERSION,
-        name: group.slice(0, ICONSET_NAME_MAX),
-        internal: false,
-        scope: 'user',
-        default_group: group,
-    }, token);
+    //
+    // CREATION IS IDEMPOTENT, and that is the point. The UID is a deterministic hash of the layer
+    // URL + field (§4), so every add of a layer after the first collides with the iconset already
+    // on the server — and this CloudTAK answers a duplicate UID with 400, not the 409 this code
+    // originally tolerated. The throw happened BEFORE the upload loop below, so the server ended up
+    // holding an iconset with zero icons, every {uid}/{group}/{file} path 404'd, and each retry
+    // re-threw on the same duplicate. The only way out was deleting the iconset by hand.
+    //
+    // Probing first, and re-probing after a failed create (a concurrent run may have won the race),
+    // makes this depend on whether the iconset EXISTS rather than on which status code this server
+    // version happens to use for a conflict.
+    // On a collision the stale set is REPLACED rather than reused. The UID is a hash of layer URL +
+    // field, not of the renderer, so an existing set under this UID can hold icons from superseded
+    // symbology — or, as happened in production, no icons at all after a create that failed before
+    // its upload loop. Deleting first makes the server's contents converge on the current renderer
+    // instead of accumulating whatever an earlier run left behind.
+    //
+    // Delete failure is NOT fatal: the set may belong to another operator, or be server-scoped and
+    // beyond a plugin's rights. In that case we fall through, let the create fail, confirm the set
+    // still exists, and upload into it — a stale-but-present set beats no icons at all.
+    if (await iconsetExists(uid, token)) {
+        const deleted = await apiDelete(`/api/iconset/${encodeURIComponent(uid)}`, token);
+        console.debug('[featurelink] iconset', uid, deleted
+            ? 'already existed — deleted so it can be rebuilt from the current renderer'
+            : 'already existed and could not be deleted — will reuse it');
+    }
+
+    try {
+        await apiPost('/api/iconset', {
+            uid,
+            version: SPEC_VERSION,
+            name: group.slice(0, ICONSET_NAME_MAX),
+            internal: false,
+            scope: 'user',
+            default_group: group,
+        }, token);
+    } catch (e) {
+        // A create can fail because the delete above was refused, or because a concurrent run won
+        // the race. Either way, what matters is whether the set is there to upload into — not which
+        // status code this CloudTAK version uses for a conflict (this one answers 400, not 409).
+        if (!await iconsetExists(uid, token)) throw e;
+        console.debug('[featurelink] iconset', uid, 'exists after a failed create — continuing to icon upload');
+    }
 
     const failed: string[] = [];
     let uploaded = 0;
