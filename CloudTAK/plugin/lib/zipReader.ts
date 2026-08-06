@@ -78,3 +78,15 @@ export async function findZipEntryText(zipBuf: ArrayBuffer, suffix: string): Pro
     if (!match) return null;
     return readEntryText(zipBuf, match);
 }
+
+/**
+ * Entry names in a ZIP, for reporting what a package actually contained when the entry we wanted
+ * was not in it. Never throws — a buffer that is not a ZIP yields an empty list.
+ */
+export function listZipEntryNames(zipBuf: ArrayBuffer): string[] {
+    try {
+        return listEntries(zipBuf).map(e => e.name);
+    } catch {
+        return [];
+    }
+}

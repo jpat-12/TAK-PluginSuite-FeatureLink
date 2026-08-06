@@ -7,7 +7,8 @@
 import { store } from './store.ts';
 import * as rest from './arcgisRest.ts';
 import { parseDisplayConfig } from './displayConfig.ts';
-import { addPublicLayer, downloadLayer, findLayer, unexcludeLayer } from './layerActions.ts';
+import { addPublicLayer, downloadLayer, findLayer, unexcludeLayer, tokenForUrl } from './layerActions.ts';
+import { isAuthenticated } from './arcgisAuth.ts';
 import { setPliLayerUrl } from './store.ts';
 import { layerQueryUrl } from './arcgisUrl.ts';
 import type { OperationalPayload } from './types.ts';
@@ -82,8 +83,19 @@ export async function applyConfigText(text: string, source: ImportSource = 'manu
             return { ok: true, message: `Styling applied to existing layer: ${existing.name}` };
         }
 
-        const layer = await rest.fetchLayerInfo(url);
-        if (!layer) return { ok: false, message: 'Could not load layer from the config URL' };
+        // A shared config routinely points at a PRIVATE layer — the sender and the recipient are
+        // often the same ArcGIS account on two devices. Without a token this returned "Token
+        // Required" and the import died with a generic "Could not load layer from the config URL",
+        // so every private-layer share from ATAK silently failed to arrive on CloudTAK.
+        const layer = await rest.fetchLayerInfo(url, await tokenForUrl(url));
+        if (!layer) {
+            return {
+                ok: false,
+                message: isAuthenticated()
+                    ? 'Could not load layer from the config URL'
+                    : 'Could not load that layer — sign in to ArcGIS if it is a private layer.',
+            };
+        }
         if (displayConfig.freq) {
             layer.recurrenceInterval = displayConfig.freq.iv;
             layer.recurrenceUnit = displayConfig.freq.u;
@@ -116,8 +128,15 @@ export async function applyConfigText(text: string, source: ImportSource = 'manu
                     void downloadLayer(existing);
                     return { ok: true, message: `Styling applied to existing layer: ${existing.name}` };
                 }
-                const layer = await rest.fetchLayerInfo(payload.url);
-                if (!layer) return { ok: false, message: 'Could not load private layer from URL' };
+                const layer = await rest.fetchLayerInfo(payload.url, await tokenForUrl(payload.url));
+                if (!layer) {
+                    return {
+                        ok: false,
+                        message: isAuthenticated()
+                            ? 'Could not load private layer from URL'
+                            : 'Could not load that private layer — sign in to ArcGIS first.',
+                    };
+                }
                 layer.type = 'private';
                 if (payload.name) layer.name = payload.name;
                 store.privateLayers.push(layer);

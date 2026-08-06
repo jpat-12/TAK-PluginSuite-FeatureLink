@@ -124,3 +124,51 @@ describe('a manual import overrides the removal', () => {
         expect(store.store.excludedPrivateUrls).not.toContain(LAYER_0);
     });
 });
+
+describe('a shared config for a PRIVATE layer', () => {
+    // Field report: a private "USAR" layer shared from ATAK never appeared on CloudTAK, with
+    //   [featurelink] fetchLayerInfo failed for …/USAR_feature_layer_…  ArcGISError: Token Required
+    // in the console. The import path fetched layer metadata with no ArcGIS token, so EVERY private
+    // layer share failed and reported only a generic "Could not load layer from the config URL".
+    it('sends the ArcGIS token when fetching the layer metadata', async () => {
+        const { store, importConfig } = await freshModules();
+        const auth = await import('../lib/arcgisAuth.ts');
+        auth.__setSessionForTest({ username: 'op', accessToken: 'arcgis-token', refreshToken: 'r' });
+
+        const fake = new FakeArcGIS();
+        let sawToken = false;
+        fake.route((u, init) => {
+            if (!u.pathname.endsWith('/0')) return null;
+            const headers = (init?.headers ?? {}) as Record<string, string>;
+            if (headers['X-Esri-Authorization'] === 'Bearer arcgis-token') sawToken = true;
+            // What ArcGIS returns for a private layer requested without credentials.
+            if (!sawToken) return { body: { error: { code: 499, message: 'Token Required' } } };
+            return { body: layerMeta({ name: 'USAR' }) };
+        });
+        fake.route((u) => u.pathname.endsWith('/query')
+            ? { body: { features: [], exceededTransferLimit: false, spatialReference: WGS84 } } : null);
+        fake.route((u) => u.pathname.startsWith('/api/iconset') ? { body: { ok: true } } : null);
+        fake.install();
+
+        const result = await importConfig.applyConfigText(SHARE_CONFIG, 'auto');
+
+        expect(sawToken).toBe(true);
+        expect(result.ok).toBe(true);
+        expect(store.store.publicLayers).toHaveLength(1);
+    });
+
+    it('says to sign in when there is no ArcGIS session at all', async () => {
+        const { importConfig } = await freshModules();
+        const auth = await import('../lib/arcgisAuth.ts');
+        auth.signOut();
+
+        const fake = new FakeArcGIS();
+        fake.route((u) => u.pathname.endsWith('/0') ? { body: { error: { code: 499, message: 'Token Required' } } } : null);
+        fake.install();
+
+        const result = await importConfig.applyConfigText(SHARE_CONFIG, 'auto');
+        expect(result.ok).toBe(false);
+        // The old message named neither the cause nor the fix.
+        expect(result.message).toMatch(/sign in to ArcGIS/i);
+    });
+});

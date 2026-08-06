@@ -56,8 +56,22 @@ async function syncLayerMapItems(layer: ArcGISLayer, features: DownloadedFeature
  */
 async function tokenForLayer(layer: ArcGISLayer): Promise<string | null> {
     if (layer.type !== 'private') return null;
-    if (!isTokenTrustedHost(layer.url, auth.getPortalUrl())) {
-        console.warn('[featurelink] layer is marked private but is not on the signed-in portal — no token will be sent:', layer.url);
+    return tokenForUrl(layer.url);
+}
+
+/**
+ * The token to use for a URL whose layer record does not exist yet — the import path, which has a
+ * URL from a `.featurelinkshare` and nothing else.
+ *
+ * Same C-33 rule as `tokenForLayer`: the target must be on the signed-in portal's own deployment
+ * before the operator's ArcGIS token goes anywhere near it. `isSessionValid()` is checked first
+ * because `getToken()`'s failure path ENDS the session, and merely importing a config must never be
+ * able to sign the operator out.
+ */
+export async function tokenForUrl(url: string): Promise<string | null> {
+    if (!auth.isSessionValid()) return null;
+    if (!isTokenTrustedHost(url, auth.getPortalUrl())) {
+        console.warn('[featurelink] target is not on the signed-in portal — no token will be sent:', url);
         return null;
     }
     return auth.getToken();
