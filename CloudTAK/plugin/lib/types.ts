@@ -218,6 +218,13 @@ export interface DisplayConfig {
     // across symbol edits, so renderer drift is otherwise invisible; the server-side hot-load
     // design (Appendix B N.2) compares this to detect it.
     rendererHash?: string;
+    /**
+     * True when this config was DERIVED from a renderer by ensureLayerSymbology, rather than
+     * imported from a `.featurelinkshare` or a TAK Portal export. Only a derived config may be
+     * superseded by a later, better derivation — an operator's imported styling is never
+     * overwritten by one.
+     */
+    autoDerived?: boolean;
 }
 
 // ── Feature download (mirrors ArcGISRestClient.DownloadedFeature / CotFieldMapping) ──

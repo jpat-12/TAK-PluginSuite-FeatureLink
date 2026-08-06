@@ -46,9 +46,19 @@ export async function rendererHash(renderer: unknown): Promise<string> {
     return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** Keeps everything an imported config carried (freq, cotMapping, labels, popup) and adds the derived styling. */
-function mergeStyling(existing: DisplayConfig | undefined, derived: DisplayConfig): DisplayConfig {
+/**
+ * Keeps everything an imported config carried (freq, cotMapping, labels, popup) and adds the
+ * derived styling. Existing values win, so an operator's imported styling is never overwritten.
+ *
+ * `supersede` inverts that for the styling fields ONLY, and only when the existing config is one
+ * WE derived and did not manage to complete. Without it, a degraded config (shape/colour only,
+ * because the iconset could not be registered) permanently beat every later attempt: `existing.sym`
+ * won, so fixing the server-side cause changed nothing and the layer stayed on fallback styling
+ * until it was removed and re-added.
+ */
+function mergeStyling(existing: DisplayConfig | undefined, derived: DisplayConfig, supersede: boolean): DisplayConfig {
     if (!existing) return derived;
+    if (supersede) return { ...existing, ...derived };
     return {
         ...existing,
         sym: existing.sym ?? derived.sym,
@@ -56,6 +66,7 @@ function mergeStyling(existing: DisplayConfig | undefined, derived: DisplayConfi
         singleShapeStyle: existing.singleShapeStyle ?? derived.singleShapeStyle,
         shapeStyleByValue: existing.shapeStyleByValue ?? derived.shapeStyleByValue,
         rendererHash: derived.rendererHash ?? existing.rendererHash,
+        autoDerived: existing.autoDerived ?? derived.autoDerived,
     };
 }
 
@@ -68,11 +79,24 @@ function mergeStyling(existing: DisplayConfig | undefined, derived: DisplayConfi
  */
 export async function ensureLayerSymbology(layer: ArcGISLayer, token: string | null): Promise<void> {
     const existing = store.displayConfigs[layer.url];
-    if (hasMeaningfulStyling(existing)) {
-        layer.stylingStatus = 'ok';
+    // Resolved styling is only FINAL when it resolved cleanly. A degraded result — icons extracted
+    // from the renderer but not registered on this CloudTAK server, so the config carries only the
+    // esriSMS colour/shape fallback — also satisfies hasMeaningfulStyling(), which used to end the
+    // story here forever: once written, that config blocked every future attempt, so fixing the
+    // server-side cause changed nothing until the operator removed and re-added the layer.
+    // `stylingStatus === 'ok'` is what distinguishes "done" from "this is the best we managed".
+    //
+    // Re-running for a non-'ok' layer is cheap and safe: fetchLayerMeta is cached, and
+    // mergeStyling() keeps every field the existing config already had, so an imported
+    // .featurelinkshare cannot be clobbered by a regeneration it did not ask for.
+    const previousStatus = layer.stylingStatus;
+    if (hasMeaningfulStyling(existing) && previousStatus === 'ok') {
         layer.stylingMessage = '';
         return;
     }
+    // Only OUR OWN incomplete derivation may be replaced by a better one. An imported config has
+    // no `autoDerived` marker and keeps precedence however many times this runs.
+    const supersede = Boolean(existing?.autoDerived) && previousStatus !== 'ok';
 
     try {
         // A config imported from TAK Portal can carry the renderer/uid/group the exporter used;
@@ -108,8 +132,9 @@ export async function ensureLayerSymbology(layer: ArcGISLayer, token: string | n
         const derived: DisplayConfig = {
             ...result.displayConfig,
             rendererHash: await rendererHash(effectiveRenderer),
+            autoDerived: true,
         };
-        store.displayConfigs[layer.url] = mergeStyling(existing, derived);
+        store.displayConfigs[layer.url] = mergeStyling(existing, derived, supersede);
         layer.stylingStatus = result.warnings.length ? 'failed' : 'ok';
         layer.stylingMessage = result.warnings.length
             ? result.warnings.join('; ')

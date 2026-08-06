@@ -132,6 +132,59 @@ describe('a rejected iconset must not cost the layer its other styling', () => {
     });
 });
 
+describe('a degraded result is retried, not cached forever', () => {
+    it('re-attempts registration on the next download once the server stops rejecting it', async () => {
+        const { store, symbology } = await freshModules();
+        const types = await import('../lib/types.ts');
+        const layer = types.newLayer('Roads', LAYER_0, 'public');
+
+        // First download: the server rejects the iconset, so we degrade to colour/shape styling.
+        const failing = new FakeArcGIS();
+        routeLayer(failing, MIXED_RENDERER);
+        failing.route((u) => u.pathname.startsWith('/api/iconset') ? { status: 400, body: { message: 'nope' } } : null);
+        failing.install();
+        await symbology.ensureLayerSymbology(layer, null);
+        expect(store.store.displayConfigs[LAYER_0]?.sym?.t).toBe('uv'); // shapes only
+        expect(layer.stylingStatus).toBe('failed');
+
+        // Second download after the cause is fixed. The stored config satisfies
+        // hasMeaningfulStyling(), which used to end the attempt here and strand the layer on
+        // shape styling permanently.
+        const working = new FakeArcGIS();
+        routeLayer(working, MIXED_RENDERER);
+        working.route((u) => u.pathname.startsWith('/api/iconset') ? { body: { ok: true } } : null);
+        working.install();
+        await symbology.ensureLayerSymbology(layer, null);
+
+        expect(layer.stylingStatus).toBe('ok');
+        // Icons resolved this time: the per-value entry now carries an iconset path.
+        expect(JSON.stringify(store.store.displayConfigs[LAYER_0])).toContain('Icons/');
+    });
+
+    it('does not re-run for a layer that already resolved cleanly', async () => {
+        const { store, symbology } = await freshModules();
+        const types = await import('../lib/types.ts');
+        const layer = types.newLayer('Roads', LAYER_0, 'public');
+
+        const fake = new FakeArcGIS();
+        routeLayer(fake, MIXED_RENDERER);
+        fake.route((u) => u.pathname.startsWith('/api/iconset') ? { body: { ok: true } } : null);
+        fake.install();
+
+        // `/api/iconset` is a relative path, so count on the raw call list rather than
+        // fixtures' countMatching(), which parses each URL with no base.
+        const registrations = (): number => fake.calls.filter(c => c.url === '/api/iconset').length;
+
+        await symbology.ensureLayerSymbology(layer, null);
+        expect(layer.stylingStatus).toBe('ok');
+        const before = registrations();
+
+        await symbology.ensureLayerSymbology(layer, null);
+        expect(registrations()).toBe(before);
+        expect(store.store.displayConfigs[LAYER_0]).toBeDefined();
+    });
+});
+
 describe('the error surfaces what the server actually said', () => {
     it('includes the response body in the warning, not just the status code', async () => {
         const { autoIconset } = await freshModules();
