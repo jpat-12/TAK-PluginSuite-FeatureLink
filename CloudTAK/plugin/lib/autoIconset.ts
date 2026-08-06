@@ -351,6 +351,24 @@ async function registerIconset(uid: string, group: string, icons: IconToUpload[]
             failed.push(`${icon.name}: ${e instanceof Error ? e.message : String(e)}`);
         }
     }
+
+    // CloudTAK renders map markers from a per-iconset SPRITESHEET, not from the individual icon
+    // records, so freshly uploaded icons do not appear until that sheet is rebuilt — the icons
+    // exist, /menu/iconsets lists them, and the map still shows the fallback marker. Its own UI
+    // exposes this as "Regenerate Iconset Spritesheet" (api/routes/icons.ts POST
+    // /iconset/:iconset/regen); doing it here is what makes an auto-generated iconset take effect
+    // without the operator being told to go and press a button they have no reason to know about.
+    //
+    // Non-fatal: the icons are uploaded either way, and some deployments regenerate on their own.
+    if (uploaded > 0) {
+        try {
+            await apiPost(`/api/iconset/${encodeURIComponent(uid)}/regen`, {}, token);
+        } catch (e) {
+            console.warn('[featurelink] iconset spritesheet regeneration failed — icons may not appear '
+                + 'on the map until CloudTAK rebuilds it', e);
+        }
+    }
+
     return { uploaded, failed };
 }
 

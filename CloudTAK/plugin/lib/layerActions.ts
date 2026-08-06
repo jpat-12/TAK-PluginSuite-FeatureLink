@@ -303,14 +303,34 @@ function rememberRemoval(url: string): void {
     if (!store.excludedPrivateUrls.includes(url)) store.excludedPrivateUrls.push(url);
 }
 
+/**
+ * What removing an ON-DEVICE layer should do, which depends on whether the operator owns it.
+ *
+ * These two behaviours used to both run, and they contradict each other: the layer was pushed back
+ * into "My ArcGIS Layers" AND recorded as excluded, so it appeared in the browse list and then
+ * vanished the moment anything called fetchUserLayers — which filters excluded URLs out. Removing a
+ * layer therefore looked like it half-worked, and the row could not be got back without Undo.
+ *
+ * An owned layer is still in the operator's ArcGIS account, so removing it from the device means
+ * "put it back in the listing", not "never show it again" — a manual Refresh would re-list it
+ * anyway. Only a layer the operator does NOT own has nowhere to go, so only that one is excluded.
+ */
+function rememberOrReturn(layer: ArcGISLayer): void {
+    if (layer.ownedByMe) {
+        unexcludeLayer(layer.url);
+        returnOwnedLayerToBrowse(layer);
+        return;
+    }
+    rememberRemoval(layer.url);
+}
+
 export async function removePublicLayer(layer: ArcGISLayer): Promise<void> {
     const i = store.publicLayers.findIndex(l => l.url === layer.url);
     if (i !== -1) store.publicLayers.splice(i, 1);
     await removeLayerMarkers(layer.url);
     delete store.displayConfigs[layer.url];
     setError(layer.url, null);
-    rememberRemoval(layer.url);
-    returnOwnedLayerToBrowse(layer);
+    rememberOrReturn(layer);
 }
 
 // Removes a "My ArcGIS Layers" browse-list entry. The layer still exists in the user's ArcGIS
@@ -329,8 +349,7 @@ export async function removePrivateLayer(layer: ArcGISLayer): Promise<void> {
     await removeLayerMarkers(layer.url);
     delete store.displayConfigs[layer.url];
     setError(layer.url, null);
-    rememberRemoval(layer.url);
-    returnOwnedLayerToBrowse(layer);
+    rememberOrReturn(layer);
 }
 
 /** Undoes a removal so the layer can be re-listed/re-imported (there was no way back before — §7.3). */

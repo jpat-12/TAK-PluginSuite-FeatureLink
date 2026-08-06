@@ -271,6 +271,55 @@ describe('a degraded result is retried, not cached forever', () => {
     });
 });
 
+describe('shared configs get their icons registered on THIS server', () => {
+    // A .featurelinkshare carries styling but no image bytes — the icons live on whatever server
+    // the sender used. The receiving CloudTAK has to register its own copy, under the same
+    // deterministic {uid}/{group} the sender computed, or every path in the shared config 404s.
+    it('an imported config still triggers registration on the first download', async () => {
+        const { store, symbology } = await freshModules();
+        const types = await import('../lib/types.ts');
+        const fake = new FakeArcGIS();
+        routeLayer(fake, MIXED_RENDERER);
+        const posted: string[] = [];
+        fake.route((u, init) => {
+            if (!u.pathname.startsWith('/api/iconset')) return null;
+            if (String(init?.method) === 'POST') posted.push(u.pathname);
+            return { body: { ok: true } };
+        });
+        fake.install();
+
+        // What importConfig.applyConfigText writes for a received share: styling, no icons.
+        store.store.displayConfigs[LAYER_0] = { v: 3, url: LAYER_0, freq: { iv: 60, u: 's' } };
+        const layer = types.newLayer('Roads', LAYER_0, 'public');
+
+        await symbology.ensureLayerSymbology(layer, null);
+
+        expect(posted.some(p => p.endsWith('/icon'))).toBe(true);
+        expect(store.store.displayConfigs[LAYER_0]?.sym).toBeDefined();
+        // The freq the share carried is preserved — regeneration adds styling, never replaces
+        // what the operator imported.
+        expect(store.store.displayConfigs[LAYER_0]?.freq?.iv).toBe(60);
+    });
+
+    it('regenerates the spritesheet so the icons actually render', async () => {
+        const { autoIconset } = await freshModules();
+        const fake = new FakeArcGIS();
+        routeLayer(fake, MIXED_RENDERER);
+        const posted: string[] = [];
+        fake.route((u, init) => {
+            if (!u.pathname.startsWith('/api/iconset')) return null;
+            if (String(init?.method) === 'POST') posted.push(u.pathname);
+            return { body: { ok: true } };
+        });
+        fake.install();
+
+        await autoIconset.generateAutoIconset(LAYER_0, { arcgisToken: null });
+
+        // Without this CloudTAK lists the icons but the map keeps drawing the fallback marker.
+        expect(posted.some(p => p.endsWith('/regen'))).toBe(true);
+    });
+});
+
 describe('the error surfaces what the server actually said', () => {
     it('includes the response body in the warning, not just the status code', async () => {
         const { autoIconset } = await freshModules();
