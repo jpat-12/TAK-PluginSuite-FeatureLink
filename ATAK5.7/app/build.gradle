@@ -201,10 +201,13 @@ android {
         // releases, freezing Android's only upgrade discriminator so no fielded device ever
         // upgraded in place. The formula is a pure function of tracked source, so it is
         // reproducible and strictly monotonic by construction.
-        versionCode derivedVersionCode()
+        // The ordinal is passed literally rather than parsed out of ATAK_VERSION so that the
+        // two targets are visibly different at this line, which is also what
+        // .github/scripts/check_versions.py asserts.
+        versionCode derivedVersionCode(7)
         // Build metadata identifies which ATAK target this APK is, which the filename alone
         // could not do once installed (VERSIONING.md §2).
-        versionName PLUGIN_VERSION + "+atak" + atakMajorMinor()
+        versionName "${PLUGIN_VERSION}+atak5.7"
 
         def runTasks = gradle.startParameter.taskNames
         if (runTasks.toString().contains('bundle')) {
@@ -265,11 +268,15 @@ def atakMajorMinor() {
  * suite version and which ATAK target it was built for. Suite 2.7.0 gives 2070006 for ATAK 5.6
  * and 2070007 for 5.7.
  */
-def derivedVersionCode() {
+def derivedVersionCode(int ordinal) {
     def v = PLUGIN_VERSION.tokenize('+')[0].tokenize('.')
     if (v.size() < 3)
         throw new GradleException("PLUGIN_VERSION '${PLUGIN_VERSION}' is not MAJOR.MINOR.PATCH")
-    def ordinal = ATAK_VERSION.tokenize('.')[1] as int   // 5.6.0 -> 6, 5.7.0 -> 7
+    // Guard against the ordinal drifting away from the SDK this tree actually builds against.
+    def fromSdk = ATAK_VERSION.tokenize('.')[1] as int
+    if (ordinal != fromSdk)
+        throw new GradleException("versionCode ordinal ${ordinal} does not match ATAK_VERSION "
+                + "'${ATAK_VERSION}' (expected ${fromSdk})")
     return (v[0] as int) * 1000000 + (v[1] as int) * 10000 + (v[2] as int) * 100 + ordinal
 }
 

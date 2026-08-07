@@ -63,6 +63,22 @@ def read(path: str) -> str | None:
         return fh.read()
 
 
+def read_xml(path: str) -> str | None:
+    """
+    As read(), with XML comments stripped.
+
+    Every element lookup here is a regex over raw text, and first_group() takes the FIRST
+    match. WinTAK5.7/MANIFEST.xml opens with a comment that quotes the pre-C-17 values
+    verbatim ("previously declared <id>FeatureLink</id> and <version>2.6.9</version>"), so
+    the gate read those instead of the live elements below them and reported two violations
+    that did not exist: a duplicate <id> when the ids are in fact distinct, and version
+    2.6.9 when the file says otherwise. A checker that reports phantom failures gets ignored,
+    which is worse than not having it.
+    """
+    raw = read(path)
+    return None if raw is None else re.sub(r"<!--.*?-->", "", raw, flags=re.S)
+
+
 def version_code(suite: str, atak_target: str) -> int:
     """versionCode = MAJOR*1_000_000 + MINOR*10_000 + PATCH*100 + ATAK_TARGET_ORDINAL"""
     m = SEMVER_RE.match(suite)
@@ -123,7 +139,7 @@ def check_declarations(suite: str) -> None:
                  f'set ext.PLUGIN_VERSION = "{suite}"')
 
     for tree in ("WinTAK5.6", "WinTAK5.7"):
-        man = read(f"{tree}/MANIFEST.xml")
+        man = read_xml(f"{tree}/MANIFEST.xml")
         declared = first_group(r"<version>\s*([^<\s]+)\s*</version>", man)
         if declared is None:
             fail(tree, f"{tree}/MANIFEST.xml: no <version> element", "add one")
@@ -246,7 +262,7 @@ def check_atak_identity(suite: str) -> None:
 def check_wintak_identity() -> None:
     ids: dict[str, str] = {}
     for tree in ("WinTAK5.6", "WinTAK5.7"):
-        pid = first_group(r"<id>\s*([^<\s]+)\s*</id>", read(f"{tree}/MANIFEST.xml"))
+        pid = first_group(r"<id>\s*([^<\s]+)\s*</id>", read_xml(f"{tree}/MANIFEST.xml"))
         if pid:
             ids[tree] = pid
     if len(ids) == 2 and len(set(ids.values())) == 1:

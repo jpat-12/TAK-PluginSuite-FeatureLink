@@ -35,7 +35,12 @@ from flask import (
 
 # The suite version, per VERSIONING.md §1 (single suite version, no per-component line).
 # Must equal the repository-root VERSION file.
-MODULE_VERSION = '2.7.0'
+#
+# __version__ is the name the policy and check_versions.py look for; MODULE_VERSION is the
+# name the rest of this module and its templates already use. Aliased rather than renamed so
+# there is still exactly one value to update.
+__version__ = '2.7.0'
+MODULE_VERSION = __version__
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'featurelink_displayconfig_assets')
 
