@@ -385,8 +385,12 @@ jobs:
       # because it produces a green check that means nothing.
       - name: Require the ATAK SDK
         env:
-          ATAK_SDK_URL: ${{ secrets.ATAK_SDK_URL }}
-          ATAK_SDK_SHA256: ${{ secrets.ATAK_SDK_SHA256 }}
+          # Must be the SAME matrix-selected secret the download step below reads. This
+          # previously checked an unsuffixed ATAK_SDK_URL that nothing ever sets, so the gate
+          # would have kept failing even once ATAK_SDK_URL_5_6/_5_7 were configured, and the
+          # message told you to set names it then ignored. The WinTAK gate had it right.
+          ATAK_SDK_URL: ${{ matrix.atak == '5.6' && secrets.ATAK_SDK_URL_5_6 || secrets.ATAK_SDK_URL_5_7 }}
+          ATAK_SDK_SHA256: ${{ matrix.atak == '5.6' && secrets.ATAK_SDK_SHA256_5_6 || secrets.ATAK_SDK_SHA256_5_7 }}
         run: |
           if [ -z "${ATAK_SDK_URL:-}" ]; then
             echo "::error title=ATAK SDK not configured::The ATAK ${{ matrix.atak }} build cannot run."
