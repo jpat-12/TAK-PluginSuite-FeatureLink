@@ -12,6 +12,13 @@ public class ArcGISLayer {
      * ArcGISRestClient.searchUserLayers() — layers added via URL (page_add_layer) or received
      * via a share default to "org" since there's no portal item to ask. */
     public String access = "org";
+    /** Owner username of the portal item — only meaningful for a "Shared with me" item
+     * (see ArcGISRestClient.searchSharedWithMeLayers()). Empty for owned/public/URL-added layers. */
+    public String sharedBy = "";
+    /** Raw Esri geometryType of the layer ("esriGeometryPoint"/"esriGeometryPolyline"/
+     * "esriGeometryPolygon"), resolved lazily via a layer metadata fetch and cached here so it's
+     * only fetched once per layer. Empty until resolved. */
+    public String geometryType = "";
     public long featureCount = 0;
     public long lastSync = 0;
     public boolean downloadEnabled = false;
@@ -22,11 +29,107 @@ public class ArcGISLayer {
                                            // handles all three correctly either way)
     public boolean isPliLayer = false;
     public boolean visible = true;        // whether this layer's markers show on the map
+    /**
+     * C-08: which sublayer of the parent FeatureServer this row addresses. {@link #url} is
+     * always fully qualified (it already ends in {@code /<layerId>}) so every URL-keyed
+     * structure in the plugin keeps working unchanged; this field exists so the UI can show
+     * "layer 3 of 5" and so a service root can be re-enumerated later. -1 = not yet resolved.
+     */
+    public int layerId = -1;
+
+    /**
+     * Portal item ID, when this layer was discovered through portal search. Empty for a layer added
+     * by pasting a raw FeatureServer URL, which has no item behind it.
+     *
+     * <p>Needed because a layer's symbology can live in <b>either</b> of two documents. Styling
+     * applied on the item's Visualization tab in ArcGIS Online is saved as an item-level override
+     * at {@code /sharing/rest/content/items/{itemId}/data}, and does <b>not</b> alter the service's
+     * own {@code drawingInfo}. Reading only the service therefore returns whatever the layer was
+     * originally published with — typically one default symbol — and the operator sees a single
+     * repeated marker in place of the styling they configured.
+     */
+    public String itemId = "";
+
+    /**
+     * Which browse section this layer came from when it was downloaded, so removing it can send it
+     * back there rather than making it vanish.
+     *
+     * <p>{@code "mine"} for "My ArcGIS Layers", {@code "shared"} for "Shared with me", empty for a
+     * layer that never came from the browse list (a pasted URL, or one received in a Mission
+     * Package). Only a layer with a non-empty value is restored on removal; anything else is
+     * genuinely gone, because there is no list for it to return to.
+     */
+    public String browseOrigin = "";
+
+    /** True when this layer originated in the operator's own ArcGIS account browse list. */
+    public boolean isFromBrowseList() {
+        return browseOrigin != null && !browseOrigin.isEmpty();
+    }
+
+    /**
+     * Returns this layer to its pre-download state so it reads as "available to download" again in
+     * the browse list. Keeps identity ({@code name}/{@code url}/{@code itemId}) and drops
+     * everything that only describes an on-device copy.
+     */
+    public void resetToBrowseState() {
+        lastSync = 0;
+        featureCount = 0;
+        downloadEnabled = false;
+        lastDownloadTruncated = false;
+        visible = true;
+        browseOrigin = "";
+    }
+    /** The service's advertised {@code maxRecordCount} (C-06). 0 = unknown. Surfaced in the UI
+     * so an operator can tell a genuinely small layer from a paginated one. */
+    public int maxRecordCount = 0;
+    /** True when the last download hit the pagination cap and the on-map picture is incomplete
+     * (C-06). Never present a truncated download as a complete one. */
+    public boolean lastDownloadTruncated = false;
 
     public ArcGISLayer(String name, String url, String type) {
         this.name = name;
         this.url  = url;
         this.type = type;
+    }
+
+    /**
+     * Canonical form of {@link #url} used for identity. {@code https://x/FeatureServer/0},
+     * {@code .../0/} and {@code https://X/FeatureServer/0} are the same layer; without this they
+     * were three distinct layers to the plugin, producing duplicate rows, orphaned map items and
+     * display configs that silently never applied (Appendix A §9).
+     */
+    public String canonicalUrl() {
+        return canonicalUrl(url);
+    }
+
+    public static String canonicalUrl(String raw) {
+        if (raw == null) return "";
+        String u = raw.trim().replaceAll("/+$", "");
+        int scheme = u.indexOf("://");
+        if (scheme < 0) return u.toLowerCase(java.util.Locale.ROOT);
+        int hostEnd = u.indexOf('/', scheme + 3);
+        if (hostEnd < 0) return u.toLowerCase(java.util.Locale.ROOT);
+        // scheme + authority are case-insensitive; the path is not.
+        return u.substring(0, hostEnd).toLowerCase(java.util.Locale.ROOT) + u.substring(hostEnd);
+    }
+
+    /**
+     * Identity is the canonical URL. Without this, every {@code contains}/{@code remove}/
+     * {@code indexOf} call in the drop-down receiver was reference equality, so a layer object
+     * captured in a listener stopped matching the list contents after a reload and
+     * {@code saveLayerOfSection} fell through to writing a private layer into the public
+     * preference list (Appendix A §9 — a real data-corruption path).
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof ArcGISLayer)) return false;
+        return canonicalUrl().equals(((ArcGISLayer) o).canonicalUrl());
+    }
+
+    @Override
+    public int hashCode() {
+        return canonicalUrl().hashCode();
     }
 
     /** Returns the auto-refresh period in milliseconds, or 0 if disabled. */
@@ -45,6 +148,8 @@ public class ArcGISLayer {
         obj.put("url",                url);
         obj.put("type",               type);
         obj.put("access",             access);
+        obj.put("sharedBy",           sharedBy);
+        obj.put("geometryType",       geometryType);
         obj.put("featureCount",       featureCount);
         obj.put("lastSync",           lastSync);
         obj.put("downloadEnabled",    downloadEnabled);
@@ -52,6 +157,10 @@ public class ArcGISLayer {
         obj.put("recurrenceUnit",     recurrenceUnit);
         obj.put("isPliLayer",         isPliLayer);
         obj.put("visible",            visible);
+        obj.put("layerId",            layerId);
+        obj.put("maxRecordCount",     maxRecordCount);
+        obj.put("itemId",             itemId);
+        obj.put("browseOrigin",       browseOrigin);
         return obj;
     }
 
@@ -61,11 +170,17 @@ public class ArcGISLayer {
                 obj.optString("url",  ""),
                 obj.optString("type", "public"));
         layer.access           = obj.optString("access", "org");
+        layer.sharedBy         = obj.optString("sharedBy", "");
+        layer.geometryType     = obj.optString("geometryType", "");
         layer.featureCount    = obj.optLong("featureCount", 0);
         layer.lastSync        = obj.optLong("lastSync", 0);
         layer.downloadEnabled = obj.optBoolean("downloadEnabled", false);
         layer.isPliLayer      = obj.optBoolean("isPliLayer", false);
         layer.visible         = obj.optBoolean("visible", true);
+        layer.layerId         = obj.optInt("layerId", -1);
+        layer.maxRecordCount  = obj.optInt("maxRecordCount", 0);
+        layer.itemId          = obj.optString("itemId", "");
+        layer.browseOrigin    = obj.optString("browseOrigin", "");
 
         if (obj.has("recurrenceInterval")) {
             layer.recurrenceInterval = obj.optInt("recurrenceInterval", 0);

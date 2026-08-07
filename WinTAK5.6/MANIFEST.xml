@@ -2,12 +2,18 @@
 <wintakPluginPackage>
   <metadata>
     <id>FeatureLink</id>
-    <version>2.6.9</version>
+    <version>2.7.0</version>
     <sdkVersion>5.6.0.151</sdkVersion>
     <takVariants>
     </takVariants>
     <description>FeatureLink: browse and sync ArcGIS Feature Layers to the map, and send this device's Position Location Information (PLI) to an ArcGIS Feature Layer via OAuth2 sign-in. Ported from the ATAK FeatureLink plugin.</description>
     <dependencies>
     </dependencies>
+    <!-- C-36: the package declared no licence at all. Apache-2.0, matching the repository
+         LICENSE. Newtonsoft.Json 13.0.3 (MIT) is packaged alongside FeatureLink.dll (C-18) and is
+         listed in the repo-level third-party inventory owned by WP5. -->
+    <license>Apache-2.0</license>
+    <licenseUrl>https://www.apache.org/licenses/LICENSE-2.0</licenseUrl>
+    <copyright>Copyright © 2026 Civil Air Patrol — FeatureLink project</copyright>
   </metadata>
 </wintakPluginPackage>

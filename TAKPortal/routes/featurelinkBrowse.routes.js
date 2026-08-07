@@ -17,6 +17,20 @@ const router = require("express").Router();
 
 const datasetsSvc = require("../services/featurelinkDatasets.service");
 const { toSafeApiError } = require("../services/apiErrorPayload.service");
+const access = require("../services/featurelinkAccess.service");
+const { noStore } = require("../services/featurelinkHttp.service");
+
+router.use(noStore);
+
+/**
+ * Appendix D §2.1: the header comment asserted `req.authentikUser` "is already guaranteed set",
+ * but no handler in this file ever read or asserted it — a future mount-order change would have
+ * served every saved config anonymously. Asserted for real now.
+ */
+router.use((req, res, next) => {
+  if (!access.requireActor(req, res)) return;
+  next();
+});
 
 /** GET /api/featurelink/configs */
 router.get("/configs", (req, res) => {

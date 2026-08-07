@@ -396,8 +396,9 @@
         <!-- ══════════════════ Main layout (header + tab bar + page container) ═══ -->
         <Grid Background="{StaticResource BgRoot}">
             <Grid.RowDefinitions>
-                <RowDefinition Height="52"/>  <!-- app header (icon + title + tabs + account) -->
-                <RowDefinition Height="*"/>   <!-- page container -->
+                <RowDefinition Height="52"/>    <!-- app header (icon + title + tabs + account) -->
+                <RowDefinition Height="*"/>     <!-- page container -->
+                <RowDefinition Height="Auto"/>  <!-- persistent status strip (C-16) -->
             </Grid.RowDefinitions>
 
             <!-- ── App header: icon + "FeatureLink" title + tab bar + account button,
@@ -863,6 +864,19 @@
 
                                     <StackPanel Margin="0,8,0,0" Visibility="{Binding PliLayerExpanded, Converter={StaticResource BoolToVis}}">
 
+                                        <!-- The configured PLI destination. Found by the C-16
+                                             binding smoke test: PliLayerUrl was a public property
+                                             with no binding anywhere, so an operator could not see
+                                             which layer their position was being sent to (or
+                                             confirm it was the one they meant) — the same class of
+                                             defect as the unbound StatusText, just quieter. -->
+                                        <TextBlock Text="{Binding PliLayerUrl, Mode=OneWay}"
+                                                   Style="{StaticResource HintText}"
+                                                   TextWrapping="Wrap" Margin="0,0,0,8"
+                                                   ToolTip="{Binding PliLayerUrl, Mode=OneWay}"
+                                                   AutomationProperties.Name="Configured PLI feature layer URL"
+                                                   Visibility="{Binding IsPliConfigured, Converter={StaticResource BoolToVis}}"/>
+
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <RadioButton Content="Create New Layer" GroupName="PliMode"
                                                          IsChecked="{Binding IsPliCreateMode, Mode=TwoWay}"
@@ -914,7 +928,10 @@
 
                             <!-- Auto-Send card -->
                             <Border Style="{StaticResource Card}" Margin="0,0,0,12">
-                                <CheckBox Content="Auto-send PLI every 30 seconds"
+                                <!-- Bound, not a hardcoded "30 seconds" literal: the interval
+                                     lives in FeatureLinkDockPane.PliSendInterval and the label
+                                     silently lied whenever that constant changed. -->
+                                <CheckBox Content="{Binding PliAutoSendLabel, Mode=OneWay}"
                                           IsChecked="{Binding PliAutoSendEnabled, Mode=TwoWay}"
                                           IsEnabled="{Binding IsPliConfigured}"
                                           Foreground="{StaticResource TextSecondary}" FontSize="13"/>
@@ -997,6 +1014,35 @@
                 </ScrollViewer>
 
             </Grid>
+
+            <!-- ══════════════ Status strip ═════════════════════════════════════════
+                 C-16 (CRITICAL): StatusText is the plugin's ONLY user-facing error and
+                 progress channel — it is assigned on sign-in failure, session expiry,
+                 layer load, add-layer failure, watcher failure, import failure, share
+                 failure, marker visibility/removal failure, download failure, clear-all
+                 and send-to-layer. It was bound by NOTHING in this file: the only other
+                 "StatusText" here is a Style resource key of the same name (:113), a
+                 coincidence that made the omission easy to miss on review. Every one of
+                 those failures was therefore silently swallowed and the operator saw
+                 nothing at all.
+
+                 It lives in the root grid rather than on one page so it is visible from
+                 all three tabs, and it sits OUTSIDE the page container so a scrolled
+                 page can never push it off screen. FeatureLink.Tests'
+                 XamlBindingSmokeTests asserts that every public string property on the
+                 view model is referenced by at least one binding in this file, so this
+                 class of defect cannot recur. -->
+            <Border Grid.Row="2" Background="{StaticResource BgSurface}"
+                    BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0"
+                    Padding="12,6" MinHeight="28">
+                <TextBlock x:Name="StatusStripText"
+                           Text="{Binding StatusText, Mode=OneWay}"
+                           Style="{StaticResource StatusText}"
+                           TextWrapping="Wrap" MaxHeight="60"
+                           ToolTip="{Binding StatusText, Mode=OneWay}"
+                           AutomationProperties.Name="FeatureLink status"
+                           AutomationProperties.LiveSetting="Polite"/>
+            </Border>
         </Grid>
 
         <!-- ══════════════ Overlay container — Account / Add Layer pushed pages ══ -->

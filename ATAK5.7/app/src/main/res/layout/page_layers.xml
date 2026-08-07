@@ -67,6 +67,45 @@
                     android:orientation="vertical"
                     android:layout_marginTop="@dimen/fl_space_sm" />
 
+                <!-- ── Shared with me — items shared via ArcGIS group membership, nested
+                     below the owned-layers browse list, same collapse control as above. ── -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="@dimen/fl_space_sm">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Shared with me"
+                        style="@style/FL.Text.SubsectionHeader" />
+
+                    <TextView
+                        android:id="@+id/shared_with_me_count_badge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_pill_count"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="2dp"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/fl_badge_count_text"
+                        android:text="0" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/shared_with_me_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginTop="@dimen/fl_space_sm" />
+
             </LinearLayout>
 
         </LinearLayout>
@@ -190,6 +229,15 @@
                         android:text="0" />
 
                 </LinearLayout>
+
+                <Button
+                    android:id="@+id/update_all_layers_btn"
+                    style="@style/FL.Button.Small"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Update"
+                    android:contentDescription="Re-download every layer on this device"
+                    android:layout_marginEnd="@dimen/fl_space_sm" />
 
                 <Button
                     android:id="@+id/open_add_layer_btn"

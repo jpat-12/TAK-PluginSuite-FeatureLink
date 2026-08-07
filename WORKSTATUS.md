@@ -1,77 +1,105 @@
 # Work Status
 
-Session summary — CloudTAK share/ingest fixes + auto-iconset commit + repo housekeeping.
-Everything below is on `origin/dev` at `23e9318` unless noted. Deploy with `git pull` on
-`dev` → rebuild/redeploy.
+**Branch:** `audit-remediation` (forked from `dev` @ `d5a7ad9`).
+**As of:** 2026-08-06.
 
-## Built: auto-iconset — federated, cross-platform marker icons (no server)
-Paste one ArcGIS Web Map / FeatureServer link into any TAK surface and it builds the layer's
-custom marker icons on-device; every platform independently produces the **same**
-`{uid}/{group}/{filename}` reference, so a marker one device places renders identically on
-another's map with no shared server.
-- **Design decision:** committed to the fully-federated model — each plugin does everything
-  on-device, TAK Portal is one equal peer (not a required authority). Rewrote the plan doc
-  around it; fixed the `AutoConfigutor`→`AutoConfigurator` filename typo. (`e641028`)
-- **Frozen the contract** — new `AUTO-ICONSET-SPEC.md` (canonical URL, UID formula,
-  group/filename rules, `iconset.xml`). Grounded in the **decompiled ATAK 5.6 behavior** already
-  documented in `featurelinkCustomIcons.service.js`: ATAK reads the UID from `iconset.xml`
-  verbatim and derives group/filename from zip entry paths — which is *why* byte-different icons
-  still resolve identically across platforms.
-- **TAK Portal side** — new `featurelinkArcgisIconset.service.js` + `POST …/from-arcgis` and
-  `GET …/by-uid/:uid` on the existing custom-icons router; reuses the manifest via
-  `registerArcgisSet` (no zip round-trip, no new host dep — `fs`/`crypto` + Node 18 `fetch`).
-- **ATAK side** — new `AutoIconset.java` (renderer → `iconset.xml` + zip → `atak/iconsets/` +
-  `REFRESH_ICONSET`, mirroring QuickCapture's `IconsetInstaller`); `fetchJson` on
-  `ArcGISRestClient`; wired into the paste-URL (method 5) add flow; missing-iconset check now
-  **regenerates locally** instead of prompting when the source layer is known.
-- **Self-render** — `DisplayConfig.forAutoIcons` synthesizes a styling config from the layer's
-  own renderer so the *pasting* device shows the icons too (covers uniqueValue + single-symbol;
-  class-break range icons generate for sharing but don't self-render yet).
-- **Proved the core guarantee** — ran the UID/canonicalization/naming math in Node (Portal) and
-  a standalone JDK harness (ATAK) side-by-side: **identical output every time**, including the
-  SHA-256 digest.
-- **Docs** — auto-iconset feature documented in root + TAK Portal + ATAK READMEs, each flagged
-  *"new; not yet field-tested."* (`23e9318`)
-- **Still open:** no live-hardware test yet; CloudTAK + WinTAK generation not built; Web Map link
-  resolution deferred (FeatureServer/layer URLs only); class-break self-render gap.
+Audit remediation against `FEATURELINK-AUDIT-CHECKLIST.md`. The authoritative work list is
+Appendix F §4, the deduplicated critical list `C-01…C-40`; per-work-package reports live in
+`docs/remediation/`. The pre-remediation session summary that used to fill this file (CloudTAK
+share/ingest fixes, auto-iconset, repo housekeeping) is all merged into `dev` and is described
+in that branch's history.
 
-## Fixed: ATAK→CloudTAK config share silently doing nothing
-- Root cause: the auto-ingest poll passed `filter=^FeatureLink` to `/api/import`, but
-  CloudTAK's `filter` is a **substring match, not a regex** — the `^` matched nothing, so the
-  poll loop never ran and status stayed silent.
-- Fix: fetch recent imports unfiltered and match the name **client-side**; widened the window
-  25→50. Verified end-to-end against the live prod server before shipping. (`8139191`)
+> **Nothing in this branch has been runtime-tested.** Every remediation report row is tagged
+> `TEST-NOT-EXECUTED-LOCALLY`, and the checklist's own §0 SEV-HIGH coverage gap says no
+> component was reviewed at runtime. Per-component test instructions are written and unexecuted
+> in `docs/testing/`. No delivery claim should be made against this branch until a live ArcGIS
+> org and a live TAK server have been exercised.
 
-## Fixed: Hide layer button leaving markers on the map
-- `syncLayerMarkers` recorded every marker's uid *before* the visibility check, so the cleanup
-  loop never removed anything when hidden. Now hiding tears the markers down (and doesn't depend
-  on a network fetch). (`d374178`)
+## ATAK (WP1) — see `docs/remediation/wp1-atak.md`
 
-## Added: feature counts on ArcGIS sign-in
-- Sign-in now shows each owned layer's count via a **count-only** query (no geometry download,
-  no markers placed). (`3494624`)
+**Fixed and committed:** C-07 (symbology resolved on the download path, the owner's field
+defect), C-08 (all sublayers addressable, not just `/0`), C-06 (pagination + truncation
+surfaced), C-22 (ArcGIS error bodies checked at every parse site), C-09 (OAuth `state` nonce,
+in-memory PKCE, explicit broadcast), C-02 (signature-permission receiver + mandatory consent
+dialog), C-21 (`Authorization: Bearer`, every logged URL redacted), C-20 (refresh token under
+an Android Keystore AES-256/GCM key), C-39 (`Locale.ROOT` canonicalisation), C-24 (per-value
+shape styling precedence).
 
-## Improved: share button → downloads a `.featurelink.json` file
-- Instead of clipboard copy, for real cross-platform hand-off. (`ec502c0`)
+**Fixed after those reports, this session:**
+- **Manual Add Layer never sent the token.** `commitAddedLayers()` stamps every added layer
+  `"public"` and `fetchLayerInfoChecked()` hardcodes the same, so `downloadLayer()`'s
+  `"private".equals(layer.type)` gate withheld the token from a secured layer: 499 "Token
+  Required", reported to the operator as an expired session that signing in again never fixed.
+  The gate now asks `ArcGISAuthManager.holdsCredentialsFor(url)`, which matches the signed-in
+  portal's host (treating the `arcgis.com` family as one, exact-host for Enterprise) and
+  refuses unrecognised hosts so an ingested config cannot harvest the token. The add path and
+  the QR path are scoped the same way.
+- **`sendBroadcast(intent, permission)` dropped every broadcast.** The two-arg form requires the
+  *receiver* to hold the permission, but the receiver lives inside ATAK, which never declares
+  it. C-02's protection is the `registerReceiver(..., INTERNAL_PERMISSION, ...)` side, which is
+  what gates senders. "Open in ATAK" and the whole OAuth callback silently did nothing until
+  this was reverted to the one-arg form.
+- **New bulk "Update" button** on the Layers page: re-downloads `publicLayers` +
+  `sharedPrivateLayers` (deliberately not the browse lists, which would pull the operator's
+  whole account onto the map) on the background pool, with a re-entrancy guard and one summary
+  instead of N toasts and stacked dialogs.
 
-## Investigated: in-app "send to a TAK contact" (ATAK/WinTAK/CloudTAK)
-- Mapped CloudTAK's real API from source: contacts via `/api/marti/api/contacts/all`, delivery
-  via `PUT /api/marti/package` with `destinations:[{uid}]`.
-- Key limitation: CloudTAK's package route never sets `onReceiveImport`, so recipients tap
-  "Import" once (no auto-apply). Tradeoff accepted.
-- Captured the full contract in `docs/CLOUDTAK-SHARE-DESIGN.md` as a clean next task rather than
-  shipping fragile unverifiable code. (`ddcdb03`)
+**Partial / deferred, with the gap stated:**
+- **C-28 partial** — pools split, nested same-pool submit removed, counts batched.
+  `waitForPublishJob` is still a blocking sleep loop, not the scheduled poll the brief asked for.
+- **C-23 partial** — the versioned `shp` block landed; the required
+  `fromJson(toCompactJson(x)) == x` round-trip test was not written (depends on C-14).
+- **C-25 unproven** — a `scheduleWithFixedDelay` tick exists but was descoped before
+  verification. Do not claim auto-refresh works.
+- **C-37 half** — all `Map.getOrDefault`/`String.join` crash paths replaced, but
+  `minSdkVersion` is still 21 with desugaring off. Recommendation when resumed: raise to 26.
+- **C-40 deferred** — keystore and plaintext signing passwords unchanged. No history rewrite
+  was ever in scope.
+- **C-14 / C-29** — still zero automated tests in either tree. C-29 itself was closed by the
+  baseline commit `a8f6f4a`.
 
-## Docs
-- Updated root + CloudTAK READMEs for the auto-import, sign-in counts, and file-share changes;
-  swept in concurrent auto-iconset README edits. (`23e9318`)
+Seven owner decisions are waiting in `wp1-atak.md` (token-at-rest mechanism, forced re-sign-in
+on upgrade, 8-digit colours, the 50,000-feature ceiling, no certificate pinning, 5.7
+`ImportResolver` semantics, iconset zip filename collisions) and in `QUESTIONS-FOR-OWNER.md`.
 
-## Git housekeeping
-- Committed the in-progress auto-iconset feature (ATAK + TAK Portal + spec). (`e641028`)
-- Reconciled the `jpat-laptop`/`dev` split (both were at the same commit), moved onto a local
-  `dev` branch, deleted local `jpat-laptop` (remote `jpat-laptop` to be deleted from the web UI).
+## Other work packages
 
-## Still open
-- The **profile-asset staging step** for the in-app contact send is the only unpinned piece —
-  needs a couple of live console probes when building that feature. See
-  `docs/CLOUDTAK-SHARE-DESIGN.md`.
+`docs/remediation/` carries the reports: `wp2-cloudtak.md`, `wp3-wintak.md`,
+`wp3-wintak-57-parity.md`, `wp4-server.md`, `wp5-crosscutting.md`. `WP6-HOTLOAD-BRIEF.md` is
+the one **new capability** rather than defect remediation: server-side iconset hot-load for
+CloudTAK feature layers, where TAK Portal generates, CloudTAK's server proxies and caches, and
+the browser never generates. It is gated on WP2 and WP4 landing first.
+
+## Versioning (C-15)
+
+The suite version is **2.7.0**, canonical in `VERSION`, policy in `VERSIONING.md`.
+
+- Both ATAK trees now declare `PLUGIN_VERSION = "2.7.0"` (was `2.7.24`, a MINOR bump that
+  carried the old PATCH across, which §1.1 prohibits).
+- `versionCode` is **derived**, no longer the literal `5` that froze Android's only upgrade
+  discriminator across nine releases: 2070006 for ATAK 5.6, 2070007 for ATAK 5.7.
+- `versionName` embeds the target: `2.7.0+atak5.6` / `2.7.0+atak5.7`, so an installed build can
+  be identified without the filename.
+- CloudTAK (`0.1.0`), TAK Portal (`1.5.0`) and Infra-TAK (`1.4.0`) are synced to `2.7.0`.
+
+**Still open on versioning:**
+- **Distinct `applicationId` per ATAK target (§2) is NOT done.** Both trees still declare
+  `com.atakmap.android.featurelink.plugin`, so 5.6 and 5.7 continue to overwrite each other on
+  a device. Deliberately deferred: §7 notes the new package installs *alongside* the old one,
+  and uninstalling the old one destroys all saved layers, display configs and PLI settings,
+  with no export capability anywhere in the suite. §7's own rule is that no version-scheme
+  change should reach a fielded device before config export/import ships.
+- **WinTAK 5.7 is at `0.9.0-pre` / `AssemblyVersion 0.9.0.7`**, not the suite version. Left
+  alone on purpose: C-17 records 5.7 as a regressed fork and blocks release until parity is
+  proven by diff, so stamping it `2.7.0` would advertise parity it does not have. This
+  knowingly violates the §1 MUST and will fail `check_versions.py` gate item 1 until either
+  5.7 reaches parity or the policy grants pre-release forks an exemption.
+- `VERSIONING.md:35` says Infra-TAK declares `__version__`; the actual symbol is
+  `MODULE_VERSION`. The doc, or the code, needs to move.
+
+## Immediate next steps
+
+1. Restart ATAK and walk the demo path on a device. Nothing here has been run.
+2. Expect a forced ArcGIS re-sign-in on first launch after the C-20 change (legacy plaintext
+   tokens are discarded, not migrated).
+3. Then WP6, gated on WP2/WP4.

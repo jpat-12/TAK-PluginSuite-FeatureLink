@@ -16,6 +16,7 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,6 +49,9 @@ public final class AutoIconset {
 
     private static final String TAG = "FeatureLink.AutoIconset";
     public static final int SPEC_VERSION = 1;
+
+    /** Lower-case hex alphabet for {@link #uid} — see the Locale note there (C-39). */
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     /** Outcome of a successful generation. */
     public static final class Result {
@@ -108,8 +112,14 @@ public final class AutoIconset {
             String authority = u.getAuthority();
             String path = u.getRawPath();
             if (scheme == null || authority == null || path == null) return null;
-            scheme = scheme.toLowerCase();
-            authority = authority.toLowerCase();
+            // C-39 — Locale.ROOT is mandatory. Bare toLowerCase() uses the DEFAULT locale, so
+            // on a Turkish-locale device "I" folds to the dotless "ı", producing a different
+            // canonical URL, a different SHA-256 and therefore a different iconset UID than
+            // every other device and every other platform implementation. That silently breaks
+            // the entire federated icon-matching guarantee, and the regeneration path never
+            // converges because it keeps computing the wrong UID.
+            scheme = scheme.toLowerCase(Locale.ROOT);
+            authority = authority.toLowerCase(Locale.ROOT);
             path = path.replaceAll("/{2,}", "/").replaceAll("/+$", "");
 
             java.util.regex.Matcher m = java.util.regex.Pattern
@@ -139,7 +149,12 @@ public final class AutoIconset {
             byte[] d = md.digest((canonicalUrl + "/" + (fieldName == null ? "" : fieldName))
                     .getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder(d.length * 2);
-            for (byte b : d) sb.append(String.format("%02x", b));
+            // Locale.ROOT for the same reason: under a locale whose default numbering system is
+            // not Latin (ar-EG-u-nu-arab, hi-IN-u-nu-deva) "%x" can emit non-ASCII digits and the
+            // UID diverges. Hand-rolled hex avoids the formatter entirely.
+            for (byte b : d) {
+                sb.append(HEX[(b >> 4) & 0xF]).append(HEX[b & 0xF]);
+            }
             return sb.toString();
         } catch (Exception e) {
             throw new RuntimeException("SHA-256 unavailable", e);
@@ -183,6 +198,22 @@ public final class AutoIconset {
     // §3 — renderer → esriPMS entries
     // -------------------------------------------------------------------------
 
+    /**
+     * Trailing sublayer index of a canonical layer URL ({@code .../FeatureServer/2} yields 2), or
+     * {@code -1} when the URL carries none. Used to pick the matching entry out of a portal item's
+     * {@code layers[]} array, since one item can override several sublayers independently.
+     */
+    public static int layerIndexOf(String canonicalUrl) {
+        if (canonicalUrl == null) return -1;
+        int slash = canonicalUrl.lastIndexOf('/');
+        if (slash < 0 || slash == canonicalUrl.length() - 1) return -1;
+        try {
+            return Integer.parseInt(canonicalUrl.substring(slash + 1));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
     /** One picture-marker entry. */
     private static final class Pms {
         final String value;         // renderer match value (uniqueValue); null for default/single/class-break
@@ -198,14 +229,66 @@ public final class AutoIconset {
     private static final class Extraction {
         String field = "";
         boolean single = false;
+        /** Renderer "type" as declared, for diagnostics. */
+        String rendererType = "";
+        /** How many per-value/per-break symbols the renderer declared (excludes defaultSymbol). */
+        int declared = 0;
+        /** Distinct symbol "type" values that were skipped, and why. Diagnostics only. */
+        final java.util.LinkedHashSet<String> skipped = new java.util.LinkedHashSet<>();
     }
 
-    private static Pms pmsFrom(JSONObject symbol, String value, String rawLabel, boolean isDefault) {
-        if (symbol == null) return null;
-        if (!"esriPMS".equals(symbol.optString("type", ""))) return null;
+    /**
+     * @param skipped when non-null, records the reason this symbol was not usable. A symbol is
+     *                usable only if it is an {@code esriPMS} carrying embedded {@code imageData}.
+     *                Symbols authored in the modern ArcGIS Map Viewer are typically
+     *                {@code CIMSymbolReference} and are <em>not</em> handled here — that is the
+     *                single most common reason a richly-styled layer yields only {@code Other.png}.
+     */
+    private static Pms pmsFrom(JSONObject symbol, String value, String rawLabel, boolean isDefault,
+                               java.util.Set<String> skipped) {
+        if (symbol == null) {
+            if (skipped != null) skipped.add("(absent)");
+            return null;
+        }
+        String type = symbol.optString("type", "");
+        if (!"esriPMS".equals(type)) {
+            if (skipped != null) skipped.add(type.isEmpty() ? "(untyped)" : type);
+            return null;
+        }
         String img = symbol.optString("imageData", "");
-        if (img.isEmpty()) return null;
+        if (img.isEmpty()) {
+            if (skipped != null) skipped.add("esriPMS(no imageData)");
+            return null;
+        }
         return new Pms(value, rawLabel, img, isDefault);
+    }
+
+    /**
+     * Explains, in one line, why a renderer produced the icon count it did. Silent on the fully
+     * successful path; warns whenever declared symbols were dropped, because that is invisible to
+     * the operator otherwise — the layer simply renders with a single default marker.
+     */
+    private static void logExtraction(String canonicalUrl, Extraction ex, List<Pms> entries) {
+        if (ex.skipped.isEmpty()) {
+            Log.d(TAG, "renderer '" + ex.rendererType + "' for " + canonicalUrl
+                    + ": declared=" + ex.declared + " extracted=" + entries.size());
+            return;
+        }
+        StringBuilder why = new StringBuilder();
+        if (ex.skipped.contains("esriSMS")) {
+            why.append(" esriSMS is a geometric marker (shape + colour, no embedded image), so"
+                    + " there are no icon bytes to extract — those values need shape styling"
+                    + " rather than an iconset.");
+        }
+        if (ex.skipped.contains("CIMSymbolReference")) {
+            why.append(" CIMSymbolReference is the modern ArcGIS Map Viewer encoding and is not"
+                    + " parsed by this extractor.");
+        }
+        Log.w(TAG, "renderer '" + ex.rendererType + "' for " + canonicalUrl
+                + ": declared=" + ex.declared + " extracted=" + entries.size()
+                + " — SKIPPED symbol types " + ex.skipped
+                + ". Only esriPMS with embedded imageData yields an icon." + why
+                + " Values using a skipped type fall back to the default marker.");
     }
 
     /** §3: driving field + ordered esriPMS entries (esriSMS shapes skipped; renderer array order preserved). */
@@ -216,40 +299,45 @@ public final class AutoIconset {
             return ex;
         }
         String type = renderer.optString("type", "simple");
+        ex.rendererType = type;
 
         if ("uniqueValue".equals(type) || "uniqueValueRenderer".equals(type)) {
             ex.field = renderer.optString("field1", renderer.optString("field", ""));
             JSONArray infos = renderer.optJSONArray("uniqueValueInfos");
             if (infos != null) {
+                ex.declared = infos.length();
                 for (int i = 0; i < infos.length(); i++) {
                     JSONObject info = infos.optJSONObject(i);
                     if (info == null) continue;
                     String value = info.optString("value", "");
                     String label = info.optString("label", value);
-                    Pms p = pmsFrom(info.optJSONObject("symbol"), value, label, false);
+                    Pms p = pmsFrom(info.optJSONObject("symbol"), value, label, false, ex.skipped);
                     if (p != null) out.add(p);
                 }
             }
-            addDefault(renderer, out);
+            addDefault(renderer, out, ex.skipped);
         } else if ("classBreaks".equals(type) || "classBreaksRenderer".equals(type)) {
             ex.field = renderer.optString("field", "");
             // Class breaks match by numeric range, not value equality — the icons still get
             // generated (for sharing) but can't be mapped to a self-render display config here.
             JSONArray infos = renderer.optJSONArray("classBreakInfos");
             if (infos != null) {
+                ex.declared = infos.length();
                 for (int i = 0; i < infos.length(); i++) {
                     JSONObject info = infos.optJSONObject(i);
                     if (info == null) continue;
-                    Pms p = pmsFrom(info.optJSONObject("symbol"), null, info.optString("label", ""), false);
+                    Pms p = pmsFrom(info.optJSONObject("symbol"), null, info.optString("label", ""),
+                            false, ex.skipped);
                     if (p != null) out.add(p);
                 }
             }
-            addDefault(renderer, out);
+            addDefault(renderer, out, ex.skipped);
         } else {
             // simple / bare symbol — single symbol, no field
+            ex.declared = 1;
             String label = renderer.optString("label", "");
             Pms p = pmsFrom(renderer.optJSONObject("symbol"), null,
-                    label.isEmpty() ? null : label, label.isEmpty());
+                    label.isEmpty() ? null : label, label.isEmpty(), ex.skipped);
             if (p != null) {
                 out.add(p);
                 ex.single = true;
@@ -260,10 +348,11 @@ public final class AutoIconset {
         return ex;
     }
 
-    private static void addDefault(JSONObject renderer, List<Pms> out) {
+    private static void addDefault(JSONObject renderer, List<Pms> out, java.util.Set<String> skipped) {
+        if (!renderer.has("defaultSymbol")) return;   // no default declared is not a skip
         String defLabel = renderer.optString("defaultLabel", "");
         Pms d = pmsFrom(renderer.optJSONObject("defaultSymbol"), null,
-                defLabel.isEmpty() ? null : defLabel, defLabel.isEmpty());
+                defLabel.isEmpty() ? null : defLabel, defLabel.isEmpty(), skipped);
         if (d != null) out.add(d);
     }
 
@@ -308,15 +397,17 @@ public final class AutoIconset {
         if (canonicalUrl == null) return null;
 
         JSONObject renderer = rendererOverride;
+        // Held so the group-name lookup below reuses this response instead of issuing a second
+        // identical metadata GET for every generation (Appendix A §12.14).
+        JSONObject meta = null;
         if (renderer == null) {
-            JSONObject meta;
             try {
                 meta = client.fetchJson(canonicalUrl, token);
             } catch (Exception e) {
                 Log.e(TAG, "renderer fetch failed for " + canonicalUrl, e);
                 return null;
             }
-            if (meta == null || meta.has("error")) {
+            if (meta == null) {
                 Log.w(TAG, "no layer metadata for " + canonicalUrl);
                 return null;
             }
@@ -327,6 +418,7 @@ public final class AutoIconset {
         List<Pms> entries = new ArrayList<>();
         Extraction ex = extract(renderer, fieldOverride, entries);
         String field = ex.field;
+        logExtraction(canonicalUrl, ex, entries);
         if (entries.isEmpty()) {
             Log.d(TAG, "no esriPMS symbols in renderer for " + canonicalUrl + " — nothing to generate");
             return null;
@@ -337,11 +429,13 @@ public final class AutoIconset {
         if (groupOverride != null && !groupOverride.isEmpty()) {
             group = groupOverride;
         } else {
-            JSONObject meta2;
-            try {
-                meta2 = client.fetchJson(canonicalUrl, token);
-            } catch (Exception e) {
-                meta2 = null;
+            JSONObject meta2 = meta;
+            if (meta2 == null) {
+                try {
+                    meta2 = client.fetchJson(canonicalUrl, token);
+                } catch (Exception e) {
+                    meta2 = null;
+                }
             }
             String layerName = meta2 != null ? meta2.optString("name", meta2.optString("serviceDescription", "Layer")) : "Layer";
             group = sanitizeGroupBase(layerName) + " Icons";
@@ -387,10 +481,32 @@ public final class AutoIconset {
      */
     private static File buildAndInstall(Context ctx, String uid, String group, Map<String, byte[]> files) {
         File dir = new File(Environment.getExternalStorageDirectory(), "atak/iconsets");
-        //noinspection ResultOfMethodCallIgnored
-        dir.mkdirs();
-        // group is already [A-Za-z0-9 _-]-safe (spec §5.1) so it's a valid file name.
+        if (!dir.isDirectory() && !dir.mkdirs()) {
+            // Previously the ignored mkdirs() result meant a missing storage permission or a full
+            // disk produced a caught-and-logged FileNotFoundException and the operator saw
+            // nothing at all — the whole auto-iconset feature failed silently (Appendix A §7).
+            Log.e(TAG, "cannot create iconset directory " + dir.getAbsolutePath()
+                    + " — auto-iconset generation cannot proceed");
+            return null;
+        }
+        // group is already [A-Za-z0-9 _-]-safe (spec §5.1) so it's a valid file name. The
+        // canonical-path assertion is belt and braces: it does not rely on that one regex being
+        // correct forever, and it is the check a reviewer will look for (Appendix A §4).
+        // NOTE: the filename stays "{group}.zip" — FeatureLinkDropDownReceiver.sendLayerShare()
+        // locates this device's installed zip by exactly that name when bundling a share, so
+        // adding a uid discriminator here (which would fix the two-layers-same-display-name
+        // collision, Appendix A §4) requires changing the share lookup in the same commit.
+        // Tracked as an open item rather than half-applied.
         File zip = new File(dir, group + ".zip");
+        try {
+            if (!zip.getCanonicalPath().startsWith(dir.getCanonicalPath() + File.separator)) {
+                Log.e(TAG, "refusing to write iconset zip outside " + dir.getCanonicalPath());
+                return null;
+            }
+        } catch (java.io.IOException ioe) {
+            Log.e(TAG, "cannot canonicalise iconset zip path", ioe);
+            return null;
+        }
 
         try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zip))) {
             // iconset.xml (root) — non-empty name+uid so ATAK trusts the uid verbatim (spec §0.1/§7)

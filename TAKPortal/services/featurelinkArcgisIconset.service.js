@@ -23,8 +23,20 @@
 
 const crypto = require("crypto");
 const { registerArcgisSet } = require("./featurelinkCustomIcons.service");
+const { safeFetchArcgisJson, BlockedRequestError } = require("./featurelinkSafeFetch.service");
 
 const SPEC_VERSION = 1;
+
+// §5.1 — the group base is capped ONCE, here, before " Icons" is appended (C-39). Nothing
+// downstream may truncate again; see the note on generateFromArcgis().
+const GROUP_BASE_MAX = 60;
+
+// Appendix D §2.3: `icons[]` is derived from a renderer the *browser* may supply, so a caller
+// could POST a synthetic renderer with 100,000 entries of 5 MB base64 each and every one would be
+// written to disk. Bound the shape before decoding anything.
+const MAX_RENDERER_ENTRIES = 500;
+const MAX_ICON_BYTES = 512 * 1024;
+const MAX_ICONSET_TOTAL_BYTES = 32 * 1024 * 1024;
 
 // Mirrors AUTO-ICONSET-SPEC.md §5 sanitization (and NAME_RE/FILE_RE in the custom-icons service).
 const GROUP_BAD_RE = /[^A-Za-z0-9 _-]/g;
@@ -95,13 +107,32 @@ function uidFor(canonicalUrl, fieldName) {
 // §5 — naming
 // -------------------------------------------------------------------------
 
-/** §5.1: sanitize + collapse whitespace + trim + cap 60. Caller appends " Icons". */
+/**
+ * §5.1: sanitize + collapse whitespace + trim + cap 60. Caller appends " Icons".
+ *
+ * C-39: this is the ONE place the 60-character cap is applied. It used to be applied here to the
+ * base AND again by `cleanSetName()` to the whole `"<base> Icons"` string, so for any layer name
+ * over 54 characters TAK Portal stored a 60-char truncation of a 66-char group while ATAK, WinTAK
+ * and CloudTAK all produced the full 66 — breaking `{uid}/{group}/{file}` string identity, which
+ * is the single thing AUTO-ICONSET-SPEC.md exists to guarantee. Do not re-truncate downstream.
+ */
 function sanitizeGroupBase(s) {
   return String(s || "")
     .replace(GROUP_BAD_RE, "_")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 60);
+    .slice(0, GROUP_BASE_MAX);
+}
+
+/**
+ * §5.1: the complete group string for a layer name — `sanitizeGroupBase(name) + " Icons"`, at most
+ * 66 characters. THE single source of the group string across this module (C-39). Every other
+ * implementation in the suite (ATAK `AutoIconset.java`, WinTAK, CloudTAK `autoIconset.ts`) must
+ * produce byte-identical output; the shared golden vectors live at
+ * TAKPortal/test/fixtures/auto-iconset-golden-vectors.json.
+ */
+function groupFor(layerName) {
+  return `${sanitizeGroupBase(layerName)} Icons`;
 }
 
 /** §5.2: label/value → strip path prefix → strip trailing .png → sanitize → append .png. */
@@ -132,17 +163,15 @@ function dedupe(fileName, seen) {
 // §3 — renderer fetch + esriPMS extraction
 // -------------------------------------------------------------------------
 
-async function fetchJson(url) {
-  if (typeof fetch !== "function") {
-    throw new Error("This TAK Portal's Node runtime has no global fetch (needs Node 18+).");
-  }
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error(`ArcGIS request failed (${res.status}) for ${url}`);
-  const json = await res.json();
-  if (json && json.error) {
-    throw new Error(`ArcGIS error: ${json.error.message || JSON.stringify(json.error)}`);
-  }
-  return json;
+/**
+ * C-04/C-21/C-22: all outbound ArcGIS traffic goes through featurelinkSafeFetch.service.js, which
+ * enforces the host allowlist, the post-DNS private-range check (closing DNS rebinding), the
+ * redirect cap with per-hop re-validation, the request timeout, and the response-size cap — and
+ * which checks both the transport status and an ArcGIS `error` body returned with HTTP 200.
+ * The token is sent as an `Authorization: Bearer` header, never as `?token=` in the URL.
+ */
+async function fetchJson(url, token) {
+  return safeFetchArcgisJson(url, { token });
 }
 
 /** One picture-marker entry pulled from a renderer. imageData is base64 PNG (no data: prefix). */
@@ -219,7 +248,7 @@ function extractPmsEntries(renderer, fieldOverride) {
  *   re-fetching here would silently ignore that and extract from the wrong one.
  * @returns {Promise<{success:true, set, uid, group, canonicalUrl, iconCount} | {success:false, error}>}
  */
-async function generateFromArcgis({ sourceUrl, field, token, actorUsername, renderer: rendererOverride } = {}) {
+async function generateFromArcgis({ sourceUrl, field, token, actor, actorUsername, renderer: rendererOverride } = {}) {
   let canonicalUrl;
   try {
     canonicalUrl = canonicalizeUrl(sourceUrl);
@@ -230,17 +259,28 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername, rend
   // Naming (layer name -> group) still comes from the FeatureServer layer itself even when the
   // renderer is an override — only the renderer source changes, per spec §2.3 — so this fetch
   // always happens, purely for layerName below.
-  const tokenQs = token ? `&token=${encodeURIComponent(token)}` : "";
+  //
+  // C-21: the token now travels in an Authorization header, not `&token=` in the query string.
   let meta;
   try {
-    meta = await fetchJson(`${canonicalUrl}?f=json${tokenQs}`);
+    meta = await fetchJson(`${canonicalUrl}?f=json`, token);
   } catch (err) {
+    // Never echo the URL back with a token attached, and keep the blocked/failed wording uniform
+    // so this is not usable as an internal-port oracle.
+    if (err instanceof BlockedRequestError) return { success: false, error: err.message };
     return { success: false, error: err.message };
   }
 
   const layerName = meta.name || meta.serviceDescription || "Layer";
   const renderer = rendererOverride || (meta.drawingInfo && meta.drawingInfo.renderer);
   const { field: driveField, entries, rendererType } = extractPmsEntries(renderer, field);
+
+  if (entries.length > MAX_RENDERER_ENTRIES) {
+    return {
+      success: false,
+      error: `This renderer has ${entries.length} picture-marker symbols — the limit is ${MAX_RENDERER_ENTRIES}.`,
+    };
+  }
 
   if (!entries.length) {
     return {
@@ -252,22 +292,28 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername, rend
   }
 
   const uid = uidFor(canonicalUrl, driveField);
-  const group = `${sanitizeGroupBase(layerName)} Icons`;
+  const group = groupFor(layerName);
 
   // §5.2/§5.3 naming + base64 decode. value/isDefault ride along on each icon entry (rather
   // than being re-derived from `entries` by position afterward) so a skipped undecodable
   // symbol can't shift a later entry's value out of alignment with its filename.
   const seen = new Set();
   const icons = [];
+  let totalBytes = 0;
   for (const e of entries) {
     const atakName = dedupe(e.isDefault && !e.rawLabel ? "Other.png" : fileNameFor(e.rawLabel), seen);
-    let bytes;
-    try {
-      bytes = Buffer.from(e.imageData, "base64");
-    } catch (_) {
-      continue; // skip an undecodable symbol rather than fail the whole set
+    // Appendix D §2.5: `Buffer.from(x, "base64")` never throws, so the old catch was unreachable
+    // and garbage `imageData` produced a truncated buffer that fell through. Validate explicitly.
+    const raw = String(e.imageData || "").replace(/^data:[^,]*,/, "");
+    if (!/^[A-Za-z0-9+/\r\n]*={0,2}$/.test(raw) || !raw) continue;
+    if (raw.length > Math.ceil((MAX_ICON_BYTES / 3) * 4) + 4) continue;
+    const bytes = Buffer.from(raw, "base64");
+    if (!bytes.length || bytes.length > MAX_ICON_BYTES) continue;
+    totalBytes += bytes.length;
+    if (totalBytes > MAX_ICONSET_TOTAL_BYTES) {
+      return { success: false, error: "This renderer's embedded images exceed the icon-set size limit." };
     }
-    if (bytes && bytes.length) icons.push({ atakName, bytes, value: e.value, isDefault: !!e.isDefault });
+    icons.push({ atakName, bytes, value: e.value, isDefault: !!e.isDefault });
   }
 
   if (!icons.length) {
@@ -283,8 +329,24 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername, rend
     field: driveField,
     specVersion: SPEC_VERSION,
     actorUsername,
+    // C-03: registerArcgisSet() used to rmSync() an existing set directory and drop its manifest
+    // entry with no ownership check at all, so any logged-in user could destroy an admin's icon
+    // set by pointing this endpoint at a layer whose name sanitized to the same string.
+    actor: actor || (actorUsername ? { username: actorUsername, isAdmin: false } : null),
   });
   if (!result.success) return result;
+
+  // C-39 contract check. After the double-truncation fix these must be identical; if they ever
+  // diverge again, every device resolving {uid}/{group}/{file} for this layer silently falls back
+  // to a default marker, which is exactly the field failure the spec exists to prevent.
+  if (result.set.name !== group) {
+    return {
+      success: false,
+      error:
+        "Internal naming mismatch: the stored icon-set name does not equal the spec group " +
+        `("${result.set.name}" vs "${group}"). Refusing to register a set that would not resolve on-device.`,
+    };
+  }
 
   // For a caller that wants to auto-build display-config symbology (not just register the
   // set): each non-default icon's driving-field value -> generated filename, plus the
@@ -300,11 +362,11 @@ async function generateFromArcgis({ sourceUrl, field, token, actorUsername, rend
     success: true,
     set: result.set,
     uid,
-    // The manifest's own stored name, not the local `group` var — registerArcgisSet() runs
-    // it through cleanSetName() (trim + 60-char cap) before storing, which for a long layer
-    // name could differ from the pre-registration string by a trailing char or two. Callers
-    // need the name that will actually resolve via resolveUsericonPath()/the icons API.
-    group: result.set.name,
+    // The spec group (§5.1), which the check above has just proved equal to the manifest's stored
+    // name. Previously this returned `result.set.name` specifically because registerArcgisSet()
+    // re-truncated — the two could differ, and callers got a string that did not match what
+    // ATAK/WinTAK/CloudTAK compute. One value now, from one place (C-39).
+    group,
     canonicalUrl,
     field: driveField,
     iconCount: icons.length,
@@ -320,8 +382,10 @@ module.exports = {
   canonicalizeUrl,
   uidFor,
   sanitizeGroupBase,
+  groupFor,
   fileNameFor,
   dedupe,
   extractPmsEntries,
   SPEC_VERSION,
+  GROUP_BASE_MAX,
 };

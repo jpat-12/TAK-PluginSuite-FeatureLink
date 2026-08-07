@@ -29,6 +29,12 @@ const DATASETS_DIR = path.join(DATA_DIR, "datasets");
 
 const ID_RE = /[^a-fA-F0-9]/g;
 
+// Appendix D §2.3 — caps on the two unbounded client-supplied blobs.
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_FILE_B64_CHARS = Math.ceil((MAX_FILE_BYTES / 3) * 4) + 4;
+const MAX_STATE_BYTES = 8 * 1024 * 1024;
+const B64_RE = /^[A-Za-z0-9+/\r\n]*={0,2}$/;
+
 function cleanId(id) {
   return String(id || "").replace(ID_RE, "");
 }
@@ -70,10 +76,18 @@ function listDatasets() {
   return out;
 }
 
-/** True if `username` created this record, or the record predates ownership tracking
- * (created_by unset) — treated as unowned/editable-by-anyone rather than locked out. */
+/**
+ * True if `username` created this record.
+ *
+ * C-03 / Appendix D §2.1: this used to return true when `created_by` was unset, so every record
+ * written before ownership tracking existed — and every record written by the Flask module, which
+ * has no ownership model at all — was editable and deletable by *anyone*. That is fail-open
+ * authorization on exactly the legacy data most likely to matter. An unowned record is now owned
+ * by nobody, which `featurelinkAccess.canAccessRecord()` resolves to admin-only.
+ */
 function isOwnedBy(record, username) {
-  return !record.created_by || record.created_by === username;
+  if (!record || !record.created_by || !username) return false;
+  return record.created_by === username;
 }
 
 function loadDataset(id) {
@@ -96,6 +110,21 @@ function loadDataset(id) {
  * "created_by"), recorded as owner on first create only; preserved as-is on update.
  */
 function saveDataset(payload, actorUsername) {
+  // `state` is the configurator's whole internal representation and was stored with no bound at
+  // all — an unauthenticated-tier user could park an arbitrarily large object in the store, and
+  // every listDatasets() call then re-reads and re-parses it (Appendix D §2.3/§2.4).
+  if (payload.state !== undefined && payload.state !== null) {
+    let stateBytes;
+    try {
+      stateBytes = Buffer.byteLength(JSON.stringify(payload.state), "utf-8");
+    } catch (_) {
+      throw new Error("state is not serializable JSON");
+    }
+    if (stateBytes > MAX_STATE_BYTES) {
+      throw new Error(`Config state is too large (limit ${Math.floor(MAX_STATE_BYTES / (1024 * 1024))} MB).`);
+    }
+  }
+
   const id = cleanId(payload.id) || crypto.randomUUID().replace(/-/g, "");
   const dir = datasetDir(id);
   fs.mkdirSync(dir, { recursive: true });
@@ -122,18 +151,36 @@ function saveDataset(payload, actorUsername) {
   };
 
   if (sourceType === "file" && payload.file_content_b64) {
-    let raw;
-    try {
-      raw = Buffer.from(payload.file_content_b64, "base64");
-    } catch (_) {
+    // Appendix D §2.3: `Buffer.from(x, "base64")` never throws — it silently drops invalid
+    // characters — so the old try/catch was dead code and the "invalid file_content_b64" error
+    // was unreachable. Validate the encoding explicitly and cap the decoded size; previously any
+    // logged-in user could write arbitrary bytes of arbitrary length to disk.
+    const b64 = String(payload.file_content_b64);
+    if (b64.length > MAX_FILE_B64_CHARS) {
+      throw new Error(`Uploaded file is too large (limit ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))} MB).`);
+    }
+    if (!B64_RE.test(b64)) {
       throw new Error("invalid file_content_b64");
     }
-    fs.writeFileSync(dataPath(id), raw);
+    const raw = Buffer.from(b64, "base64");
+    if (raw.length > MAX_FILE_BYTES) {
+      throw new Error(`Uploaded file is too large (limit ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))} MB).`);
+    }
+    writeFileAtomic(dataPath(id), raw);
   }
 
-  fs.writeFileSync(recordPath(id), JSON.stringify(record), "utf-8");
+  // Atomic: a crash mid-write used to truncate record.json, after which loadDataset()'s bare
+  // catch made the dataset silently vanish from every listing while its files stayed on disk.
+  writeFileAtomic(recordPath(id), Buffer.from(JSON.stringify(record), "utf-8"));
   record.id = id;
   return record;
+}
+
+/** Write via a temp file + rename so a reader never observes a partial record. */
+function writeFileAtomic(target, buf) {
+  const tmp = `${target}.tmp-${crypto.randomBytes(6).toString("hex")}`;
+  fs.writeFileSync(tmp, buf);
+  fs.renameSync(tmp, target);
 }
 
 function deleteDataset(id) {

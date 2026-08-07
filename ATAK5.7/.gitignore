@@ -1,51 +1,35 @@
-# ── Gradle ───────────────────────────────────────────────────────────────────
-.gradle/
-build/
-app/build/
-gradle.properties
+# ATAK 5.7 plugin — component-level ignores.
+#
+# This file previously duplicated ~90% of the root .gitignore and was byte-identical to
+# ATAK5.6/.gitignore (2,100 b each) — four files, two distinct contents (audit Appendix E
+# §2.4). It has been collapsed to its genuine deltas. Everything else — Gradle/Android
+# build output, keystores, IDE state, OS junk, logs — is covered once at the repository
+# root and must not be restated here, or the two copies will drift.
 
-# ── Android ──────────────────────────────────────────────────────────────────
-local.properties
-*.apk
-*.aab
-*.dex
-*.class
-out/
-gen/
-captures/
-proguard/
-
-# ── Signing keys ─────────────────────────────────────────────────────────────
-*.jks
-*.keystore
-
-# ── IDE ──────────────────────────────────────────────────────────────────────
-.idea/
-*.iml
-*.iws
-*.ipr
-*.swp
-*.swo
-
-# ── Logs / profiling ─────────────────────────────────────────────────────────
-*.log
-*.hprof
-
-# ── OS junk ──────────────────────────────────────────────────────────────────
-.DS_Store
-**/.DS_Store
-Thumbs.db
-desktop.ini
-
-# ── Keep these SDK support files — required by the build ─────────────────────
+# ── Genuine component delta: re-include the SDK support files the build needs ─
+# These are matched by root rules and re-included here as well as at the root, so that a
+# `git add` run from inside ATAK5.7/ behaves identically to one run from the repo root.
 !.takdev/
 !.takdev/aars/
 !.takdev/aars/*.aar
 !buildtools/
 !buildtools/atak-gradle-takdev.jar
+
+# gradle.properties is ignored at the root (it may carry machine-specific paths or secrets
+# in other components), except this one — it only sets a JVM heap size for R8, needed on any
+# CI runner since a civRelease build's minification pass has hit OutOfMemoryError on the
+# default heap.
+!gradle.properties
+
+# DEPRECATED — scheduled for removal under C-40, in step with the root .gitignore.
+# See the note there: the blob is the public stock ATAK SDK dev key (md5
+# de161723bca27d5da9dd16052ee18cae, identical to the SDK's own android_keystore), the
+# finding is adjudicated MEDIUM, and removing this negation before the file is
+# `git rm --cached`'d and build.gradle switched to env-var-sourced signing passwords would
+# change nothing — an ignore rule does not untrack an already-tracked file.
 !app/featurelink.keystore
 
-# gradle.properties is ignored above (may carry machine-specific paths/secrets elsewhere),
-# except this one — it only sets a JVM heap size for R8, needed on any CI runner since a
-# civRelease build's minification pass has hit OutOfMemoryError on the default heap.
-!gradle.properties
+# ── Build-tool cache with timestamp churn ────────────────────────────────────
+# Covered by the root rule `**/.takdev/plugin.properties`; restated here only to mark that
+# the `!.takdev/` re-include above is deliberately narrower than the whole directory.
+.takdev/plugin.properties

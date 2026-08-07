@@ -1,0 +1,56 @@
+# Pinned digests for every executable binary blob tracked in this repository.
+#
+# Format:  <repo-relative path>  <sha256>
+#
+# WHY
+# ---
+# Appendix F §5 records that no auditor framed the supply-chain posture as an aggregate
+# delivery blocker: there is no SBOM, no dependency pinning by digest, no provenance
+# attestation and no signed release artifact for any of the seven components. Current
+# federal software-supply-chain expectations (EO 14028, NIST SSDF self-attestation) treat
+# that as a submission blocker in its own right.
+#
+# `buildtools/atak-gradle-takdev.jar` is the sharpest case. It is a 148 KB binary blob that
+# is tracked, redistributed, has an unstated licence, and — critically — is EXECUTED as a
+# Gradle classpath dependency on every build. A substituted jar runs attacker-controlled
+# code inside the pipeline that signs and publishes artifacts. It was pinned by nothing at
+# all: the old workflow checked only that the file EXISTED and printed its byte count.
+#
+# The `atak` job in .github/workflows/ci.yml verifies the takdev jar against this file
+# before invoking Gradle, and fails the build on a mismatch or on an unrecorded digest.
+#
+# ADDING AN ENTRY
+# ---------------
+# Never record a digest without first establishing where the binary came from. A pinned
+# digest for a blob of unknown provenance pins the wrong thing — it guarantees you keep
+# running the same unverified code. Record the provenance in THIRD-PARTY-NOTICES.md at the
+# same time.
+
+# ── ATAK TAK-devkit Gradle plugin (executed on the build classpath) ──────────
+# Provenance: shipped inside the ATAK CIV SDK. Licence UNSTATED — see
+# THIRD-PARTY-NOTICES.md, "Unresolved". Both trees carry a byte-identical copy.
+ATAK5.6/buildtools/atak-gradle-takdev.jar  f430b41b03b95fad0db34bbe80a1eebf5b9965b6c4977a01995b4869dd5ff333
+ATAK5.7/buildtools/atak-gradle-takdev.jar  f430b41b03b95fad0db34bbe80a1eebf5b9965b6c4977a01995b4869dd5ff333
+
+# ── Gradle wrapper (executed by ./gradlew) ───────────────────────────────────
+# Provenance: the Gradle project. Apache-2.0. Both trees carry a byte-identical copy.
+# NOTE: gradle/wrapper/gradle-wrapper.properties additionally carries a distributionSha256Sum
+# for the Gradle distribution itself; this pin covers only the bootstrap jar.
+ATAK5.6/gradle/wrapper/gradle-wrapper.jar  76805e32c009c0cf0dd5d206bddc9fb22ea42e84db904b764f3047de095493f3
+ATAK5.7/gradle/wrapper/gradle-wrapper.jar  76805e32c009c0cf0dd5d206bddc9fb22ea42e84db904b764f3047de095493f3
+
+# ── TAK devkit lint rules (loaded by the Android Lint task) ──────────────────
+# Provenance: shipped inside the ATAK CIV SDK. Licence UNSTATED.
+ATAK5.6/.takdev/aars/takdevlint.aar  7acc4d2cb574f09a3143d122a025340022aac1ea97edeb0f3371802de2f7aba7
+ATAK5.7/.takdev/aars/takdevlint.aar  7acc4d2cb574f09a3143d122a025340022aac1ea97edeb0f3371802de2f7aba7
+
+# ── Signing keystore (NOT executable; recorded for identification only) ──────
+# This is the STOCK ATAK CIV SDK development keystore, not a project identity:
+#   alias wintec_mapping, O=WinTec Arrowmaker, created 2011-05-19, serial 4dd50358,
+#   SHA1withRSA, 1024-bit RSA, password `tnttnt`
+# md5 de161723bca27d5da9dd16052ee18cae — byte-identical to the SDK's own android_keystore,
+# which is why C-40 is adjudicated MEDIUM rather than a credential leak: the key is already
+# in the hands of every ATAK plugin developer worldwide and no history rewrite is warranted.
+# It is pinned here so that a substitution — the case that WOULD matter — is detectable.
+ATAK5.6/app/featurelink.keystore  5a5ec442c96d117c7fa393d8402af4056a650c1a35efa419223cdac5fae30a15
+ATAK5.7/app/featurelink.keystore  5a5ec442c96d117c7fa393d8402af4056a650c1a35efa419223cdac5fae30a15

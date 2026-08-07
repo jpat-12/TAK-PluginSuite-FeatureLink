@@ -55,12 +55,70 @@ const MANIFEST_PATH = path.join(CUSTOM_ICONS_DIR, "manifest.json");
 
 const NAME_RE = /[^a-zA-Z0-9 _-]/g;
 const FILE_RE = /[^a-zA-Z0-9._-]/g;
-const IMAGE_EXT_RE = /\.(png|jpe?g|gif|bmp|webp|svg)$/i;
+// SVG removed (Appendix D §2.2): GET /custom-icons/:name/:file serves stored files with sendFile,
+// which labels .svg as image/svg+xml, and an SVG containing <script> then executes on the portal
+// origin. ATAK cannot render SVG as a marker anyway, so nothing is lost.
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|bmp|webp)$/i;
 const ICONSET_XML_RE = /^iconset\.xml$/i;
-const ZIP_ENTRY_LIMIT = 500; // guards against zip-bomb-style entry counts
-const ZIP_ENTRY_MAX_BYTES = 5 * 1024 * 1024; // per-icon uncompressed size cap
-const ICONSET_XML_MAX_BYTES = 1 * 1024 * 1024; // iconset.xml is just attribute/text data
 const OTHER_GROUP = "Other"; // exact literal ATAK uses for icons with no containing folder
+
+// --- C-11: zip decompression bomb + entry flood ---------------------------------------------
+// Every one of these is measured DURING inflation. The previous per-entry check read
+// `zipEntry.vars.uncompressedSize`, which is a number written by the attacker into their own zip
+// header, and then called `zipEntry.buffer()`, which inflates without any independent limit — a
+// zip declaring 1 KB and delivering 5 GB of deflated zeroes OOM'd the Node process. The entry
+// count was also only incremented for successfully extracted *images*, so an archive of 100,000
+// entries all named iconset.xml (or all non-images) never tripped it.
+const ZIP_MAX_ENTRIES_SCANNED = 2_000; // total central-directory entries we will even look at
+const ZIP_ENTRY_LIMIT = 500; // images actually extracted
+const ZIP_ENTRY_MAX_BYTES = 2 * 1024 * 1024; // per-icon decompressed cap
+const ICONSET_XML_MAX_BYTES = 512 * 1024; // iconset.xml is just attribute/text data
+const ZIP_TOTAL_DECOMPRESSED_MAX = 64 * 1024 * 1024; // whole-archive decompressed budget
+
+// Set-name limits (C-39). AUTO-ICONSET-SPEC.md §5.1 caps the group BASE at 60 and then appends
+// " Icons", so a legitimate auto-generated set name is up to 66 characters. The old cleanSetName()
+// capped at 60 *after* the suffix, silently truncating every layer name over 54 characters.
+const SET_NAME_BASE_MAX = 60;
+const SET_NAME_MAX = SET_NAME_BASE_MAX + " Icons".length; // 66
+
+// Magic bytes, because extension-only validation let a PHP/JSP/HTML payload named x.png be stored
+// and served from the portal origin (Appendix D §2.3).
+const IMAGE_MAGIC = [
+  { ext: /\.png$/i, test: (b) => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  { ext: /\.jpe?g$/i, test: (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { ext: /\.gif$/i, test: (b) => b.length > 6 && b.slice(0, 3).toString("latin1") === "GIF" },
+  { ext: /\.bmp$/i, test: (b) => b.length > 2 && b[0] === 0x42 && b[1] === 0x4d },
+  {
+    ext: /\.webp$/i,
+    test: (b) => b.length > 12 && b.slice(0, 4).toString("latin1") === "RIFF" && b.slice(8, 12).toString("latin1") === "WEBP",
+  },
+];
+
+/** True when the bytes actually look like the image type the filename claims. */
+function looksLikeDeclaredImage(fileName, buf) {
+  for (const m of IMAGE_MAGIC) {
+    if (m.ext.test(fileName)) return m.test(buf);
+  }
+  return false;
+}
+
+/**
+ * Rejects a zip entry path that tries to escape: traversal segments, absolute paths, Windows drive
+ * letters, UNC prefixes, and NUL bytes. Local writes already used path.basename(), but the
+ * ATAK-facing group is taken from the entry's FIRST path segment and is written verbatim into
+ * every generated config and into the exported zip — so `../../evil` propagated outward even
+ * though nothing escaped locally (Appendix D §2.2).
+ */
+function isUnsafeEntryPath(entryPath) {
+  const p = String(entryPath || "");
+  if (!p) return true;
+  if (p.includes("\0")) return true;
+  const norm = p.replace(/\\/g, "/");
+  if (norm.startsWith("/")) return true; // absolute
+  if (/^[a-zA-Z]:/.test(norm)) return true; // drive letter
+  if (norm.startsWith("//")) return true; // UNC
+  return norm.split("/").some((seg) => seg === ".." || seg === ".");
+}
 
 /**
  * Pulls {uid, defaultGroup} out of an ATAK iconset.xml's root <iconset ...> tag, e.g.
@@ -88,14 +146,34 @@ function parseIconsetXmlMeta(xmlText) {
  * actually installed on-device.
  */
 function sha256sumFile(filePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  // Streamed in 8192-byte chunks (matching ATAK's own loop) rather than readFileSync-ing up to
+  // 25 MB synchronously inside a request handler.
+  const hash = crypto.createHash("sha256");
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buf = Buffer.allocUnsafe(8192);
+    let n;
+    while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) hash.update(buf.subarray(0, n));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
 }
 
-/** {group, atakName} for a zip entry's path, per IconsMapAdapter.addIconset()'s exact rule. */
+/**
+ * {group, atakName} for a zip entry's path, per IconsMapAdapter.addIconset()'s exact rule.
+ *
+ * The group is sanitized on ingest (Appendix D §2.2): it is taken from the entry's first path
+ * segment and is later written verbatim into every generated config's `usericonPath` AND into the
+ * exported zip's entry paths by buildIconsetZip(), so a group of `../../evil` was a zip-slip in
+ * the archive this portal *produces*, aimed at whatever unpacks it. Local writes were already
+ * safe via path.basename(); the outbound string was not.
+ */
 function resolveAtakGroupAndName(entryPath) {
-  const parts = entryPath.replace(/\\/g, "/").split("/").filter(Boolean);
+  const parts = String(entryPath).replace(/\\/g, "/").split("/").filter(Boolean);
   const atakName = parts[parts.length - 1];
-  const group = parts.length > 1 ? parts[0] : OTHER_GROUP;
+  const rawGroup = parts.length > 1 ? parts[0] : OTHER_GROUP;
+  const group = sanitizeSetName(rawGroup).slice(0, SET_NAME_MAX) || OTHER_GROUP;
   return { group, atakName };
 }
 
@@ -103,24 +181,78 @@ function ensureDir() {
   if (!fs.existsSync(CUSTOM_ICONS_DIR)) fs.mkdirSync(CUSTOM_ICONS_DIR, { recursive: true });
 }
 
+/**
+ * Character sanitization only — no truncation.
+ *
+ * AUTO-ICONSET-SPEC.md §5.1 says to REPLACE every character outside `[A-Za-z0-9 _-]` with `_`.
+ * This function used to DELETE them while `sanitizeGroupBase()` in the ArcGIS service replaced
+ * them, so a layer named `Damage (2024)` produced `Damage 2024 Icons` from one code path and
+ * `Damage__2024_ Icons` from the other. Unified on the spec's replace-with-`_` (C-39).
+ *
+ * Idempotent: `_` and space are both inside the allowed class, so re-running it on an
+ * already-sanitized name is a no-op — which is what makes it safe to use for lookups.
+ */
+function sanitizeSetName(name) {
+  return String(name || "")
+    .replace(NAME_RE, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Normalizes a set name for storage and lookup. The cap here is SET_NAME_MAX (66) — a hard safety
+ * bound, not the spec's base cap. The spec's 60-character cap is applied EXACTLY ONCE, to the
+ * base, before `" Icons"` is appended, by `sanitizeGroupBase()` in
+ * featurelinkArcgisIconset.service.js. Applying 60 here as well was the C-39 double-truncation
+ * bug: it silently broke `{uid}/{group}/{file}` identity for every layer name over 54 characters.
+ */
 function cleanSetName(name) {
-  return String(name || "").replace(NAME_RE, "").trim().slice(0, 60);
+  return sanitizeSetName(name).slice(0, SET_NAME_MAX);
+}
+
+/** A user-typed set name for the manual-upload path: no suffix is appended, so the base cap applies. */
+function cleanUploadedSetName(name) {
+  return sanitizeSetName(name).slice(0, SET_NAME_BASE_MAX);
+}
+
+class ManifestCorruptError extends Error {
+  constructor(cause) {
+    super(
+      "The custom icon set manifest is unreadable. Refusing to continue — continuing would " +
+        "silently drop every registered icon set. Restore manifest.json from backup."
+    );
+    this.name = "ManifestCorruptError";
+    this.cause = cause;
+  }
 }
 
 function readManifest() {
   ensureDir();
   if (!fs.existsSync(MANIFEST_PATH)) return [];
+  let parsed;
   try {
-    const parsed = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf-8"));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (_) {
-    return [];
+    parsed = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf-8"));
+  } catch (err) {
+    // Appendix D §2.3: this used to `return []` on a parse failure, so a truncated manifest made
+    // EVERY icon set silently disappear from the UI while the files stayed on disk, with no error
+    // anywhere. Raise instead — a visible failure is recoverable, a silent one is not.
+    console.error("[featurelink] custom-icons manifest.json is corrupt:", err && err.message);
+    throw new ManifestCorruptError(err);
   }
+  if (!Array.isArray(parsed)) {
+    console.error("[featurelink] custom-icons manifest.json is not an array");
+    throw new ManifestCorruptError(new Error("manifest is not an array"));
+  }
+  return parsed;
 }
 
 function writeManifest(sets) {
   ensureDir();
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(sets, null, 2), "utf-8");
+  // Temp-file + rename: a crash mid-write used to truncate the manifest, which readManifest()
+  // then swallowed into an empty list.
+  const tmp = `${MANIFEST_PATH}.tmp-${crypto.randomBytes(6).toString("hex")}`;
+  fs.writeFileSync(tmp, JSON.stringify(sets, null, 2), "utf-8");
+  fs.renameSync(tmp, MANIFEST_PATH);
 }
 
 /** List of {name, icons, ...} — same iconset shape the configurator expects. */
@@ -151,34 +283,126 @@ function uniqueFileName(dir, fileName) {
  * rather than being inferred from local storage layout). Non-image entries (iconset.xml,
  * __MACOSX junk, directories) are skipped from icons/groups/atakNames.
  */
+class ZipBudgetError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ZipBudgetError";
+  }
+}
+
+/**
+ * Reads one zip entry through a counting stream, aborting the moment either the per-entry cap or
+ * the whole-archive budget is exceeded. THIS is the C-11 fix: the byte count is what actually
+ * comes out of the inflater, so the declared `uncompressedSize` in the attacker's own central
+ * directory is never trusted — it is not consulted at all.
+ *
+ * @param {number} maxBytes per-entry decompressed cap
+ * @param {{used: number, limit: number}} budget shared whole-archive counter
+ */
+function readEntryCapped(zipEntry, maxBytes, budget) {
+  return new Promise((resolve, reject) => {
+    let stream;
+    try {
+      stream = zipEntry.stream();
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const chunks = [];
+    let total = 0;
+    let done = false;
+    const fail = (err) => {
+      if (done) return;
+      done = true;
+      try { stream.destroy(); } catch (_) {}
+      reject(err);
+    };
+    stream.on("data", (chunk) => {
+      if (done) return;
+      total += chunk.length;
+      budget.used += chunk.length;
+      if (total > maxBytes) {
+        fail(new ZipBudgetError(`Entry exceeds the ${maxBytes}-byte per-file limit.`));
+        return;
+      }
+      if (budget.used > budget.limit) {
+        fail(new ZipBudgetError(`Archive exceeds the ${budget.limit}-byte decompressed limit.`));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on("error", fail);
+    stream.on("end", () => {
+      if (done) return;
+      done = true;
+      resolve(Buffer.concat(chunks));
+    });
+  });
+}
+
 async function extractZipIcons(zipPath, setDir, entry, skipped) {
   const directory = await unzipper.Open.file(zipPath);
   let extracted = 0;
   let xmlMeta = null;
-  for (const zipEntry of directory.files) {
-    if (zipEntry.type !== "File") continue;
+
+  // Cap the number of entries we will even iterate, before any per-entry branch. The old loop
+  // only counted successfully extracted images, so an entry flood of non-images or of files all
+  // named iconset.xml never tripped the limit and each one was still buffered and regex-parsed.
+  const files = directory.files.filter((f) => f.type === "File");
+  if (files.length > ZIP_MAX_ENTRIES_SCANNED) {
+    throw new ZipBudgetError(
+      `This zip has ${files.length} entries — the limit is ${ZIP_MAX_ENTRIES_SCANNED}.`
+    );
+  }
+
+  const budget = { used: 0, limit: ZIP_TOTAL_DECOMPRESSED_MAX };
+  let scanned = 0;
+
+  for (const zipEntry of files) {
+    if (++scanned > ZIP_MAX_ENTRIES_SCANNED) break;
+
+    if (isUnsafeEntryPath(zipEntry.path)) {
+      if (skipped.length < 10) skipped.push(`${zipEntry.path} (unsafe path)`);
+      continue;
+    }
     const baseName = path.basename(zipEntry.path);
 
     if (ICONSET_XML_RE.test(baseName)) {
-      if ((zipEntry.vars?.uncompressedSize || 0) <= ICONSET_XML_MAX_BYTES) {
-        try {
-          xmlMeta = parseIconsetXmlMeta((await zipEntry.buffer()).toString("utf-8"));
-        } catch (_) { /* malformed iconset.xml — treated as missing, same as ATAK */ }
+      if (xmlMeta) continue; // first valid one wins; do not re-inflate every decoy
+      try {
+        const xmlBuf = await readEntryCapped(zipEntry, ICONSET_XML_MAX_BYTES, budget);
+        xmlMeta = parseIconsetXmlMeta(xmlBuf.toString("utf-8"));
+      } catch (err) {
+        if (err instanceof ZipBudgetError && err.message.startsWith("Archive")) throw err;
+        // Oversized or malformed iconset.xml — treated as missing, same as ATAK does.
+        console.warn("[featurelink] skipping unreadable iconset.xml in upload:", err && err.message);
       }
       continue;
     }
 
-    if (extracted >= ZIP_ENTRY_LIMIT) break;
+    if (extracted >= ZIP_ENTRY_LIMIT) {
+      if (skipped.length < 10) skipped.push(`(stopped at the ${ZIP_ENTRY_LIMIT}-icon limit)`);
+      break;
+    }
     if (!IMAGE_EXT_RE.test(baseName)) {
       if (skipped.length < 10) skipped.push(baseName);
       continue;
     }
-    if ((zipEntry.vars?.uncompressedSize || 0) > ZIP_ENTRY_MAX_BYTES) {
+
+    let buffer;
+    try {
+      buffer = await readEntryCapped(zipEntry, ZIP_ENTRY_MAX_BYTES, budget);
+    } catch (err) {
+      if (err instanceof ZipBudgetError && err.message.startsWith("Archive")) throw err;
       if (skipped.length < 10) skipped.push(`${baseName} (too large)`);
       continue;
     }
+    if (!looksLikeDeclaredImage(baseName, buffer)) {
+      if (skipped.length < 10) skipped.push(`${baseName} (not a valid image)`);
+      continue;
+    }
+
     const safeName = uniqueFileName(setDir, baseName.replace(FILE_RE, "_"));
-    const buffer = await zipEntry.buffer();
     fs.writeFileSync(path.join(setDir, safeName), buffer);
     entry.icons.push(safeName);
     const { group, atakName } = resolveAtakGroupAndName(zipEntry.path);
@@ -206,26 +430,43 @@ async function extractZipIcons(zipPath, setDir, entry, skipped) {
  * are unpacked into their individual icon images; anything else is stored as one icon.
  * files: [{ path, originalname, mimetype }] (from multer's disk storage).
  */
-async function addCustomIcons(setName, files, actorUsername) {
-  const name = cleanSetName(setName);
+async function addCustomIcons(setName, files, actor) {
+  const name = cleanUploadedSetName(setName);
   if (!name) return { success: false, error: "Icon set name is required." };
   if (!files || !files.length) return { success: false, error: "At least one icon file is required." };
 
   ensureDir();
-  const setDir = path.join(CUSTOM_ICONS_DIR, name);
-  fs.mkdirSync(setDir, { recursive: true });
 
   const sets = readManifest();
   let entry = sets.find((s) => s.name === name);
+
+  // C-03: appending to an existing set had NO ownership check, and a zip upload additionally
+  // overwrote `entry.uid` — so any logged-in user could repoint another user's icon set at an
+  // attacker-chosen uid, or inject arbitrary images into it, and every config referencing that
+  // set then resolved to an attacker-controlled iconsetpath on-device.
+  if (entry && !canAccessSet(actor, entry)) {
+    return {
+      success: false,
+      status: 403,
+      error: `"${name}" belongs to another user. Choose a different icon set name.`,
+    };
+  }
+
+  const setDir = path.join(CUSTOM_ICONS_DIR, name);
+  fs.mkdirSync(setDir, { recursive: true });
+
+  const isNewSet = !entry;
   if (!entry) {
     entry = {
       name, icons: [], groups: {}, atakNames: {}, uid: null, defaultGroup: null,
-      created_by: actorUsername || null, created_at: new Date().toISOString(),
+      created_by: (actor && actor.username) || null, created_at: new Date().toISOString(),
     };
     sets.push(entry);
   }
   if (!entry.groups) entry.groups = {};
   if (!entry.atakNames) entry.atakNames = {};
+
+  const priorUid = entry.uid;
 
   let totalExtracted = 0;
   const skipped = [];
@@ -237,11 +478,40 @@ async function addCustomIcons(setName, files, actorUsername) {
         return { success: false, error: `Couldn't read "${file.originalname}" as a zip: ${err.message}` };
       }
     } else {
-      const safeName = uniqueFileName(setDir, (file.originalname || "icon.png").replace(FILE_RE, "_"));
+      const rawName = (file.originalname || "icon.png").replace(FILE_RE, "_");
+      if (!IMAGE_EXT_RE.test(rawName)) {
+        if (skipped.length < 10) skipped.push(`${rawName} (unsupported type)`);
+        continue;
+      }
+      const stat = fs.statSync(file.path);
+      if (stat.size > ZIP_ENTRY_MAX_BYTES) {
+        if (skipped.length < 10) skipped.push(`${rawName} (too large)`);
+        continue;
+      }
+      // Magic-byte check: the extension alone used to be the entire validation, so an HTML or
+      // script payload named x.png was stored and then served from the portal origin.
+      const head = Buffer.alloc(Math.min(64, stat.size));
+      const fd = fs.openSync(file.path, "r");
+      try {
+        fs.readSync(fd, head, 0, head.length, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
+      if (!looksLikeDeclaredImage(rawName, head)) {
+        if (skipped.length < 10) skipped.push(`${rawName} (not a valid image)`);
+        continue;
+      }
+      const safeName = uniqueFileName(setDir, rawName);
       fs.copyFileSync(file.path, path.join(setDir, safeName));
       entry.icons.push(safeName);
       totalExtracted++;
     }
+  }
+
+  // A second upload must never silently re-link an existing set to a different uid.
+  if (!isNewSet && priorUid && entry.uid && entry.uid !== priorUid) {
+    entry.uid = priorUid;
+    skipped.push("(the uploaded iconset.xml's uid was ignored — this set is already linked)");
   }
 
   if (!totalExtracted) {
@@ -280,7 +550,7 @@ async function addCustomIcons(setName, files, actorUsername) {
  * @param {string} [a.actorUsername]
  * @returns {{success:true, set:object} | {success:false, error:string}}
  */
-function registerArcgisSet({ name, uid, group, icons, sourceUrl, field, specVersion, actorUsername }) {
+function registerArcgisSet({ name, uid, group, icons, sourceUrl, field, specVersion, actorUsername, actor }) {
   const setName = cleanSetName(name);
   if (!setName) return { success: false, error: "Icon set name is required." };
   if (!uid) return { success: false, error: "A deterministic uid is required (spec §4)." };
@@ -289,11 +559,33 @@ function registerArcgisSet({ name, uid, group, icons, sourceUrl, field, specVers
   ensureDir();
   const setDir = path.join(CUSTOM_ICONS_DIR, setName);
 
+  const all = readManifest();
+  const existing = all.find((s) => s.name === setName);
+
+  // C-03: this function performs a destructive `rmSync(setDir, {recursive, force})` plus a
+  // manifest-entry drop for ANY name collision. With no ownership check, any logged-in user could
+  // destroy another user's — or an admin's — icon set simply by pointing /from-arcgis at a layer
+  // whose name sanitized to the same string, bypassing both the ownership guard on DELETE and the
+  // in-use 409 guard. Silent, field-wide marker loss on every device that had not pre-installed
+  // the set.
+  const effectiveActor = actor || (actorUsername ? { username: actorUsername, isAdmin: false } : null);
+  if (existing && !canAccessSet(effectiveActor, existing)) {
+    return {
+      success: false,
+      status: 403,
+      error:
+        `An icon set named "${setName}" already exists and belongs to another user. ` +
+        "Ask its owner or an administrator to regenerate it.",
+    };
+  }
+
   // Idempotent regenerate: drop any prior copy so stored names == spec atakNames exactly.
-  const sets = readManifest().filter((s) => s.name !== setName);
+  const sets = all.filter((s) => s.name !== setName);
   try {
     if (fs.existsSync(setDir)) fs.rmSync(setDir, { recursive: true, force: true });
-  } catch (_) { /* best effort — a stale file just gets overwritten below */ }
+  } catch (err) {
+    console.warn("[featurelink] could not clear icon set dir before regenerate:", err && err.message);
+  }
   fs.mkdirSync(setDir, { recursive: true });
 
   const entry = {
@@ -308,8 +600,9 @@ function registerArcgisSet({ name, uid, group, icons, sourceUrl, field, specVers
     sourceUrl: sourceUrl || null,
     sourceField: field || "",
     specVersion: specVersion || 1,
-    created_by: actorUsername || null,
-    created_at: new Date().toISOString(),
+    // An admin regenerating someone else's set must not silently take ownership of it.
+    created_by: (existing && existing.created_by) || (effectiveActor && effectiveActor.username) || null,
+    created_at: (existing && existing.created_at) || new Date().toISOString(),
   };
 
   const takenLocal = new Set();
@@ -318,6 +611,11 @@ function registerArcgisSet({ name, uid, group, icons, sourceUrl, field, specVers
     // atakName is already FILE_RE-safe (spec §5.2); guard local-storage collisions without
     // mutating atakName — the ATAK-facing name must stay the deterministic spec value.
     let localName = atakName.replace(FILE_RE, "_");
+    // Appendix D §2.5: GET /:name/download sits in front of GET /:name/:file, and the comment
+    // there asserts a stored file can never be called "download" because everything has an image
+    // extension. That invariant was asserted, not enforced — registerArcgisSet wrote whatever
+    // name the caller's renderer labels produced. Enforce it.
+    if (!IMAGE_EXT_RE.test(localName)) localName = `${localName}.png`;
     if (takenLocal.has(localName)) localName = uniqueFileName(setDir, localName);
     takenLocal.add(localName);
 
@@ -345,22 +643,68 @@ function deleteCustomIconSet(setName) {
   const sets = readManifest();
   const idx = sets.findIndex((s) => s.name === name);
   if (idx === -1) return { success: false, error: "not found" };
-  sets.splice(idx, 1);
-  writeManifest(sets);
+
+  // Remove the files FIRST, then the manifest entry. The old order wrote the manifest first and
+  // swallowed an rmSync failure, leaving an orphaned directory that nothing referenced and nothing
+  // would ever clean up.
   const setDir = path.join(CUSTOM_ICONS_DIR, name);
   try {
     if (fs.existsSync(setDir)) fs.rmSync(setDir, { recursive: true, force: true });
-  } catch (_) {}
+  } catch (err) {
+    console.error("[featurelink] could not remove icon set directory:", err && err.message);
+    return { success: false, error: "Could not remove the icon set's files. Nothing was deleted." };
+  }
+  sets.splice(idx, 1);
+  writeManifest(sets);
   return { success: true };
 }
 
-/** Absolute path to a specific icon file within a custom set, or null if it doesn't exist. */
+/**
+ * Absolute path to a specific icon file within a custom set, or null.
+ *
+ * Appendix D §2.2: this used to SILENTLY REWRITE traversal input instead of rejecting it —
+ * `"..".replace(/[^a-zA-Z0-9._-]/g, "_")` leaves `..` intact because dots are in the allowlist, so
+ * `path.join(CUSTOM_ICONS_DIR, name, "..")` resolved to a real parent directory and a non-null
+ * path was handed to res.sendFile(). It survived only because separators were stripped, so no
+ * second segment could follow — one regex edit or one multi-segment caller away from arbitrary
+ * file read. Now: reject outright, then assert containment on the resolved path.
+ */
 function getCustomIconPath(setName, fileName) {
-  const name = cleanSetName(setName);
-  const file = String(fileName || "").replace(FILE_RE, "_");
+  const rawName = String(setName == null ? "" : setName);
+  const rawFile = String(fileName == null ? "" : fileName);
+  for (const v of [rawName, rawFile]) {
+    if (!v) return null;
+    if (v.length > 300) return null;
+    if (v.includes("\0")) return null;
+    if (v.includes("/") || v.includes("\\")) return null;
+    if (v === "." || v === ".." || v.includes("..")) return null;
+  }
+  const name = cleanSetName(rawName);
+  const file = rawFile.replace(FILE_RE, "_");
   if (!name || !file) return null;
-  const p = path.join(CUSTOM_ICONS_DIR, name, file);
-  return fs.existsSync(p) ? p : null;
+  if (!IMAGE_EXT_RE.test(file)) return null;
+
+  const root = path.resolve(CUSTOM_ICONS_DIR);
+  const p = path.resolve(root, name, file);
+  if (p !== root && !p.startsWith(root + path.sep)) return null; // containment assertion
+  if (!fs.existsSync(p)) return null;
+  const st = fs.statSync(p);
+  if (!st.isFile()) return null;
+  return p;
+}
+
+/**
+ * Ownership for icon sets, mirroring featurelinkAccess.canAccessRecord(). An unowned set
+ * (`created_by` null — auto-generated before `actorUsername` was threaded through, or any
+ * anonymous path) is ADMIN-ONLY: the old DELETE guard `!isAdmin && entry.created_by && ...`
+ * failed open on exactly those records.
+ */
+function canAccessSet(actor, set) {
+  if (!actor) return false;
+  if (actor.isAdmin) return true;
+  if (!set) return true; // no such set yet — creating one is always allowed
+  if (!set.created_by) return false;
+  return set.created_by === actor.username;
 }
 
 // -------------------------------------------------------------------------
@@ -394,6 +738,17 @@ function crc32(buf) {
  * @param {{path:string, data:Buffer}[]} entries in the order they should appear in the archive
  */
 function buildStoredZip(entries) {
+  // Appendix D §4.7: sizes, offsets and counts are written as 32-/16-bit fields with no ZIP64
+  // support and no overflow check, so >65,535 entries or >4 GiB of payload produced a silently
+  // corrupt archive. Refuse instead.
+  if (entries.length > 0xffff) {
+    throw new Error(`Cannot package ${entries.length} entries — the zip format caps this at 65,535.`);
+  }
+  const totalPayload = entries.reduce((n, e) => n + e.data.length + Buffer.byteLength(e.path, "utf8") + 30, 0);
+  if (totalPayload >= 0xffffffff) {
+    throw new Error("Cannot package this icon set — it exceeds the 4 GiB non-ZIP64 zip limit.");
+  }
+
   const local = [];
   const central = [];
   let offset = 0;
@@ -595,4 +950,22 @@ module.exports = {
   getCustomIconPath,
   buildIconsetZip,
   computeIconsetUsage,
+  canAccessSet,
+  // exported for the security/conformance suites
+  cleanSetName,
+  cleanUploadedSetName,
+  sanitizeSetName,
+  isUnsafeEntryPath,
+  looksLikeDeclaredImage,
+  resolveAtakGroupAndName,
+  buildStoredZip,
+  ManifestCorruptError,
+  ZipBudgetError,
+  SET_NAME_BASE_MAX,
+  SET_NAME_MAX,
+  ZIP_ENTRY_LIMIT,
+  ZIP_ENTRY_MAX_BYTES,
+  ZIP_MAX_ENTRIES_SCANNED,
+  ZIP_TOTAL_DECOMPRESSED_MAX,
+  CUSTOM_ICONS_DIR,
 };

@@ -3,10 +3,19 @@
     <string name="app_name">FeatureLink</string>
     <string name="app_desc">ArcGIS Feature Layer manager for ATAK — sync private and public layers, send PLI to hosted feature services.</string>
 
-    <!-- Recurrence spinner options (used by item_layer.xml) -->
-    <string-array name="recurrence_options">
-        <item>never</item>
-        <item>daily</item>
-        <item>weekly</item>
-    </string-array>
+    <!-- C-02: signature-level permission guarding the plugin's internal broadcasts. -->
+    <string name="perm_internal_broadcast_label">FeatureLink internal messaging</string>
+    <string name="perm_internal_broadcast_desc">Allows FeatureLink components signed with the same key to deliver configuration and sign-in results to the plugin.</string>
+
+    <!-- Externally-sourced config consent prompt (C-02). -->
+    <string name="import_config_title">Apply external configuration?</string>
+    <string name="import_config_accept">Apply</string>
+    <string name="import_config_reject">Reject</string>
+
+    <!-- Truncation warning (C-06). -->
+    <string name="download_truncated">Warning: %1$s is incomplete — only the first %2$d features were downloaded.</string>
+
+    <!-- The <string-array name="recurrence_options"> that used to live here was dead: the comment
+         claimed item_layer.xml used it, but item_layer.xml has no Spinner and a repo-wide search
+         found zero references outside this file (Appendix A §3). Deleted. -->
 </resources>

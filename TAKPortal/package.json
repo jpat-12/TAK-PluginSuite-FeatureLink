@@ -1,0 +1,19 @@
+{
+  "name": "featurelink-takportal-module",
+  "version": "2.7.0",
+  "description": "FeatureLink Configs module for TAK Portal — display-config store, custom icon sets, and the ported Display Configurator.",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "lint": "node --check routes/featurelinkBrowse.routes.js && node --check routes/featurelinkConfigurator.routes.js && node --check routes/featurelinkCustomIcons.routes.js && node --check routes/featurelinkDatasetsAdmin.routes.js && node --check services/featurelinkArcgisIconset.service.js && node --check services/featurelinkCustomIcons.service.js && node --check services/featurelinkDatasets.service.js && node --check services/featurelinkCsrf.service.js && node --check services/featurelinkSafeFetch.service.js"
+  },
+  "dependencies": {
+    "express": "^4.22.2",
+    "multer": "^2.2.0",
+    "unzipper": "^0.12.3"
+  }
+}

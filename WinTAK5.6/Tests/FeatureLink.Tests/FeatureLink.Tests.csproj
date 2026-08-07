@@ -1,0 +1,84 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    FeatureLink.Tests — C-14.
+
+    WHY THIS IS AN SDK-STYLE net8.0 PROJECT THAT *LINKS* SOURCE FILES RATHER THAN
+    REFERENCING FeatureLink.csproj:
+
+    FeatureLink.csproj is a legacy .NET Framework 4.8 WPF/MEF project that can only build against
+    the WinTAK SDK assemblies in WinTAK5.6\libs\. Those assemblies are (correctly) git-ignored, so
+    a CI runner — and any developer without a WinTAK install — cannot build it at all. If the test
+    project referenced it, the tests could never run in CI, which is exactly how this codebase
+    ended up with zero automated tests in the first place.
+
+    Instead the pure, SDK-independent logic is compiled into this project by source link. Every
+    file below touches only BCL types plus Newtonsoft.Json — no WinTak.*, no TAK.Engine, no Prism,
+    no WPF. That makes the highest-value suites (pagination, ArcGIS error bodies, the symbology
+    and shape-style resolvers, the UID formula, config round-trip) runnable with a bare
+    `dotnet test` on any machine.
+
+    The three things this deliberately does NOT cover, because they cannot be exercised without
+    the SDK, are recorded in docs/remediation/wp3-wintak.md: FeatureLinkDockPane itself,
+    CoT emission, and the WPF converters.
+
+    Multi-targeting note: net48 is listed so that a Windows CI runner with the .NET Framework
+    targeting pack compiles these files under the SAME framework the plugin ships on. net8.0 is
+    what runs everywhere else (and on this workstation, where only the .NET 10 runtime exists,
+    roll-forward covers it). If the net48 targeting pack is absent, build a single framework:
+        dotnet test -f net8.0
+  -->
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>FeatureLink.Tests</RootNamespace>
+    <AssemblyName>FeatureLink.Tests</AssemblyName>
+    <!-- The linked production sources predate nullable reference types and use a few patterns the
+         modern analyzers grumble about; the tests must not fail on style. -->
+    <NoWarn>$(NoWarn);CS1591;CA1416;SYSLIB0014</NoWarn>
+    <RollForward>Major</RollForward>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      xUnit was chosen over NUnit and MSTest for three reasons specific to this repository:
+        1. `dotnet test` runs it with no extra runner or adapter configuration, which matters
+           because the only .NET toolchain guaranteed on a build box here is the SDK itself.
+        2. Its per-test-class isolation model (a fresh instance per test) suits the static state
+           these classes carry (SettingsStore, Log, DialogService hooks) — an NUnit
+           [SetUp]/[TearDown] pair around static mutation is easier to get subtly wrong.
+        3. Theory/InlineData/MemberData maps cleanly onto the table-driven suites the audit asked
+           for (6 sym types x 10 operators x attribute states, 8 URL shapes, the culture matrix),
+           which is the bulk of what is written below.
+    -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- Production sources under test, compiled by link. -->
+  <ItemGroup>
+    <Compile Include="..\..\Models\ArcGisLayer.cs"          Link="Production\Models\ArcGisLayer.cs" />
+    <Compile Include="..\..\Models\DownloadedFeature.cs"    Link="Production\Models\DownloadedFeature.cs" />
+    <Compile Include="..\..\Models\OAuthTokens.cs"          Link="Production\Models\OAuthTokens.cs" />
+    <Compile Include="..\..\Models\PliSettings.cs"          Link="Production\Models\PliSettings.cs" />
+    <Compile Include="..\..\Services\ArcGisFeatureService.cs" Link="Production\Services\ArcGisFeatureService.cs" />
+    <Compile Include="..\..\Services\ArcGisHttp.cs"         Link="Production\Services\ArcGisHttp.cs" />
+    <Compile Include="..\..\Services\AutoSymbology.cs"      Link="Production\Services\AutoSymbology.cs" />
+    <Compile Include="..\..\Services\DisplayStyleResolver.cs" Link="Production\Services\DisplayStyleResolver.cs" />
+    <Compile Include="..\..\Services\Log.cs"                Link="Production\Services\Log.cs" />
+    <Compile Include="..\..\Services\SafeJson.cs"           Link="Production\Services\SafeJson.cs" />
+    <Compile Include="..\..\Services\UrlGuard.cs"           Link="Production\Services\UrlGuard.cs" />
+  </ItemGroup>
+
+  <!-- Test sources. -->
+  <ItemGroup>
+    <Compile Include="*.cs" />
+  </ItemGroup>
+
+</Project>

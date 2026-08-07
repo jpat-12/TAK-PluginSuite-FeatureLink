@@ -1,2 +1,151 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# TAK-PluginSuite-FeatureLink — repository-wide line-ending and diff policy.
+#
+# WHY THIS FILE IS EXPLICIT (audit Appendix E §2.2 / C-13 cluster)
+# ---------------------------------------------------------------
+# The previous content was a single bare `* text=auto`. That leaves the checkout
+# end-of-line to each contributor's `core.autocrlf`, so on a Windows workstation git
+# rewrites LF-committed Java/XML/TypeScript sources to CRLF in the working tree and
+# emits `LF will be replaced by CRLF` on every `git add`. The practical harm is not
+# the warning: it is that a contributor whose editor then saves the file back produces
+# a whole-file diff, and a one-line substantive change becomes invisible inside a
+# 400-line whitespace diff.
+#
+# CORRECT END STATE FOR THIS REPOSITORY
+# -------------------------------------
+# This suite spans four toolchains with genuinely different requirements:
+#
+#   * Android / Gradle (ATAK5.6, ATAK5.7)  — LF. `gradlew` is a POSIX shell script and
+#     must be LF or it will not execute on a Linux CI runner.
+#   * Windows / .NET / WPF (WinTAK5.6, WinTAK5.7) — CRLF-TOLERANT. MSBuild, Roslyn and
+#     Visual Studio all read LF sources without complaint, so LF is safe for .cs/.xaml.
+#     Only the files Visual Studio itself rewrites (`.sln`) and the Windows shells
+#     (`.bat`, `.cmd`, `.ps1`) are pinned to CRLF, because those *are* CRLF-sensitive
+#     in practice (cmd.exe mis-parses a trailing bare LF in some batch constructs).
+#   * Node / TypeScript (CloudTAK, TAK Portal) — LF.
+#   * Python / Flask (Infra-TAK) — LF.
+#
+# And the load-bearing case: TAK Portal and Infra-TAK are BOTH installed by a shell
+# script (`TAKPortal/install.sh`, `Infra-TAK/install.sh`). A `.sh` file checked out with
+# CRLF fails on Linux with `bad interpreter: /bin/bash^M` — the installer simply does not
+# run. `*.sh text eol=lf` below is therefore a correctness requirement, not a preference.
+#
+# Net rule: LF in the repository and LF on checkout everywhere, with a short, explicit
+# CRLF allowlist for Windows-only shells and solution files.
+#
+# AFTER CHANGING THIS FILE run, in an isolated commit with a clean tree:
+#     git add --renormalize .
+# so that any file already stored with the wrong endings is corrected once, rather than
+# drifting into an unrelated feature diff.
+
+# ── Default: detect text, store LF, check out LF ─────────────────────────────
+* text=auto eol=lf
+
+# ── Windows-only files that must stay CRLF ───────────────────────────────────
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+*.psm1    text eol=crlf
+*.sln     text eol=crlf
+*.vcxproj text eol=crlf
+*.props   text eol=crlf
+*.targets text eol=crlf
+
+# ── Files that MUST be LF or they do not execute on Linux ────────────────────
+# TAKPortal/install.sh, TAKPortal/uninstall.sh, Infra-TAK/install.sh,
+# Infra-TAK/uninstall.sh, CloudTAK/install.sh, ATAK5.{6,7}/gradlew
+*.sh      text eol=lf
+gradlew   text eol=lf
+*.bash    text eol=lf
+
+# ── Source: declared text so `text=auto` heuristics can never mis-detect ─────
+*.java    text diff=java
+*.kt      text diff=java
+*.cs      text diff=csharp
+*.xaml    text
+*.ts      text
+*.tsx     text
+*.js      text
+*.mjs     text
+*.cjs     text
+*.vue     text
+*.py      text diff=python
+*.json    text
+*.jsonc   text
+*.xml     text
+*.yml     text
+*.yaml    text
+*.md      text diff=markdown
+*.gradle  text
+*.pro     text
+*.properties text
+*.ejs     text
+*.html    text
+*.css     text
+*.svg     text
+*.txt     text
+*.cfg     text
+*.toml    text
+.gitattributes text
+.gitignore     text
+
+# ── Binary: never diffed, never end-of-line converted ────────────────────────
+# The 14,900 tracked PNGs in particular MUST be marked binary; a `text=auto`
+# misdetection on a PNG whose header bytes look textual would corrupt the file.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.webp    binary
+*.pdf     binary
+*.jar     binary
+*.aar     binary
+*.war     binary
+*.class   binary
+*.dex     binary
+*.apk     binary
+*.aab     binary
+*.wpk     binary
+*.zip     binary
+*.7z      binary
+*.gz      binary
+*.tar     binary
+*.dll     binary
+*.exe     binary
+*.pdb     binary
+*.so      binary
+*.dylib   binary
+*.nupkg   binary
+*.snk     binary
+*.pfx     binary
+*.jks     binary
+*.keystore binary
+*.ttf     binary
+*.otf     binary
+*.woff    binary
+*.woff2   binary
+
+# ── Generated / vendored: collapse in PR diffs and exclude from language stats
+# The icon corpora are 7,461 files each and are duplicated across two components
+# (see docs/remediation/wp5-crosscutting.md). Marking them linguist-vendored keeps
+# GitHub from reporting this as an image repository, and `-diff` keeps a bulk icon
+# refresh from rendering 3,600 binary-diff stanzas in a review.
+TAKPortal/assets/featurelink-configurator/icons/**  linguist-vendored -diff
+Infra-TAK/featurelink_displayconfig_assets/icons/** linguist-vendored -diff
+
+# manifest.json is 203 KB of generated index; it is text and must diff, but it should
+# not dominate a review. Reviewers should read the generator change, not the output.
+TAKPortal/assets/featurelink-configurator/icons/manifest.json  text linguist-generated
+Infra-TAK/featurelink_displayconfig_assets/icons/manifest.json text linguist-generated
+
+# ── Excluded from release archives produced by `git archive` ─────────────────
+# `git archive` is the supported way to produce a delivery bundle (a plain directory
+# copy would sweep in ATAK5.{6,7}/local.properties, which carry developer paths and
+# the keystore password — audit Appendix E §1.2).
+FEATURELINK-AUDIT-CHECKLIST.md export-ignore
+QUESTIONS-FOR-OWNER.md          export-ignore
+docs/remediation/               export-ignore
+docs/REMEDIATION-BRIEF.md       export-ignore
+.github/                        export-ignore
+.gitattributes                  export-ignore
+.gitignore                      export-ignore

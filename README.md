@@ -50,6 +50,29 @@ flowchart LR
 <p align="center"><em>Esri holds the data - a config says how it should look - the plugin puts it on
 the EUD - edits and PLI flow back to the same layer.</em></p>
 
+## What Makes It Different
+
+FeatureLink isn't the only way to get Esri data into TAK. The short version: most
+of the alternatives **render ArcGIS data as a layer**, server-side or natively.
+FeatureLink turns it into **CoT map items the operator owns** - and, uniquely,
+pushes edits and position history **back** to the hosted layer from the device.
+
+| | **FeatureLink** | **ArcGIS Content Services**<br/>(PAR Gov / Esri plugin) | **infra-TAK ArcGIS Configurator**<br/>([takwerx/infra-TAK](https://github.com/takwerx/infra-TAK)) | **CloudTAK ETL / Node-RED bridges**<br/>([dfpc-coe](https://github.com/dfpc-coe/CloudTAK)) |
+|---|---|---|---|---|
+| **Runs where** | On the EUD (plugin) | On the EUD (plugin) | On the server (console) | On the server |
+| **Data lands as** | **CoT map items** - real markers you can share, edit, drop into a Data Package | Native map overlay (GL-rendered feature/raster layers in Overlay Manager) | TAK **DataSync feed** pushed to every client | CoT into a Data Sync mission |
+| **Write back to ArcGIS** | ✅ send map items + **PLI history** to a hosted layer from the device | Partial - `addFeatures`/`deleteFeatures` and ArcGIS **Mission Server** location tracks | ❌ read-only | ❌ read-only (one-way ETL) |
+| **Imagery / basemaps** | ❌ feature services only | ✅ tiled + dynamic Map/Image Services, KML, Shapefile | ❌ | ❌ |
+| **Enterprise auth** | ArcGIS OAuth2 (PKCE) | ✅ broadest - OAuth2, PKI/cert, SAML, IWA/NTLM, token | Server-side creds | Server-side creds |
+| **Styling control** | Display configs - symbology, labels, popups, **auto-generated iconsets** shared across platforms | Reads the layer's own renderer | Per-feature-class polygon styling, coded-value labels | Whatever the ETL author codes |
+| **Per-user setup** | Sign in, or scan a QR / open a link | Sign in per server | **None** - admin configures once, everyone gets it | **None** |
+| **Platforms** | ATAK, WinTAK, CloudTAK, TAK Portal | ATAK | Any client on that server | Any client on that server |
+| **Needs server infra** | ❌ | ❌ | ✅ an infra-TAK console | ✅ CloudTAK / Node-RED host |
+
+**Pick FeatureLink when** field users need to *contribute* to ArcGIS - collecting
+points, sending map items to a layer, streaming PLI into a shared position layer -
+or when each user needs a different set of layers without an admin in the loop.
+
 ## Supported Modules
 
 | Folder | What it is | Status |

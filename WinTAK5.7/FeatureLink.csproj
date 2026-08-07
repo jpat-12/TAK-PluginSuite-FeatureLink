@@ -163,12 +163,18 @@
   <Target Name="DeployPlugin" AfterTargets="Build"
           Condition="'$(Configuration)' == 'Debug'">
     <PropertyGroup>
-      <PluginDir>D:\Apps57\Plugins\</PluginDir>
+      <PluginDir Condition="'$(PluginDir)' == ''">$(FEATURELINK57_PLUGIN_DIR)</PluginDir>
+      <PluginDir Condition="'$(PluginDir)' == ''">D:\Apps57\Plugins\</PluginDir>
     </PropertyGroup>
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDir)" />
+    <Message Condition="!Exists('$(PluginDir)')" Importance="High"
+             Text="DeployPlugin skipped: '$(PluginDir)' does not exist. Set FEATURELINK57_PLUGIN_DIR to your WinTAK 5.7 Plugins folder." />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDir)"
+          Condition="Exists('$(PluginDir)')" />
+    <Copy SourceFiles="@(ReferenceCopyLocalPaths)" DestinationFolder="$(PluginDir)"
+          Condition="Exists('$(PluginDir)') AND '%(Extension)' == '.dll'" />
     <Copy SourceFiles="$(TargetDir)$(TargetName).pdb"
           DestinationFolder="$(PluginDir)"
-          Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
+          Condition="Exists('$(PluginDir)') AND Exists('$(TargetDir)$(TargetName).pdb')" />
   </Target>
 
   <!--
@@ -183,18 +189,27 @@
     Bump WpkVersion in the PropertyGroup below when releasing a new version.
   -->
   <PropertyGroup>
-    <WpkVersion>2.6.9</WpkVersion>
-    <WpkName>FeatureLink-$(WpkVersion)-5.7.0.144</WpkName>
+    <TakSdkVersion>5.7.0.144</TakSdkVersion>
+    <!-- C-17: distinct from 5.6's 2.7.0 and honest about this tree's state — it is a stale fork,
+         not a port of current 5.6. See docs/remediation/wp3-wintak-57-parity.md. -->
+    <WpkVersion>0.9.0-pre</WpkVersion>
+    <WpkName>FeatureLink-$(WpkVersion)-$(TakSdkVersion)</WpkName>
     <WpkOut>$(OutputPath)$(WpkName).wpk</WpkOut>
+    <PythonExe Condition="'$(PythonExe)' == ''">py -3</PythonExe>
   </PropertyGroup>
 
   <Target Name="PackageWpk" AfterTargets="Build"
           Condition="'$(Configuration)' == 'Release'">
 
-    <!-- Zip DLL + manifest into the .wpk via build-wpk.py -->
-    <Exec Command="python &quot;$(MSBuildProjectDirectory)\build-wpk.py&quot; $(WpkVersion) 5.7.0.144 &quot;$(TargetPath)&quot; &quot;$(MSBuildProjectDirectory)\Assets&quot; &quot;$(WpkOut)&quot;" />
+    <!-- C-18: packages FeatureLink.dll, its binding-redirect config, the icon AND every non-SDK
+         dependency next to the output (Newtonsoft.Json.dll). Without the pinned assembly inside
+         the package the plugin throws FileNotFoundException on its first JObject use, i.e. it
+         cannot load at all on a clean WinTAK. The manifest is templated from the checked-in
+         MANIFEST.xml rather than duplicated inside the script. -->
+    <Exec Command="$(PythonExe) &quot;$(MSBuildProjectDirectory)\build-wpk.py&quot; $(WpkVersion) $(TakSdkVersion) &quot;$(TargetPath)&quot; &quot;$(MSBuildProjectDirectory)\Assets&quot; &quot;$(WpkOut)&quot; --manifest &quot;$(MSBuildProjectDirectory)\MANIFEST.xml&quot;" />
 
     <Message Text="Plugin package: $(WpkOut)" Importance="High" />
+    <Warning Text="WinTAK 5.7 is a STALE FORK of an older 5.6 and is missing shipped functionality. Do not release this package. See docs/remediation/wp3-wintak-57-parity.md." />
   </Target>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

@@ -62,7 +62,7 @@ import * as rest from '../../lib/arcgisRest.ts';
 import { copyToClipboard } from '../../lib/layerShare.ts';
 
 const isAuthed = computed(() => { void authState.username; return isAuthenticated(); });
-const pliConnected = computed(() => { void authState.username; return isPliConnected(isAuthenticated()); });
+const pliConnected = computed(() => { void authState.username; return isPliConnected(); });
 
 const mode = ref<'create' | 'join'>('create');
 const layerName = ref('');
@@ -93,21 +93,22 @@ async function doAction(): Promise<void> {
         return;
     }
 
-    const token = await getToken();
-    const username = getUsername();
-    if (!token || !username) { statusMsg.value = 'Session expired — sign in again'; statusOk.value = false; return; }
-
+    // busy is set at function ENTRY, before any await. It used to be set only inside the create
+    // branch after two awaits, so a rapid double-click issued two createPliFeatureService calls and
+    // created two hosted Feature Services in the user's ArcGIS org — one orphaned and billable
+    // (§4.2).
     busy.value = true;
     try {
-        const serviceUrl = await rest.createPliFeatureService(getPortalUrl(), username, token, layerName.value.trim() || null);
-        if (serviceUrl) {
-            setPliLayerUrl(serviceUrl);
-            statusMsg.value = `Created: ${serviceUrl}`;
-            statusOk.value = true;
-        } else {
-            statusMsg.value = 'Failed to create service';
-            statusOk.value = false;
-        }
+        const token = await getToken();
+        const username = getUsername();
+        if (!token || !username) { statusMsg.value = 'Session expired — sign in again'; statusOk.value = false; return; }
+
+        const result = await rest.createPliFeatureService(getPortalUrl(), username, token, layerName.value.trim() || null);
+        // Every distinct failure now carries the ArcGIS message instead of collapsing to the
+        // causeless literal 'Failed to create service' (§4.2).
+        statusOk.value = result.ok;
+        statusMsg.value = result.message;
+        if (result.ok && result.url) setPliLayerUrl(result.url);
     } finally {
         busy.value = false;
     }

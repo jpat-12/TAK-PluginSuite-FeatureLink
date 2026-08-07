@@ -50,11 +50,24 @@ public class FeatureLinkMapComponent extends DropDownMapComponent {
         // can never see a broadcast sent from a different process no matter what. Confirmed via
         // logcat: ImportConfigActivity launches and runs correctly every time, but onReceive()
         // never logs anything for IMPORT_CONFIG without this second registration.
+        //
+        // C-02 — the registration below used to be exported with NO permission, so any app on
+        // the device could broadcast IMPORT_CONFIG with an arbitrary "config" extra and inject
+        // feature layers, URLs and markers onto the operator's map with no confirmation at all.
+        // It is now guarded by a signature-level permission (declared in this plugin's
+        // AndroidManifest and held only by code signed with the plugin's own key), and the
+        // receiver additionally requires explicit operator consent before applying anything
+        // that did not originate from a deliberate on-device action — see
+        // FeatureLinkDropDownReceiver.onReceive().
+        //
         IntentFilter importConfigFilter = new IntentFilter(FeatureLinkDropDownReceiver.IMPORT_CONFIG);
+        importConfigFilter.addAction(OAuthCallbackActivity.BROADCAST_ACTION);
         if (Build.VERSION.SDK_INT >= 33) {
-            context.registerReceiver(dropDown, importConfigFilter, Context.RECEIVER_EXPORTED);
+            context.registerReceiver(dropDown, importConfigFilter,
+                    OAuthCallbackActivity.INTERNAL_PERMISSION, null, Context.RECEIVER_EXPORTED);
         } else {
-            context.registerReceiver(dropDown, importConfigFilter);
+            context.registerReceiver(dropDown, importConfigFilter,
+                    OAuthCallbackActivity.INTERNAL_PERMISSION, null);
         }
 
         menuFactory = new FeatureLinkMenuFactory(view, context);

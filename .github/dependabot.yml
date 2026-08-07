@@ -1,0 +1,106 @@
+# Dependabot configuration for TAK-PluginSuite-FeatureLink.
+#
+# Closes the "no dependency-update policy, no Dependabot/Renovate config" gap
+# (Appendix E §7). Four package ecosystems ship in this suite — Gradle/Maven, npm, NuGet,
+# pip — and none had automated vulnerability alerting. Newtonsoft.Json 13.0.3 was pinned
+# with no update path at all.
+#
+# `github-actions` is listed first and deliberately. Every action in .github/workflows/ is
+# pinned by 40-character commit SHA rather than by tag, because a tag is repointable by the
+# action owner or by anyone who compromises the action repository. SHA pinning is only
+# maintainable if something proposes the upgrades — that something is this file.
+
+version: 2
+
+updates:
+
+  # ── GitHub Actions (SHA-pinned; Dependabot bumps the SHA and the version comment) ──
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies, ci, security]
+    commit-message:
+      prefix: "ci(deps)"
+
+  # ── npm ───────────────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: "/CloudTAK/plugin"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies, cloudtak]
+    commit-message:
+      prefix: "deps(cloudtak)"
+    groups:
+      # Lint/type/test tooling moves constantly and is not shipped to a device. Grouping it
+      # keeps the review queue focused on dependencies that reach an operator.
+      dev-tooling:
+        patterns: ["eslint*", "@eslint/*", "typescript*", "@typescript-eslint/*", "vitest", "vue-tsc", "happy-dom", "@vue/test-utils", "globals"]
+
+  - package-ecosystem: npm
+    directory: "/TAKPortal"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies, takportal]
+    commit-message:
+      prefix: "deps(takportal)"
+
+  # ── NuGet (both WinTAK trees) ─────────────────────────────────────────────
+  - package-ecosystem: nuget
+    directory: "/WinTAK5.6"
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, wintak]
+    commit-message:
+      prefix: "deps(wintak5.6)"
+
+  - package-ecosystem: nuget
+    directory: "/WinTAK5.7"
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, wintak]
+    commit-message:
+      prefix: "deps(wintak5.7)"
+
+  # ── Gradle (both ATAK trees) ──────────────────────────────────────────────
+  # NOTE: this does NOT cover buildtools/atak-gradle-takdev.jar, which is a tracked binary
+  # blob rather than a resolved dependency. That is pinned by SHA-256 in
+  # .github/pinned-binaries.sha256 and verified by the `pinned-binaries` job.
+  - package-ecosystem: gradle
+    directory: "/ATAK5.6"
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, atak]
+    commit-message:
+      prefix: "deps(atak5.6)"
+
+  - package-ecosystem: gradle
+    directory: "/ATAK5.7"
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, atak]
+    commit-message:
+      prefix: "deps(atak5.7)"
+
+  # ── pip ───────────────────────────────────────────────────────────────────
+  # Only effective once Infra-TAK declares its dependencies in a pinned requirements.txt.
+  # Until then the component's dependency set is undeclared and unscannable — recorded as a
+  # cross-package request in docs/remediation/wp5-crosscutting.md.
+  - package-ecosystem: pip
+    directory: "/Infra-TAK"
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, infra-tak]
+    commit-message:
+      prefix: "deps(infra-tak)"

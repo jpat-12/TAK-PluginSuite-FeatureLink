@@ -41,6 +41,7 @@ import com.atakmap.android.featurelink.arcgis.ArcGISAuthManager;
 import com.atakmap.android.featurelink.arcgis.ArcGISLayer;
 import com.atakmap.android.featurelink.arcgis.ArcGISRestClient;
 import com.atakmap.android.featurelink.arcgis.AutoIconset;
+import com.atakmap.android.featurelink.arcgis.AutoSymbology;
 import com.atakmap.android.featurelink.plugin.R;
 import com.atakmap.android.ipc.AtakBroadcast;
 import com.atakmap.android.maps.MapGroup;
@@ -48,6 +49,7 @@ import com.atakmap.android.maps.MapItem;
 import com.atakmap.android.maps.MapView;
 import com.atakmap.android.maps.Marker;
 import com.atakmap.android.maps.PointMapItem;
+import com.atakmap.android.maps.Polyline;
 import com.atakmap.android.missionpackage.api.MissionPackageApi;
 import com.atakmap.android.missionpackage.api.ToastSaveCallback;
 import com.atakmap.android.missionpackage.file.MissionPackageManifest;
@@ -60,6 +62,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileWriter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -90,6 +93,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private static final String PREF_DISPLAY_CONFIGS_JSON = "display_configs_json";
     private static final String PREF_PUBLIC_LAYERS_JSON = "public_layers_json";
     private static final String PREF_SHARED_PRIVATE_LAYERS_JSON = "shared_private_layers_json";
+    private static final String PREF_SHARED_WITH_ME_LAYERS_JSON = "shared_with_me_layers_json";
     private static final String PREF_SECTION_PRIVATE_EXPANDED = "section_private_expanded";
     private static final String PREF_SECTION_SHARED_PRIVATE_EXPANDED = "section_shared_private_expanded";
     private static final String PREF_SECTION_PUBLIC_EXPANDED = "section_public_expanded";
@@ -103,10 +107,82 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private final ArcGISAuthManager authManager;
     private final ArcGISRestClient restClient;
     private final SharedPreferences prefs;
-    private final ExecutorService executor = Executors.newFixedThreadPool(2);
+    /**
+     * C-28 — workload-class separation. Every network operation in the plugin used to funnel
+     * through one {@code newFixedThreadPool(2)}: a PLI service creation (which blocks up to 60 s
+     * polling a publish job) plus a single layer download starved every other action, including
+     * the recurrence scan, with no timeout and no user feedback.
+     *
+     * <p>{@code executor} is the <b>interactive</b> pool: short, user-initiated work whose result
+     * the operator is waiting on (add a layer, download, share, scan). {@code bgExecutor} is the
+     * <b>background</b> pool: sweeps and long blocking waits (home statistics, recurrence
+     * re-downloads, PLI service creation) that must never occupy an interactive thread.
+     */
+    private final ExecutorService executor = Executors.newFixedThreadPool(4, namedThreads("fl-ui"));
+    private final ExecutorService bgExecutor = Executors.newFixedThreadPool(3, namedThreads("fl-bg"));
+    /**
+     * Single coordinator thread for the Home-tab statistics sweep. It is deliberately its OWN
+     * pool: the sweep fans its per-layer count queries out to {@link #bgExecutor} and blocks on
+     * {@code invokeAll}, and a task that blocks waiting on tasks it submitted to its own pool is
+     * the exact self-deadlock this remediation is removing elsewhere (C-28). Keeping the
+     * coordinator off the pool it waits on makes that structurally impossible.
+     */
+    private final ExecutorService statsExecutor =
+            Executors.newSingleThreadExecutor(namedThreads("fl-stats"));
+    /** C-25 — drives the per-layer auto-refresh that previously never repeated. */
+    private ScheduledExecutorService recurrenceScheduler;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private ScheduledExecutorService pliScheduler;
     private BroadcastReceiver prefFileResultReceiver;
+
+    /**
+     * Set in {@link #disposeImpl()}. {@code shutdownNow()} interrupts in-flight tasks, but a task
+     * that has already called {@code mainHandler.post(...)} still runs its UI lambda against
+     * views belonging to a disposed drop-down. Every posted lambda checks this first
+     * (Appendix A §5/§6).
+     */
+    private volatile boolean disposed = false;
+
+    /** Suppresses the auto-send checkbox listener during programmatic setChecked, so navigating
+     * to the PLI tab no longer tears down and rebuilds the PLI scheduler (resetting its 30 s
+     * phase, so a tab-switching operator may never actually send — Appendix A §5). */
+    private boolean suppressAutoSendListener = false;
+
+    private static java.util.concurrent.ThreadFactory namedThreads(String prefix) {
+        final java.util.concurrent.atomic.AtomicInteger n =
+                new java.util.concurrent.atomic.AtomicInteger();
+        return r -> {
+            Thread t = new Thread(r, prefix + "-" + n.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        };
+    }
+
+    /**
+     * Posts to the main thread, dropping the work if the drop-down has been disposed. Every
+     * background task's UI continuation must go through this rather than mainHandler.post.
+     */
+    private void postToUi(Runnable r) {
+        if (disposed) return;
+        mainHandler.post(() -> {
+            if (disposed) return;
+            r.run();
+        });
+    }
+
+    /** Submits to a pool, tolerating rejection after shutdown instead of throwing out of a
+     * click listener (Appendix A §12.7 — a rejected submit left the Add button disabled
+     * forever). */
+    private boolean submit(ExecutorService pool, Runnable r) {
+        if (disposed) return false;
+        try {
+            pool.submit(r);
+            return true;
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            Log.w(TAG, "work rejected — plugin is shutting down");
+            return false;
+        }
+    }
 
     // Main view and page navigation (0=HOME, 1=LAYERS, 2=PLI)
     private View mainView;
@@ -141,6 +217,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     // OAuth WebView overlay (lives in main_layout, covers everything during sign-in)
     private FrameLayout oauthWebViewContainer;
+    /** Held so {@link #hideOAuthWebView()} can actually destroy it — {@code removeAllViews()}
+     * alone leaks the renderer process, its native heap, and a strong reference to ATAK's
+     * Activity on every sign-in attempt (Appendix A §6). */
+    private WebView oauthWebView;
     private View oauthKeyboardListenerTarget;
     private android.view.ViewTreeObserver.OnGlobalLayoutListener oauthKeyboardListener;
 
@@ -173,6 +253,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private LinearLayout privateLayersList;
     private View myArcGisLayersCard;
 
+    // Layers page — "Shared with me" subsection, nested inside "My ArcGIS Layers": items shared
+    // with the signed-in user via ArcGIS group membership (see ArcGISRestClient.
+    // searchSharedWithMeLayers()), as opposed to owned items. Shares the same collapse control as
+    // the owned-layers list above it (no separate toggle).
+    private LinearLayout sharedWithMeList;
+    private TextView sharedWithMeCountBadge;
+
     // Layers page — "Private Layers" section: on-device layers not shared to Everyone, either
     // shared to you by another user, or downloaded from "My ArcGIS Layers" and not public — see
     // moveMyArcGisLayerOnDownload(). Whole card hidden when this list is empty.
@@ -190,13 +277,21 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private boolean publicLayersExpanded  = false;
 
     // Data
+    // Bulk "Update" control on the Layers page, plus its re-entrancy flag: a second tap
+    // while a sweep is still running would double-dispatch every layer and race the two
+    // sets of markers through removeLayerItems() (the class of bug C-26 describes).
+    private Button updateAllLayersBtn;
+    private boolean updateAllInFlight;
+
     private final List<ArcGISLayer> privateLayers = new ArrayList<>();
     private final List<ArcGISLayer> publicLayers  = new ArrayList<>();
     private final List<ArcGISLayer> sharedPrivateLayers = new ArrayList<>();
+    private final List<ArcGISLayer> sharedWithMeLayers = new ArrayList<>();
     private String pliLayerUrl = null;
 
-    /** Tracks ATAK Markers added per layer URL so they can be refreshed or removed. */
-    private final Map<String, List<Marker>> layerMarkers = new HashMap<>();
+    /** Tracks ATAK map items (Markers for points, Polylines for lines/polygons) added per layer
+     * URL so they can be refreshed or removed — MapItem is the common base both extend. */
+    private final Map<String, List<MapItem>> layerItems = new HashMap<>();
 
     /** Display configs keyed by layer URL, populated when a v:2 (or v:1 display) QR is scanned. */
     private final Map<String, DisplayConfig> layerDisplayConfigs = new HashMap<>();
@@ -308,16 +403,18 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         all.addAll(privateLayers);
         all.addAll(sharedPrivateLayers);
         all.addAll(publicLayers);
-        for (ArcGISLayer layer : all) removeLayerMarkers(layer);
+        for (ArcGISLayer layer : all) removeLayerItems(layer);
 
         privateLayers.clear();
         sharedPrivateLayers.clear();
         publicLayers.clear();
+        sharedWithMeLayers.clear();
         layerDisplayConfigs.clear();
 
         savePrivateLayers();
         saveSharedPrivateLayers();
         savePublicLayers();
+        saveSharedWithMeLayers();
         saveDisplayConfigs();
 
         refreshHomeStats();
@@ -500,6 +597,11 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         });
 
         pliAutoSendCheckbox.setOnCheckedChangeListener((btn, checked) -> {
+            // Appendix A §5: syncPliPageAuthState() calls setChecked() on every PLI-tab
+            // navigation, which fired this listener, which restarted the scheduler and reset its
+            // 30 s phase — so an operator who switches tabs often may never actually send a
+            // position report. Programmatic changes are suppressed.
+            if (suppressAutoSendListener) return;
             prefs.edit().putBoolean(PREF_PLI_AUTO_SEND, checked).apply();
             if (checked) startPliScheduler();
             else         stopPliScheduler();
@@ -544,7 +646,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 pliLayerUrlEdit.setText(pliLayerUrl);
                 pliStatusText.setText("PLI layer: " + pliLayerUrl);
             }
-            pliAutoSendCheckbox.setChecked(prefs.getBoolean(PREF_PLI_AUTO_SEND, false));
+            suppressAutoSendListener = true;
+            try {
+                pliAutoSendCheckbox.setChecked(prefs.getBoolean(PREF_PLI_AUTO_SEND, false));
+            } finally {
+                suppressAutoSendListener = false;
+            }
         }
         updateQrShareButton();
     }
@@ -588,37 +695,90 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     // Home page — feature statistics
     // -------------------------------------------------------------------------
 
+    /** One row of the Home tab's feature-statistics list. Carries the count as a {@code long}
+     * rather than a string that {@code buildStatStrings} then re-parses — that round trip would
+     * have thrown NumberFormatException on the main thread the moment the format changed
+     * (Appendix A §8). */
+    private static final class LayerStat {
+        final String name, scope;
+        final long count;   // negative = the count query failed
+        LayerStat(String name, long count, String scope) {
+            this.name = name; this.count = count; this.scope = scope;
+        }
+    }
+
+    /** Coalesces rapid Refresh taps: each sweep supersedes the previous one's UI update rather
+     * than enqueuing five full N-request sweeps (Appendix A §12.4). */
+    private final java.util.concurrent.atomic.AtomicInteger statsGeneration =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     private void refreshHomeStats() {
         final List<ArcGISLayer> privateSnap = new ArrayList<>(privateLayers);
+        final List<ArcGISLayer> sharedWithMeSnap = new ArrayList<>(sharedWithMeLayers);
         final List<ArcGISLayer> sharedPrivateSnap = new ArrayList<>(sharedPrivateLayers);
-        final List<ArcGISLayer> publicSnap  = new ArrayList<>(publicLayers);
-        executor.submit(() -> {
-            final List<String[]> stats = new ArrayList<>();
-            int total = 0;
-            String token = authManager.getToken();
+        final List<ArcGISLayer> publicSnap = new ArrayList<>(publicLayers);
+        final int generation = statsGeneration.incrementAndGet();
 
-            for (ArcGISLayer layer : privateSnap) {
-                long count = cachedCount(layer.url, token);
-                layer.featureCount = count;
-                total += count;
-                stats.add(new String[]{layer.name, String.valueOf(count), "private"});
-            }
-            for (ArcGISLayer layer : sharedPrivateSnap) {
-                long count = cachedCount(layer.url, token);
-                layer.featureCount = count;
-                total += count;
-                stats.add(new String[]{layer.name, String.valueOf(count), "private"});
-            }
-            for (ArcGISLayer layer : publicSnap) {
-                long count = cachedCount(layer.url, null);
-                layer.featureCount = count;
-                total += count;
-                stats.add(new String[]{layer.name, String.valueOf(count), "public"});
+        // C-28 — this whole sweep moves to the BACKGROUND pool. It fires on every Home-tab tap,
+        // and previously issued one blocking returnCountOnly request per layer, serially, on the
+        // same 2-thread pool everything else used: with 40 layers and a 300 ms RTT that is 12 s
+        // of serial I/O on the most-used navigation action, and 10 minutes on a degraded link.
+        submit(statsExecutor, () -> {
+            final String token = authManager.getToken();
+
+            // Batched rather than serial: the counts are independent, so they are issued
+            // concurrently across the background pool and joined here, on the dedicated
+            // coordinator thread (see statsExecutor's comment for why that separation matters).
+            final List<ArcGISLayer> all = new ArrayList<>();
+            final List<String> scopes = new ArrayList<>();
+            for (ArcGISLayer l : privateSnap)       { all.add(l); scopes.add("private"); }
+            for (ArcGISLayer l : sharedWithMeSnap)  { all.add(l); scopes.add("private"); }
+            for (ArcGISLayer l : sharedPrivateSnap) { all.add(l); scopes.add("private"); }
+            for (ArcGISLayer l : publicSnap)        { all.add(l); scopes.add("public");  }
+
+            final List<java.util.concurrent.Callable<Long>> tasks = new ArrayList<>(all.size());
+            for (int i = 0; i < all.size(); i++) {
+                final ArcGISLayer layer = all.get(i);
+                final String t = "public".equals(scopes.get(i)) ? null : token;
+                tasks.add(() -> cachedCount(layer.url, t));
             }
 
-            final int totalFinal = total;
-            mainHandler.post(() -> {
-                totalCountText.setText("Total Features: " + totalFinal);
+            final long[] counts = new long[all.size()];
+            try {
+                List<java.util.concurrent.Future<Long>> futures = bgExecutor.invokeAll(tasks);
+                for (int i = 0; i < futures.size(); i++) {
+                    try {
+                        counts[i] = futures.get(i).get();
+                    } catch (Exception e) {
+                        counts[i] = -1;
+                    }
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            final List<LayerStat> stats = new ArrayList<>(all.size());
+            long total = 0;
+            int failed = 0;
+            for (int i = 0; i < all.size(); i++) {
+                long count = counts[i];
+                stats.add(new LayerStat(all.get(i).name, count, scopes.get(i)));
+                // A failed count is -1. Adding it into the running total silently reduced the
+                // Home tab's "Total Features" figure by 1 per failed layer, and could take it
+                // negative (Appendix A §8). Failed layers are excluded and reported separately.
+                if (count >= 0) total += count; else failed++;
+            }
+
+            final long totalFinal = total;
+            final int failedFinal = failed;
+            postToUi(() -> {
+                // A newer sweep already finished — discard this stale result.
+                if (generation != statsGeneration.get()) return;
+                for (int i = 0; i < all.size(); i++) all.get(i).featureCount = counts[i];
+                totalCountText.setText(failedFinal == 0
+                        ? "Total Features: " + totalFinal
+                        : "Total Features: " + totalFinal + "  (" + failedFinal + " unavailable)");
                 ArrayAdapter<String> adapter = new ArrayAdapter<>(pluginContext,
                         android.R.layout.simple_list_item_1,
                         buildStatStrings(stats));
@@ -632,16 +792,18 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         try {
             return restClient.queryFeatureCount(url, token);
         } catch (Exception e) {
-            Log.e(TAG, "Count query failed for " + url, e);
+            Log.w(TAG, "Count query failed for " + ArcGISLayer.canonicalUrl(url) + ": "
+                    + describeFailure(e));
             return -1;
         }
     }
 
-    private List<String> buildStatStrings(List<String[]> stats) {
+    private List<String> buildStatStrings(List<LayerStat> stats) {
         List<String> out = new ArrayList<>();
-        for (String[] s : stats) {
-            out.add(s[0] + "  [" + s[2] + "]  —  "
-                    + (Long.parseLong(s[1]) < 0 ? "error" : s[1] + " features"));
+        for (LayerStat s : stats) {
+            out.add(s.name + "  [" + s.scope + "]  —  "
+                    + (s.count < 0 ? "unavailable"
+                                   : s.count + (s.count == 1 ? " feature" : " features")));
         }
         return out;
     }
@@ -675,16 +837,28 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 if (url.startsWith("featurelink://auth")) {
                     Uri uri  = Uri.parse(url);
                     String code  = uri.getQueryParameter("code");
+                    String state = uri.getQueryParameter("state");   // C-09
                     String error = uri.getQueryParameter("error");
                     String desc  = uri.getQueryParameter("error_description");
                     hideOAuthWebView();
-                    mainHandler.post(() -> handlePendingOAuthCode(code,
+                    postToUi(() -> handlePendingOAuthCode(code, state,
                             error != null ? (desc != null ? desc : error) : null));
                     return true;
                 }
                 return false;
             }
         });
+        // Appendix A §6: this WebView loads a third-party (Esri) origin inside ATAK's process
+        // with JavaScript and DOM storage enabled. Deny it every file-system capability it does
+        // not need, so an Esri open redirect or a compromised portal page cannot reach file://.
+        webView.getSettings().setAllowFileAccess(false);
+        webView.getSettings().setAllowContentAccess(false);
+        webView.getSettings().setAllowFileAccessFromFileURLs(false);
+        webView.getSettings().setAllowUniversalAccessFromFileURLs(false);
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            webView.getSettings().setSafeBrowsingEnabled(true);
+        }
+        oauthWebView = webView;
 
         // Header bar with Cancel button
         LinearLayout header = new LinearLayout(ctx);
@@ -707,6 +881,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         cancelBtn.setTextSize(12);
         cancelBtn.setOnClickListener(v -> {
             hideOAuthWebView();
+            // Appendix A §4: cancelling used to leave the PKCE verifier on disk indefinitely.
+            authManager.cancelOAuthFlow();
             authStatusText.setText("Sign-in cancelled");
             authStatusText.setTextColor(0xFFFF5722);
         });
@@ -759,18 +935,36 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         }
         oauthWebViewContainer.removeAllViews();
         oauthWebViewContainer.setVisibility(View.GONE);
+        if (oauthWebView != null) {
+            try {
+                oauthWebView.stopLoading();
+                oauthWebView.loadUrl("about:blank");
+                oauthWebView.destroy();
+            } catch (Exception e) {
+                Log.w(TAG, "WebView teardown failed", e);
+            }
+            oauthWebView = null;
+        }
     }
 
-    private void handlePendingOAuthCode(String code, String error) {
+    private void handlePendingOAuthCode(String code, String state, String error) {
         if (error != null) {
+            authManager.cancelOAuthFlow();
             authStatusText.setText("Sign-in failed: " + error);
             authStatusText.setTextColor(0xFFFF5722);
             return;
         }
-        if (code == null) return;
+        if (code == null) {
+            // Appendix A §8: this used to return silently, leaving the UI reading "Signing in…"
+            // forever after a malformed callback.
+            authManager.cancelOAuthFlow();
+            authStatusText.setText("Sign-in failed: the response carried no authorization code");
+            authStatusText.setTextColor(0xFFFF5722);
+            return;
+        }
 
         authStatusText.setText("Completing sign-in…");
-        authManager.handleAuthCode(code, executor, mainHandler,
+        authManager.handleAuthCode(code, state, executor, mainHandler,
                 () -> {
                     prefs.edit().putString(PREF_PORTAL_URL, "https://www.arcgis.com").apply();
                     syncHomeAuthState();
@@ -787,6 +981,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void performLogout() {
         authManager.logout();
         privateLayers.clear();
+        sharedWithMeLayers.clear();
         prefs.edit().remove(PREF_PORTAL_URL).apply();
         syncHomeAuthState();
         if (currentPage == 1) refreshLayersList();
@@ -794,29 +989,59 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void fetchUserLayers() {
-        String token    = authManager.getToken();
         String username = authManager.getUsername();
         String portal   = prefs.getString(PREF_PORTAL_URL, "https://www.arcgis.com");
-        if (token == null || username == null) return;
+        if (username == null || !authManager.isAuthenticated()) return;
 
         authStatusText.setText("Loading layers…");
-        executor.submit(() -> {
-            List<ArcGISLayer> layers = restClient.searchUserLayers(portal, token, username);
-            mainHandler.post(() -> {
+        submit(executor, () -> {
+            // Off the UI thread: getToken() can need a network refresh (see ArcGISAuthManager).
+            final String token = authManager.getToken();
+            if (token == null) {
+                postToUi(() -> authStatusText.setText("Sign in to load your ArcGIS layers"));
+                return;
+            }
+            List<ArcGISLayer> owned  = restClient.searchUserLayers(portal, token, username);
+            List<ArcGISLayer> shared = restClient.searchSharedWithMeLayers(portal, token, username);
+            Log.d(TAG, "fetchUserLayers: username=" + username + " owned=" + owned.size()
+                    + " shared=" + shared.size());
+            for (ArcGISLayer l : shared) {
+                Log.d(TAG, "fetchUserLayers: shared item name=" + l.name + " owner=" + l.sharedBy);
+            }
+            postToUi(() -> {
                 Set<String> excluded = getExcludedPrivateUrls();
                 Set<String> onDevice = new HashSet<>();
                 for (ArcGISLayer l : sharedPrivateLayers) onDevice.add(l.url);
                 for (ArcGISLayer l : publicLayers)        onDevice.add(l.url);
+
                 privateLayers.clear();
-                for (ArcGISLayer l : layers) {
+                for (ArcGISLayer l : owned) {
                     // Already downloaded onto this device (see moveMyArcGisLayerOnDownload) —
                     // it now lives in Private or Public Layers, not the browse list.
                     if (excluded.contains(l.url) || onDevice.contains(l.url)) continue;
                     l.type = "private";
                     privateLayers.add(l);
                 }
-                restoreLayerPreferences(privateLayers);
+                restoreLayerPreferences(privateLayers, PREF_LAYERS_JSON);
                 savePrivateLayers();
+
+                // Cross-check against the owned-layers result by URL rather than trusting only
+                // searchSharedWithMeLayers()'s owner-string comparison — ArcGIS Online can format
+                // a username differently between the group-search "owner" field and the OAuth
+                // username, so an owned item shared into the user's own group could otherwise
+                // slip past that check and land here too.
+                Set<String> ownedUrls = new HashSet<>();
+                for (ArcGISLayer l : owned) ownedUrls.add(l.url);
+
+                sharedWithMeLayers.clear();
+                for (ArcGISLayer l : shared) {
+                    if (excluded.contains(l.url) || onDevice.contains(l.url) || ownedUrls.contains(l.url)) continue;
+                    l.type = "private";
+                    sharedWithMeLayers.add(l);
+                }
+                restoreLayerPreferences(sharedWithMeLayers, PREF_SHARED_WITH_ME_LAYERS_JSON);
+                saveSharedWithMeLayers();
+
                 authStatusText.setText("Signed in as: " + authManager.getUsername());
                 refreshHomeStats();
                 refreshHomeStatusCard();
@@ -838,6 +1063,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         collapsePublicBtn      = layersPageView.findViewById(R.id.collapse_public_btn);
         Button openAddLayerBtn = layersPageView.findViewById(R.id.open_add_layer_btn);
         openAddLayerBtn.setOnClickListener(v -> showAddLayerPage());
+        updateAllLayersBtn = layersPageView.findViewById(R.id.update_all_layers_btn);
+        updateAllLayersBtn.setOnClickListener(v -> updateAllLayers());
         collapsePublicBtn.setOnClickListener(v -> togglePublicLayersSection());
 
         // "My ArcGIS Layers" section — browse list, only shown while signed in
@@ -845,6 +1072,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         privateLayersContent = layersPageView.findViewById(R.id.private_layers_content);
         myArcGisLayersCard   = layersPageView.findViewById(R.id.my_arcgis_layers_card);
         collapsePrivateBtn   = layersPageView.findViewById(R.id.collapse_private_btn);
+
+        // "Shared with me" subsection, nested inside the same card/collapse control above
+        sharedWithMeList       = layersPageView.findViewById(R.id.shared_with_me_list);
+        sharedWithMeCountBadge = layersPageView.findViewById(R.id.shared_with_me_count_badge);
         Button refreshPrivateBtn = layersPageView.findViewById(R.id.refresh_private_layers_btn);
         refreshPrivateBtn.setOnClickListener(v -> {
             if (authManager.isAuthenticated()) fetchUserLayers();
@@ -917,7 +1148,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         boolean authed = authManager.isAuthenticated();
         myArcGisLayersCard.setVisibility(authed ? View.VISIBLE : View.GONE);
         if (!authed) return;
-        populateLayerList(privateLayersList, privateLayers);
+        populateLayerList(privateLayersList, privateLayers, true);
+        sharedWithMeCountBadge.setText(String.valueOf(sharedWithMeLayers.size()));
+        populateLayerList(sharedWithMeList, sharedWithMeLayers, true);
     }
 
     private void refreshSharedPrivateLayers() {
@@ -932,12 +1165,21 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      * its natural height and the whole Layers page scrolls as one unit.
      */
     private void populateLayerList(LinearLayout container, List<ArcGISLayer> layers) {
+        populateLayerList(container, layers, false);
+    }
+
+    /**
+     * @param browseSection true for the "My ArcGIS Layers"/"Shared with me" listings, which are a
+     *                      view of the operator's ArcGIS account rather than on-device layers.
+     */
+    private void populateLayerList(LinearLayout container, List<ArcGISLayer> layers,
+            boolean browseSection) {
         container.removeAllViews();
         Set<String> styledLayerUrls = layerDisplayConfigs.keySet();
         LayerListAdapter adapter = new LayerListAdapter(
                 pluginContext, layers, this::onLayerAction, this::toggleLayerVisibility,
                 this::onLayerIntervalChanged, this::onLayerShare, this::onLayerDelete,
-                styledLayerUrls);
+                styledLayerUrls, browseSection);
         for (int i = 0; i < layers.size(); i++) {
             container.addView(adapter.getView(i, null, container));
             if (i < layers.size() - 1) {
@@ -969,9 +1211,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void toggleLayerVisibility(ArcGISLayer layer) {
         layer.visible = !layer.visible;
-        List<Marker> markers = layerMarkers.get(layer.url);
-        if (markers != null) {
-            for (Marker m : markers) m.setVisible(layer.visible);
+        List<MapItem> items = layerItems.get(layer.url);
+        if (items != null) {
+            for (MapItem item : items) item.setVisible(layer.visible);
         }
         saveLayerOfSection(layer);
         refreshLayerOfSection(layer);
@@ -985,9 +1227,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 confirmRemovePublicLayer(layer);
             }
         } else {
-            // Downloading a "My ArcGIS Layers" item for the first time moves it onto the device,
-            // into Private or Public Layers depending on its ArcGIS sharing scope.
-            if (privateLayers.contains(layer)) {
+            // Downloading a "My ArcGIS Layers"/"Shared with me" item for the first time moves it
+            // onto the device, into Private or Public Layers depending on its ArcGIS sharing scope.
+            if (privateLayers.contains(layer) || sharedWithMeLayers.contains(layer)) {
                 moveMyArcGisLayerOnDownload(layer);
             }
             saveLayerOfSection(layer);
@@ -995,13 +1237,23 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         }
     }
 
-    /** Moves a "My ArcGIS Layers" browse-list item onto the device once its download/refresh
-     * button is tapped, landing it in Private Layers or Public Layers depending on whether the
-     * ArcGIS item is shared to Everyone ({@link ArcGISLayer#access}) — from then on it behaves
-     * like any other on-device layer in that section instead of staying in the browse list. */
+    /** Moves a "My ArcGIS Layers"/"Shared with me" browse-list item onto the device once its
+     * download/refresh button is tapped, landing it in Private Layers or Public Layers depending
+     * on whether the ArcGIS item is shared to Everyone ({@link ArcGISLayer#access}) — from then on
+     * it behaves like any other on-device layer in that section instead of staying in the browse
+     * list. */
     private void moveMyArcGisLayerOnDownload(ArcGISLayer layer) {
-        privateLayers.remove(layer);
-        savePrivateLayers();
+        // Remember which browse section this came from, so removing the on-device copy later can
+        // put the row back where the operator found it instead of making the layer disappear
+        // from the plugin entirely.
+        if (sharedWithMeLayers.remove(layer)) {
+            layer.browseOrigin = "shared";
+            saveSharedWithMeLayers();
+        } else {
+            layer.browseOrigin = "mine";
+            privateLayers.remove(layer);
+            savePrivateLayers();
+        }
         if ("public".equals(layer.access)) {
             layer.type = "public";
             publicLayers.add(layer);
@@ -1074,7 +1326,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 if (zip.exists()) iconsetZips.add(zip);
             }
         }
-        executor.submit(() -> {
+        submit(executor, () -> {
             try {
                 // pluginContext.getCacheDir() doesn't resolve to a real, writable directory —
                 // ATAK plugin Context objects are largely for resource resolution (assets/
@@ -1124,13 +1376,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
                 String iconsetNote = iconsetZips.isEmpty() ? ""
                         : " (+ " + iconsetZips.size() + " iconset" + (iconsetZips.size() > 1 ? "s" : "") + ")";
-                mainHandler.post(() -> Toast.makeText(pluginContext,
+                postToUi(() -> Toast.makeText(pluginContext,
                         started ? "Sending \"" + layer.name + "\"" + iconsetNote + " to " + recipient.getName() + "…"
                                 : "Could not start send to " + recipient.getName(),
                         Toast.LENGTH_SHORT).show());
             } catch (Exception e) {
                 Log.e(TAG, "sendLayerShare failed", e);
-                mainHandler.post(() -> Toast.makeText(pluginContext,
+                postToUi(() -> Toast.makeText(pluginContext,
                         "Failed to share layer", Toast.LENGTH_SHORT).show());
             }
         });
@@ -1144,7 +1396,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 .setPositiveButton("Remove", (d, w) -> {
                     publicLayers.remove(layer);
                     savePublicLayers();
-                    removeLayerMarkers(layer);
+                    removeLayerItems(layer);
                     layerDisplayConfigs.remove(layer.url);
                     saveDisplayConfigs();
                     refreshPublicLayers();
@@ -1160,15 +1412,44 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      * silently bring it back — a shared-private layer only ever gets (re)added by another share,
      * so it doesn't need that same tracking. */
     private void onLayerDelete(ArcGISLayer layer) {
-        boolean isMyArcGis = privateLayers.contains(layer);
+        boolean isMyArcGis = privateLayers.contains(layer) || sharedWithMeLayers.contains(layer);
+        // A downloaded layer that came from the operator's ArcGIS account is not deleted, it is
+        // "un-downloaded": the on-device copy and its markers go, and the row returns to the browse
+        // list ready to download again. Only a layer with nowhere to return to is excluded.
+        boolean returnsToBrowse = !isMyArcGis && layer.isFromBrowseList();
         new AlertDialog.Builder(getMapView().getContext())
-                .setTitle("Remove Layer?")
+                .setTitle(returnsToBrowse ? "Remove Downloaded Layer?" : "Remove Layer?")
                 .setMessage("Remove \"" + layer.name + "\" from your layer list here? "
                         + (isMyArcGis ? "It stays in your ArcGIS account — this only hides it on this device. "
                                       : "")
+                        + (returnsToBrowse
+                                ? "It stays in your ArcGIS account and returns to "
+                                  + ("shared".equals(layer.browseOrigin)
+                                          ? "\"Shared with me\"" : "\"My ArcGIS Layers\"")
+                                  + " so you can download it again. "
+                                : "")
                         + "Any markers it added to the map will also be removed.")
                 .setPositiveButton("Remove", (d, w) -> {
-                    if (isMyArcGis) {
+                    if (returnsToBrowse) {
+                        String origin = layer.browseOrigin;
+                        boolean wasPublic = publicLayers.remove(layer);
+                        if (wasPublic) savePublicLayers();
+                        else { sharedPrivateLayers.remove(layer); saveSharedPrivateLayers(); }
+                        // Reset before re-listing so the row reads as "available to download"
+                        // again: no sync time, no feature count, and no share/remove buttons.
+                        layer.resetToBrowseState();
+                        layer.type = "private";
+                        if ("shared".equals(origin)) {
+                            sharedWithMeLayers.add(layer);
+                            saveSharedWithMeLayers();
+                        } else {
+                            privateLayers.add(layer);
+                            savePrivateLayers();
+                        }
+                    } else if (sharedWithMeLayers.remove(layer)) {
+                        saveSharedWithMeLayers();
+                        addExcludedPrivateUrl(layer.url);
+                    } else if (isMyArcGis) {
                         privateLayers.remove(layer);
                         savePrivateLayers();
                         addExcludedPrivateUrl(layer.url);
@@ -1176,10 +1457,16 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         sharedPrivateLayers.remove(layer);
                         saveSharedPrivateLayers();
                     }
-                    removeLayerMarkers(layer);
+                    removeLayerItems(layer);
                     layerDisplayConfigs.remove(layer.url);
                     saveDisplayConfigs();
-                    if (isMyArcGis) refreshPrivateLayers(); else refreshSharedPrivateLayers();
+                    if (returnsToBrowse) {
+                        refreshLayersList();     // both the source and destination sections changed
+                    } else if (isMyArcGis) {
+                        refreshPrivateLayers();
+                    } else {
+                        refreshSharedPrivateLayers();
+                    }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1201,179 +1488,755 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         prefs.edit().putString(PREF_EXCLUDED_PRIVATE_URLS, new JSONArray(excluded).toString()).apply();
     }
 
+    // =========================================================================
+    // C-07 — SYMBOLOGY RESOLUTION (shared by the add path AND the download path)
+    // =========================================================================
+    //
+    // THE OWNER'S FIELD DEFECT: "still not downloading individual layers with their symbology".
+    //
+    // Renderer fetch, AutoIconset.generate, AutoSymbology.extract and DisplayConfig.forAutoIcons
+    // all used to live inside addPublicLayer(). downloadLayer() contained NONE of them and simply
+    // read layerDisplayConfigs.get(layer.url). So exactly ONE of six routes onto the map produced
+    // symbology — pasting a URL into "Add Layer". Browse-list download, private-layer refresh,
+    // the ↻ re-download button, the recurrence tick, a visibility re-show, and an accepted
+    // .featurelinkshare import all rendered default blue with no icon.
+    //
+    // The resolution is now this one method, called from both. The guard is a CONTENT test (does
+    // the config actually carry sym / singleShapeStyle / shapeStyleByValue?) rather than a
+    // truthiness test on the config object — a config that exists but carries no styling, which
+    // is exactly what a shared layer or a persisted-before-C-23 config looks like, must still
+    // resolve its renderer.
+    // =========================================================================
+
+    /**
+     * True when {@code cfg} carries no usable styling and the layer's own renderer should be
+     * resolved. Deliberately not {@code cfg == null}.
+     */
+    private static boolean needsSymbologyResolution(DisplayConfig cfg) {
+        if (cfg == null) return true;
+        boolean hasSym = cfg.sym != null;
+        boolean hasShape = cfg.singleShapeStyle != null || !cfg.shapeStyleByValue.isEmpty();
+        return !hasSym && !hasShape;
+    }
+
+    /**
+     * Blocking. Fetches the layer's {@code drawingInfo.renderer} once, feeds it to both
+     * extractors (AutoIconset handles esriPMS picture markers; AutoSymbology handles
+     * esriSMS/esriSLS/esriSFS marker, stroke and fill), and returns a synthesized
+     * {@link DisplayConfig} — or null when the layer genuinely has no styling to derive.
+     *
+     * <p>Call from a background thread. Never throws: symbology is a best-effort enhancement and
+     * must never prevent the layer's features from reaching the map.
+     *
+     * @param token ArcGIS token for a private layer, or null. Passing it matters — the previous
+     *              add-path code hardcoded {@code null} here, so a private layer's renderer fetch
+     *              returned an auth error and silently produced no symbology at all.
+     */
+    private DisplayConfig resolveSymbology(String layerUrl, String token) {
+        return resolveSymbology(layerUrl, token, null);
+    }
+
+    /**
+     * @param itemId portal item ID when known, so styling applied on the item's Visualization tab
+     *               can be found. See {@link ArcGISRestClient#fetchItemRenderer}.
+     */
+    private DisplayConfig resolveSymbology(String layerUrl, String token, String itemId) {
+        JSONObject renderer = null;
+        String canonicalUrl = AutoIconset.canonicalize(layerUrl);
+        if (canonicalUrl == null) {
+            Log.d(TAG, "resolveSymbology: not a FeatureServer/MapServer layer URL — " + layerUrl);
+            return null;
+        }
+        try {
+            JSONObject meta = restClient.fetchJson(canonicalUrl, token);
+            if (meta != null) {
+                JSONObject drawingInfo = meta.optJSONObject("drawingInfo");
+                renderer = drawingInfo != null ? drawingInfo.optJSONObject("renderer") : null;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "renderer fetch failed for " + layerUrl + " — layer will render unstyled", e);
+            return null;
+        }
+
+        // An item-level override is what the operator actually sees in ArcGIS Online, so it wins
+        // over the service's published renderer. Styling saved on the item's Visualization tab
+        // never touches the service, so without this a layer styled by unique value still reports
+        // a single-symbol 'simple' renderer here and renders as one repeated marker.
+        if (itemId != null && !itemId.isEmpty()) {
+            String portal = authManager != null ? authManager.getPortalUrl() : null;
+            int subLayer = AutoIconset.layerIndexOf(canonicalUrl);
+            JSONObject override = restClient.fetchItemRenderer(portal, itemId, subLayer, token);
+            if (override != null) {
+                Log.d(TAG, "resolveSymbology: using item-level renderer override from item "
+                        + itemId + " (service renderer was '"
+                        + (renderer != null ? renderer.optString("type", "?") : "absent") + "')");
+                renderer = override;
+            }
+        }
+
+        if (renderer == null) {
+            Log.d(TAG, "resolveSymbology: layer declares no renderer — " + layerUrl);
+            return null;
+        }
+
+        AutoIconset.Result iconset = null;
+        try {
+            iconset = AutoIconset.generate(pluginContext, restClient, layerUrl, null, token,
+                    renderer, null, null);
+        } catch (Exception e) {
+            Log.w(TAG, "auto-iconset generation failed for " + layerUrl, e);
+        }
+        AutoSymbology.Result shapeResult = AutoSymbology.extract(renderer, null);
+        boolean hasShapeStyle = shapeResult != null && !shapeResult.isEmpty();
+        if (iconset == null && !hasShapeStyle) return null;
+
+        String field = iconset != null ? iconset.field : shapeResult.field;
+        String singleIconPath = iconset != null ? iconset.singleIconPath : null;
+        Map<String, String> pathByValue = iconset != null ? iconset.pathByValue : null;
+        if (iconset != null) {
+            // Kept from the old add-path behaviour, but it now fires on EVERY route that resolves
+            // symbology, not only "paste a URL" — which is the whole point of C-07.
+            final AutoIconset.Result generated = iconset;
+            postToUi(() -> Toast.makeText(pluginContext,
+                    "Icons ready: " + generated.group + " (" + generated.iconCount + ")",
+                    Toast.LENGTH_SHORT).show());
+        }
+        return DisplayConfig.forAutoIcons(layerUrl, field, singleIconPath, pathByValue, shapeResult);
+    }
+
+    /**
+     * Resolves and installs symbology for {@code layer} if it has none yet, storing the result in
+     * {@code layerDisplayConfigs}. Blocking — call from a background thread. Returns the config
+     * that should be used for this download (existing or newly resolved).
+     */
+    private DisplayConfig ensureSymbology(ArcGISLayer layer, String token) {
+        DisplayConfig existing = layerDisplayConfigs.get(layer.url);
+        if (!needsSymbologyResolution(existing)) return existing;
+
+        DisplayConfig resolved = resolveSymbology(layer.url, token, layer.itemId);
+        if (resolved == null) return existing;
+
+        Log.d(TAG, "ensureSymbology: resolved symbology for " + layer.url
+                + " (sym=" + (resolved.sym != null ? resolved.sym.type : "none")
+                + ", shapeByValue=" + resolved.shapeStyleByValue.size() + ")");
+        postToUi(() -> {
+            // Re-check on the main thread: layerDisplayConfigs is main-thread-confined.
+            if (needsSymbologyResolution(layerDisplayConfigs.get(layer.url))) {
+                layerDisplayConfigs.put(layer.url, resolved);
+                saveDisplayConfigs();
+                if (currentPage == 1) refreshLayersList();
+            }
+        });
+        return resolved;
+    }
+
     private void addPublicLayer() {
         String url = publicLayerUrlEdit.getText().toString().trim();
         if (url.isEmpty()) {
             Toast.makeText(pluginContext, "Enter a service URL", Toast.LENGTH_SHORT).show();
             return;
         }
+        // C-06/§12.7: reject cleartext before anything else touches the network.
+        if (!url.toLowerCase(java.util.Locale.ROOT).startsWith("https://")) {
+            Toast.makeText(pluginContext, "Only https:// service URLs are accepted",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        // Appendix A §12.7: adding the same URL twice produced two rows keyed to one URL in
+        // layerItems/layerDisplayConfigs, so removing one orphaned the other's markers.
+        if (findLayerByUrl(url) != null) {
+            Toast.makeText(pluginContext, "That layer is already added", Toast.LENGTH_SHORT).show();
+            return;
+        }
         addPublicLayerBtn.setEnabled(false);
-        executor.submit(() -> {
-            ArcGISLayer layer = restClient.fetchLayerInfo(url);
-            // One-link, no-server (method 5): generate + install this layer's iconset on-device
-            // per AUTO-ICONSET-SPEC.md, so a shared CoT that references it renders here without a
-            // TAK Portal round trip. Federated — the UID/group/filenames match what every other
-            // platform independently produces for the same layer. Non-fatal: on failure the layer
-            // still loads, markers just keep default styling until the set exists. Runs on this
-            // background thread (AutoIconset.generate does its own blocking renderer fetch).
-            AutoIconset.Result iconset = null;
-            if (layer != null) {
-                try {
-                    iconset = AutoIconset.generate(pluginContext, restClient, url, null, null);
-                } catch (Exception e) {
-                    Log.w(TAG, "auto-iconset generation failed for " + url, e);
-                }
-            }
-            final AutoIconset.Result iconsetResult = iconset;
-            mainHandler.post(() -> {
+        if (!submit(executor, () -> addPublicLayerWork(url))) {
+            addPublicLayerBtn.setEnabled(true);
+        }
+    }
+
+    /** Background half of {@link #addPublicLayer()}. */
+    private void addPublicLayerWork(String url) {
+        // A private layer pasted by URL needs the operator's token both to read its metadata and
+        // to query it. Previously the add path always set type="public" and passed a null token,
+        // so a private layer produced an ArcGIS error that nothing checked and the operator was
+        // told "Downloaded: X (0 features)" (Appendix A §12.7).
+        // Only send the token to the portal the operator signed in to — a pasted URL is an
+        // arbitrary host until proven otherwise.
+        String token = (authManager.isAuthenticated() && authManager.holdsCredentialsFor(url))
+                ? authManager.getToken() : null;
+
+        // C-08 — a FeatureServer root can expose many sublayers. Previously ensureLayerIndex()
+        // hard-appended "/0", so a service with layers 0,1,2 appeared as ONE permanently-layer-0
+        // row and layers 1 and 2 were unreachable. This is the literal reading of the owner's
+        // "individual layers" report.
+        List<ArcGISRestClient.SubLayerRef> subs = restClient.listSubLayers(url, token);
+        if (subs.isEmpty()) {
+            // Not a service root, or enumeration failed — fall back to the legacy behaviour
+            // rather than dropping the layer.
+            ArcGISLayer single = restClient.fetchLayerInfo(url, token);
+            postToUi(() -> {
                 addPublicLayerBtn.setEnabled(true);
-                if (layer != null) {
-                    layer.type = "public";
-                    publicLayers.add(layer);
-                    savePublicLayers();
-                    publicLayerUrlEdit.setText("");
-                    hideOverlay();
-                    navigatePage(1);
-                    if (iconsetResult != null) {
-                        Toast.makeText(pluginContext, "Icons ready: " + iconsetResult.group
-                                + " (" + iconsetResult.iconCount + ")", Toast.LENGTH_SHORT).show();
-                        // Self-render: if there's no styling config for this layer yet, synthesize
-                        // one from the just-generated icons so the markers show their real icons on
-                        // THIS device too (not only on devices that receive its CoT). We don't
-                        // overwrite an existing config (e.g. one from a scanned QR / TAK Portal).
-                        if (layerDisplayConfigs.get(url) == null) {
-                            layerDisplayConfigs.put(url, DisplayConfig.forAutoIcons(url,
-                                    iconsetResult.field, iconsetResult.singleIconPath,
-                                    iconsetResult.pathByValue));
-                            saveDisplayConfigs();
-                        }
-                    }
-                    downloadLayer(layer);
+                if (single == null) {
+                    Toast.makeText(pluginContext,
+                            "Could not load layer from URL — check the address, your network, "
+                                    + "and whether you need to sign in", Toast.LENGTH_LONG).show();
                 } else {
-                    Toast.makeText(pluginContext, "Could not load layer from URL",
-                            Toast.LENGTH_SHORT).show();
+                    commitAddedLayers(Collections.singletonList(single));
                 }
             });
+            return;
+        }
+
+        if (subs.size() == 1) {
+            ArcGISRestClient.SubLayerRef only = subs.get(0);
+            ArcGISLayer layer = restClient.fetchLayerInfo(only.url, token);
+            if (layer == null) layer = new ArcGISLayer(displayName(only), only.url, "public");
+            layer.url = only.url;
+            layer.layerId = only.id;
+            if (layer.geometryType == null || layer.geometryType.isEmpty())
+                layer.geometryType = only.geometryType;
+            final ArcGISLayer finalLayer = layer;
+            postToUi(() -> {
+                addPublicLayerBtn.setEnabled(true);
+                commitAddedLayers(Collections.singletonList(finalLayer));
+            });
+            return;
+        }
+
+        // More than one sublayer — let the operator choose which to add.
+        postToUi(() -> {
+            addPublicLayerBtn.setEnabled(true);
+            showSubLayerPicker(subs, token);
         });
     }
 
-    /** Removes any ATAK markers previously placed on the map for this layer. */
-    private void removeLayerMarkers(ArcGISLayer layer) {
-        List<Marker> old = layerMarkers.remove(layer.url);
+    private static String displayName(ArcGISRestClient.SubLayerRef ref) {
+        return (ref.name == null || ref.name.isEmpty()) ? ("Layer " + ref.id) : ref.name;
+    }
+
+    /** C-08 — multi-select picker over a FeatureServer's sublayers. */
+    private void showSubLayerPicker(List<ArcGISRestClient.SubLayerRef> subs, String token) {
+        final String[] labels = new String[subs.size()];
+        final boolean[] checked = new boolean[subs.size()];
+        for (int i = 0; i < subs.size(); i++) {
+            ArcGISRestClient.SubLayerRef r = subs.get(i);
+            labels[i] = displayName(r) + "  [" + r.id + "]";
+            checked[i] = true;
+        }
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("This service has " + subs.size() + " layers")
+                .setMultiChoiceItems(labels, checked, (d, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("Add selected", (d, w) -> {
+                    List<ArcGISRestClient.SubLayerRef> chosen = new ArrayList<>();
+                    for (int i = 0; i < subs.size(); i++) if (checked[i]) chosen.add(subs.get(i));
+                    if (chosen.isEmpty()) return;
+                    addPublicLayerBtn.setEnabled(false);
+                    submit(executor, () -> {
+                        List<ArcGISLayer> built = new ArrayList<>();
+                        for (ArcGISRestClient.SubLayerRef r : chosen) {
+                            ArcGISLayer l = restClient.fetchLayerInfo(r.url, token);
+                            if (l == null) l = new ArcGISLayer(displayName(r), r.url, "public");
+                            l.url = r.url;
+                            l.layerId = r.id;
+                            if (l.geometryType == null || l.geometryType.isEmpty())
+                                l.geometryType = r.geometryType;
+                            built.add(l);
+                        }
+                        postToUi(() -> {
+                            addPublicLayerBtn.setEnabled(true);
+                            commitAddedLayers(built);
+                        });
+                    });
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** Main thread. Adds the resolved layers and kicks off their downloads (which now resolve
+     * symbology themselves — see {@link #downloadLayer}). */
+    private void commitAddedLayers(List<ArcGISLayer> layers) {
+        int added = 0;
+        for (ArcGISLayer layer : layers) {
+            if (findLayerByUrl(layer.url) != null) continue;
+            layer.type = "public";
+            publicLayers.add(layer);
+            added++;
+        }
+        if (added == 0) {
+            Toast.makeText(pluginContext, "Already added", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        savePublicLayers();
+        publicLayerUrlEdit.setText("");
+        hideOverlay();
+        navigatePage(1);
+        for (ArcGISLayer layer : layers) downloadLayer(layer);
+    }
+
+    /** Returns the layer with this URL from any list, or null. Canonical comparison, so a
+     * trailing slash or a host-case difference no longer creates a second entry
+     * (Appendix A §9). */
+    private ArcGISLayer findLayerByUrl(String url) {
+        String canon = ArcGISLayer.canonicalUrl(url);
+        for (List<ArcGISLayer> list : java.util.Arrays.asList(
+                publicLayers, sharedPrivateLayers, privateLayers, sharedWithMeLayers)) {
+            for (ArcGISLayer l : list) {
+                if (l.canonicalUrl().equals(canon)) return l;
+            }
+        }
+        return null;
+    }
+
+    /** Removes any ATAK map items (markers/shapes) previously placed on the map for this layer. */
+    private void removeLayerItems(ArcGISLayer layer) {
+        List<MapItem> old = layerItems.remove(layer.url);
         if (old != null) {
             MapGroup root = getMapView().getRootGroup();
-            for (Marker m : old) root.removeItem(m);
+            for (MapItem item : old) root.removeItem(item);
         }
     }
 
     private void downloadLayer(ArcGISLayer layer) {
-        String token = "private".equals(layer.type) ? authManager.getToken() : null;
-        DisplayConfig displayConfig = layerDisplayConfigs.get(layer.url);
-        Log.d(TAG, "downloadLayer: layer.url=" + layer.url + " displayConfig=" + (displayConfig != null)
-                + " layerDisplayConfigs.keys=" + layerDisplayConfigs.keySet());
-        if (displayConfig != null && displayConfig.sym != null) {
-            DisplayConfig.SymConfig sym = displayConfig.sym;
-            StringBuilder vsDump = new StringBuilder();
-            if (sym.advValues != null) {
-                for (DisplayConfig.UvEntry e : sym.advValues) {
-                    vsDump.append("[v=").append(e.value)
-                          .append(" isIcon=").append(e.isIcon)
-                          .append(" iconset=").append(e.iconset)
-                          .append(" iconFile=").append(e.iconFile)
-                          .append(" usericonPath=").append(e.usericonPath)
-                          .append("] ");
-                }
-            }
-            Log.d(TAG, "downloadLayer sym-debug: type=" + sym.type + " fieldName=" + sym.fieldName
-                    + " advValues=" + vsDump);
+        downloadLayer(layer, executor);
+    }
+
+    /**
+     * Re-downloads every layer that is actually on this device, in one pass.
+     *
+     * <p>Scope matches {@link #checkLayerRecurrence()} deliberately: {@code publicLayers} plus
+     * {@code sharedPrivateLayers}. {@code privateLayers} and {@code sharedWithMeLayers} are the
+     * "My ArcGIS Layers" and "Shared with me" <em>browse</em> lists, items the operator has never
+     * opted into, so sweeping those would download the operator's entire account onto the map.
+     *
+     * <p>Dispatches onto the background pool rather than the interactive one (C-28), so a sweep of
+     * many layers can never starve a tap the operator makes while it runs.
+     */
+    private void updateAllLayers() {
+        if (updateAllInFlight) {
+            Toast.makeText(pluginContext, "Update already running", Toast.LENGTH_SHORT).show();
+            return;
         }
-        ArcGISRestClient.CotFieldMapping cotMapping = (displayConfig != null && displayConfig.cotMapping != null)
-                ? new ArcGISRestClient.CotFieldMapping(
-                        displayConfig.cotMapping.uidFields,
-                        displayConfig.cotMapping.typeFields,
-                        displayConfig.cotMapping.callsignFields,
-                        displayConfig.cotMapping.remarksFields)
-                : null;
-        executor.submit(() -> {
+        final List<ArcGISLayer> targets = new ArrayList<>(publicLayers);
+        targets.addAll(sharedPrivateLayers);
+        if (targets.isEmpty()) {
+            Toast.makeText(pluginContext, "No layers to update", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final int total = targets.size();
+        // Touched only from the main thread: DownloadOutcome is documented to fire there, and the
+        // dispatch-failure path below calls the sink inline, also on the main thread.
+        final int[] finished = {0};
+        final int[] succeeded = {0};
+        final int[] truncated = {0};
+        final List<String> failures = new ArrayList<>();
+
+        updateAllInFlight = true;
+        updateAllLayersBtn.setEnabled(false);
+        Toast.makeText(pluginContext,
+                "Updating " + total + (total == 1 ? " layer…" : " layers…"),
+                Toast.LENGTH_SHORT).show();
+
+        final DownloadOutcome sink = (name, ok, wasTruncated, detail) -> {
+            finished[0]++;
+            if (ok) succeeded[0]++;
+            else failures.add(name + " — " + detail);
+            if (wasTruncated) truncated[0]++;
+            if (finished[0] < total) return;
+
+            updateAllInFlight = false;
+            updateAllLayersBtn.setEnabled(true);
+            refreshLayersList();
+            reportUpdateAllResult(total, succeeded[0], truncated[0], failures);
+        };
+
+        for (ArcGISLayer layer : targets) {
+            if (!downloadLayer(layer, bgExecutor, sink)) {
+                // Pool refused the work (plugin shutting down). Count it here or the run never
+                // reaches `total` and the button stays disabled forever.
+                sink.onFinished(layer.name, false, false, "the plugin is shutting down");
+            }
+        }
+    }
+
+    /** Main thread. One summary for a whole {@link #updateAllLayers()} sweep. */
+    private void reportUpdateAllResult(int total, int succeeded, int truncated,
+            List<String> failures) {
+        if (failures.isEmpty()) {
+            String msg = "Updated " + succeeded + (succeeded == 1 ? " layer" : " layers");
+            if (truncated > 0) msg += " — " + truncated + " truncated";
+            Toast.makeText(pluginContext, msg, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // Anything failed gets a dialog, not a toast: a toast is ~2 s and is dropped outright when
+        // the app is backgrounded, and "your map is missing a layer" is not a message to miss.
+        StringBuilder body = new StringBuilder()
+                .append(succeeded).append(" of ").append(total).append(" layers updated.\n\n")
+                .append("Failed:").append('\n');
+        for (String f : failures) body.append("• ").append(f).append('\n');
+        if (truncated > 0) {
+            body.append('\n').append(truncated)
+                    .append(truncated == 1 ? " layer was truncated" : " layers were truncated")
+                    .append(" — those maps are incomplete.");
+        }
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Update finished with errors")
+                .setMessage(body.toString())
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
+    /**
+     * Downloads a layer's features and applies them to the map.
+     *
+     * <p><b>C-07</b> — this method now resolves the layer's own renderer when no styling config
+     * exists yet, via {@link #ensureSymbology}. That is the fix for the owner's field report:
+     * previously symbology was resolved <em>only</em> in {@code addPublicLayer()}, so every other
+     * route onto the map (browse-list download, refresh, ↻ re-download, recurrence tick, an
+     * imported share) rendered default blue with no icon.
+     *
+     * <p><b>C-06</b> — uses the paginated {@code downloadLayerFeatures} and surfaces truncation
+     * to the operator instead of reporting a partial download as a complete one.
+     *
+     * @param pool which pool to run on — the interactive pool for a user-initiated download, the
+     *             background pool for an automatic recurrence refresh (C-28).
+     */
+    private void downloadLayer(ArcGISLayer layer, ExecutorService pool) {
+        downloadLayer(layer, pool, null);
+    }
+
+    /**
+     * Per-layer outcome sink for a bulk update. A single user-initiated download passes
+     * {@code null} and keeps its own toast and dialog; a sweep passes a sink so N results fold
+     * into one summary instead of N toasts and a stack of modal dialogs.
+     *
+     * <p>Always invoked on the main thread.
+     */
+    private interface DownloadOutcome {
+        void onFinished(String layerName, boolean ok, boolean truncated, String detail);
+    }
+
+    /**
+     * @param outcome null for a single download (per-layer toast and dialog), non-null for a bulk
+     *                sweep (results reported to the sink, no per-layer UI)
+     * @return false when the pool refused the work, so a caller counting completions is never
+     *         left waiting on a task that will not run
+     */
+    private boolean downloadLayer(ArcGISLayer layer, ExecutorService pool,
+            DownloadOutcome outcome) {
+        // The token can NOT be gated on layer.type alone. commitAddedLayers() stamps every
+        // manually-added layer "public" (and fetchLayerInfoChecked() hardcodes the same), so a
+        // secured service pasted into Add Layer was added fine — the metadata fetch there does pass
+        // the token — and then downloaded with token == null, came back 499 "Token Required", and
+        // was reported to the operator as an expired session that signing in again never fixed.
+        // Ask the auth manager whether the token belongs to this host instead of trusting a field
+        // that no code path on the add route ever sets.
+        final boolean needsToken = "private".equals(layer.type)
+                || (authManager.isAuthenticated() && authManager.holdsCredentialsFor(layer.url));
+        // Snapshot the fields the background half needs, rather than reading the shared mutable
+        // ArcGISLayer off-thread (Appendix A §5).
+        final String layerUrl = layer.url;
+        final String layerName = layer.name;
+
+        return submit(pool, () -> {
             try {
-                List<ArcGISRestClient.DownloadedFeature> features =
-                        restClient.downloadLayerAsCoT(layer.url, token, cotMapping);
-                Log.d(TAG, "downloadLayer: downloaded " + features.size() + " features from " + layer.url);
-                layer.lastSync = System.currentTimeMillis();
-                mainHandler.post(() -> {
-                    saveLayerOfSection(layer);
-                    // Swap out old markers for this layer
-                    MapGroup root = getMapView().getRootGroup();
-                    removeLayerMarkers(layer);
-                    List<Marker> added = new ArrayList<>(features.size());
-                    int debugLogged = 0;
-                    for (ArcGISRestClient.DownloadedFeature f : features) {
-                        GeoPoint gp = Double.isNaN(f.hae)
-                                ? new GeoPoint(f.lat, f.lon)
-                                : new GeoPoint(f.lat, f.lon, f.hae);
-                        Marker m = new Marker(gp, f.uid);
-                        m.setType(f.cotType);
-
-                        if (displayConfig != null) {
-                            // Apply custom iconset icon (sym type "ic", or "adv" per-value icon)
-                            String iconsetPath = displayConfig.resolveIconsetPath(f.attributes);
-                            if (iconsetPath != null) {
-                                m.setMetaString(com.atakmap.android.icons.UserIcon.IconsetPath,
-                                        iconsetPath);
-                            }
-                            if (debugLogged < 8) {
-                                debugLogged++;
-                                String symType = displayConfig.sym != null ? displayConfig.sym.type : "null";
-                                String fieldName = displayConfig.sym != null ? displayConfig.sym.fieldName : "";
-                                String rawVal = fieldName.isEmpty() ? "" : f.attributes.getOrDefault(fieldName, "<missing>");
-                                int advCount = (displayConfig.sym != null && displayConfig.sym.advValues != null)
-                                        ? displayConfig.sym.advValues.size() : -1;
-                                Log.d(TAG, "downloadLayer icon-debug: uid=" + f.uid
-                                        + " symType=" + symType
-                                        + " field=" + fieldName + "=" + rawVal
-                                        + " advValues.size=" + advCount
-                                        + " resolvedIconsetPath=" + iconsetPath);
-                            }
-
-                            // Marker color also tints custom icon bitmaps — a colored fill only
-                            // makes sense for shape symbology. When an icon actually applies,
-                            // force white (no tint) so the icon shows its own real colors.
-                            int color = iconsetPath != null ? Color.WHITE : displayConfig.resolveColor(f.attributes);
-                            m.setColor(color);
-
-                            // Apply label from lbl.field; fall back to callsign
-                            String label = displayConfig.resolveLabel(f.attributes, f.callsign);
-                            m.setMetaString("callsign", label);
-                            m.setTitle(label);
-
-                            // Build remarks from popup fields; append any existing remarks
-                            String popupRemarks = displayConfig.buildRemarks(f.attributes);
-                            String remarks = popupRemarks.isEmpty() ? f.remarks
-                                    : (f.remarks.isEmpty() ? popupRemarks
-                                            : popupRemarks + "\n" + f.remarks);
-                            if (!remarks.isEmpty()) m.setMetaString("remarks", remarks);
-                        } else {
-                            m.setMetaString("callsign", f.callsign);
-                            m.setTitle(f.callsign);
-                            if (!f.remarks.isEmpty()) m.setMetaString("remarks", f.remarks);
+                // Resolved HERE, on the background thread, not before submit(). getToken() may
+                // need to refresh, which is a network call: on the main thread that threw
+                // NetworkOnMainThreadException, was swallowed into a null token, and the download
+                // then went out unauthenticated and came back 499 "Token Required" — presented to
+                // the operator as an expired session that signing in again did not fix.
+                final String token = needsToken ? authManager.getToken() : null;
+                // One-time lazy backfill for layers added before geometryType existed, or whose
+                // browse-list search result (a portal item, not layer metadata) never carried it.
+                String geometryType = layer.geometryType;
+                if (geometryType == null || geometryType.isEmpty()) {
+                    String canonicalUrl = AutoIconset.canonicalize(layerUrl);
+                    if (canonicalUrl != null) {
+                        try {
+                            JSONObject meta = restClient.fetchJson(canonicalUrl, token);
+                            if (meta != null) geometryType = meta.optString("geometryType", "");
+                        } catch (Exception e) {
+                            Log.w(TAG, "geometryType fetch failed for " + layerUrl, e);
                         }
-
-                        m.setMetaBoolean("readiness", true);
-                        m.setVisible(layer.visible);
-                        root.addItem(m);
-                        added.add(m);
                     }
-                    if (!added.isEmpty()) layerMarkers.put(layer.url, added);
-                    Toast.makeText(pluginContext,
-                            "Downloaded: " + layer.name + " (" + features.size() + " features)",
-                            Toast.LENGTH_SHORT).show();
+                }
+                final String finalGeometryType = geometryType == null ? "" : geometryType;
+
+                // ---- C-07: the fix. Resolve symbology HERE, on the download path. ----
+                final DisplayConfig displayConfig = ensureSymbology(layer, token);
+
+                ArcGISRestClient.CotFieldMapping cotMapping =
+                        (displayConfig != null && displayConfig.cotMapping != null)
+                        ? new ArcGISRestClient.CotFieldMapping(
+                                displayConfig.cotMapping.uidFields,
+                                displayConfig.cotMapping.typeFields,
+                                displayConfig.cotMapping.callsignFields,
+                                displayConfig.cotMapping.remarksFields)
+                        : null;
+
+                ArcGISRestClient.DownloadResult result =
+                        restClient.downloadLayerFeatures(layerUrl, token, cotMapping);
+                Log.d(TAG, "downloadLayer: " + result.size() + " features from " + layerUrl
+                        + (result.truncated ? " (TRUNCATED)" : ""));
+
+                postToUi(() -> {
+                    layer.geometryType = finalGeometryType;
+                    layer.maxRecordCount = result.maxRecordCount;
+                    layer.lastDownloadTruncated = result.truncated;
+                    // lastSync is set HERE, inside the success branch on the main thread — not on
+                    // the executor thread immediately after the network call. Previously a layer
+                    // that consistently failed to apply still recorded a successful sync, so the
+                    // UI's synced indicator flipped for a layer that never rendered and the
+                    // recurrence check thought it was up to date (Appendix A §9).
+                    layer.lastSync = System.currentTimeMillis();
+                    saveLayerOfSection(layer);
+
+                    MapGroup root = getMapView().getRootGroup();
+                    removeLayerItems(layer);
+                    List<MapItem> added = new ArrayList<>(result.size());
+                    for (ArcGISRestClient.DownloadedFeature f : result.features) {
+                        List<MapItem> items;
+                        if ("esriGeometryPolyline".equals(finalGeometryType) && !f.paths.isEmpty()) {
+                            items = buildPolylineShapes(f, displayConfig);
+                        } else if ("esriGeometryPolygon".equals(finalGeometryType) && !f.rings.isEmpty()) {
+                            items = buildPolygonShapes(f, displayConfig);
+                        } else {
+                            items = Collections.singletonList(buildMarker(f, displayConfig));
+                        }
+                        for (MapItem item : items) {
+                            item.setVisible(layer.visible);
+                            root.addItem(item);
+                            added.add(item);
+                        }
+                    }
+                    if (!added.isEmpty()) layerItems.put(layer.url, added);
+
+                    if (outcome != null) {
+                        // Bulk sweep — the caller reports once for the whole run.
+                        outcome.onFinished(layerName, true, result.truncated, null);
+                        if (currentPage == 1) refreshLayersList();
+                        return;
+                    }
+
+                    StringBuilder msg = new StringBuilder("Downloaded: ").append(layerName)
+                            .append(" (").append(result.size()).append(" features)");
+                    if (result.skipped > 0) msg.append(", ").append(result.skipped).append(" skipped");
+                    Toast.makeText(pluginContext, msg.toString(), Toast.LENGTH_SHORT).show();
+                    if (result.truncated) {
+                        // C-06 — never let a truncated download look like a complete one. This is
+                        // a dialog, not a toast: a toast is ~2 s and is suppressed outright when
+                        // the app is backgrounded, and "your map is missing data" is not a
+                        // message an operator may miss.
+                        new AlertDialog.Builder(getMapView().getContext())
+                                .setTitle("Layer download incomplete")
+                                .setMessage("\"" + layerName + "\" returned more features than "
+                                        + "FeatureLink will load in one pass. Only the first "
+                                        + result.size() + " are on the map.\n\nThis layer's "
+                                        + "service page size is " + result.maxRecordCount
+                                        + ". Filter the layer server-side, or treat this map as "
+                                        + "incomplete.")
+                                .setPositiveButton("Understood", null)
+                                .show();
+                    }
+                    if (currentPage == 1) refreshLayersList();
                 });
             } catch (Exception e) {
-                Log.e(TAG, "Download failed for " + layer.name, e);
-                mainHandler.post(() -> Toast.makeText(pluginContext,
-                        "Download failed: " + layer.name, Toast.LENGTH_SHORT).show());
+                Log.e(TAG, "Download failed for " + layerName, e);
+                final String detail = describeFailure(e);
+                postToUi(() -> {
+                    if (outcome != null) {
+                        outcome.onFinished(layerName, false, false, detail);
+                        return;
+                    }
+                    new AlertDialog.Builder(getMapView().getContext())
+                            .setTitle("Download failed")
+                            .setMessage("\"" + layerName + "\" could not be downloaded.\n\n" + detail)
+                            .setPositiveButton("OK", null)
+                            .show();
+                });
             }
         });
+    }
+
+    /**
+     * Turns a failure into something an operator can act on. The plugin previously collapsed a
+     * malformed URL, a network failure, a 404, a non-FeatureServer URL, an auth failure and an
+     * ArcGIS error body into one unactionable "Could not load layer from URL" (Appendix A §8).
+     */
+    private String describeFailure(Exception e) {
+        if (e instanceof ArcGISRestClient.ArcGisException) {
+            ArcGISRestClient.ArcGisException ae = (ArcGISRestClient.ArcGisException) e;
+            if (ae.isAuthFailure()) {
+                // The server is the authority on token validity; our expiry clock is only an
+                // estimate from expires_in. A 498/499 means that estimate is wrong, so drop the
+                // cached token and let the next call refresh silently. Without this the plugin
+                // kept presenting the same rejected token until its own clock caught up, which
+                // is what made the session appear to log itself out repeatedly.
+                if (authManager != null) authManager.invalidateAccessToken();
+                return "Your ArcGIS session is no longer valid (error " + ae.code + "). "
+                        + "Open the Account page and sign in again.";
+            }
+            return "ArcGIS reported: " + ae.getMessage()
+                    + (ae.code > 0 ? " (error " + ae.code + ")" : "");
+        }
+        if (e instanceof java.net.UnknownHostException) {
+            return "The server could not be reached. Check the address and your network.";
+        }
+        if (e instanceof java.net.SocketTimeoutException) {
+            return "The server did not respond in time. The link may be too slow or the layer "
+                    + "too large.";
+        }
+        if (e instanceof javax.net.ssl.SSLException) {
+            return "The secure connection could not be established.";
+        }
+        String m = e.getMessage();
+        return (m == null || m.isEmpty()) ? e.getClass().getSimpleName() : m;
+    }
+
+    /** Builds a point marker for one downloaded feature — the original per-feature styling
+     * logic, unchanged, just extracted so downloadLayer() can dispatch by geometry type. */
+    private Marker buildMarker(ArcGISRestClient.DownloadedFeature f, DisplayConfig displayConfig) {
+        GeoPoint gp = Double.isNaN(f.hae)
+                ? new GeoPoint(f.lat, f.lon)
+                : new GeoPoint(f.lat, f.lon, f.hae);
+        Marker m = new Marker(gp, f.uid);
+        m.setType(f.cotType);
+
+        if (displayConfig != null) {
+            // Apply custom iconset icon (sym type "ic", or "adv" per-value icon)
+            String iconsetPath = displayConfig.resolveIconsetPath(f.attributes);
+            if (iconsetPath != null) {
+                m.setMetaString(com.atakmap.android.icons.UserIcon.IconsetPath, iconsetPath);
+            }
+
+            // Marker color also tints custom icon bitmaps — a colored fill only makes sense for
+            // shape symbology. When an icon actually applies, force white (no tint) so the icon
+            // shows its own real colors.
+            int color = iconsetPath != null ? Color.WHITE : displayConfig.resolveColor(f.attributes);
+            m.setColor(color);
+
+            String label = displayConfig.resolveLabel(f.attributes, f.callsign);
+            m.setMetaString("callsign", label);
+            m.setTitle(label);
+
+            String popupRemarks = displayConfig.buildRemarks(f.attributes);
+            String remarks = popupRemarks.isEmpty() ? f.remarks
+                    : (f.remarks.isEmpty() ? popupRemarks : popupRemarks + "\n" + f.remarks);
+            if (!remarks.isEmpty()) m.setMetaString("remarks", remarks);
+        } else {
+            m.setMetaString("callsign", f.callsign);
+            m.setTitle(f.callsign);
+            if (!f.remarks.isEmpty()) m.setMetaString("remarks", f.remarks);
+        }
+
+        m.setMetaBoolean("readiness", true);
+        return m;
+    }
+
+    /** Maps a DisplayConfig.ShapeStyle.strokeDash string ("solid"/"dash"/"dot") to the ATAK
+     * Polyline BASIC_LINE_STYLE_* constant, defaulting to solid. */
+    private static int basicLineStyleFrom(String dash) {
+        if ("dash".equals(dash)) return Polyline.BASIC_LINE_STYLE_DASHED;
+        if ("dot".equals(dash))  return Polyline.BASIC_LINE_STYLE_DOTTED;
+        return Polyline.BASIC_LINE_STYLE_SOLID;
+    }
+
+    /** Converts one [lon,lat] vertex list into a GeoPoint[] (ATAK's GeoPoint is lat,lon order). */
+    private static GeoPoint[] toGeoPoints(List<double[]> vertices) {
+        GeoPoint[] points = new GeoPoint[vertices.size()];
+        for (int i = 0; i < vertices.size(); i++) {
+            double[] v = vertices.get(i);
+            points[i] = new GeoPoint(v[1], v[0]);
+        }
+        return points;
+    }
+
+    /** Applies the same title/callsign/remarks/readiness metadata buildMarker() applies, shared
+     * by the shape builders below (stroke/fill styling is set separately by each caller, since
+     * points/lines/polygons resolve style differently). */
+    private void applyFeatureMeta(MapItem item, ArcGISRestClient.DownloadedFeature f,
+            DisplayConfig displayConfig) {
+        item.setType(f.cotType);
+        String label = displayConfig != null
+                ? displayConfig.resolveLabel(f.attributes, f.callsign) : f.callsign;
+        item.setMetaString("callsign", label);
+        item.setTitle(label);
+        String remarks;
+        if (displayConfig != null) {
+            String popupRemarks = displayConfig.buildRemarks(f.attributes);
+            remarks = popupRemarks.isEmpty() ? f.remarks
+                    : (f.remarks.isEmpty() ? popupRemarks : popupRemarks + "\n" + f.remarks);
+        } else {
+            remarks = f.remarks;
+        }
+        if (!remarks.isEmpty()) item.setMetaString("remarks", remarks);
+        item.setMetaBoolean("readiness", true);
+    }
+
+    /** One ATAK Polyline shape per path — a multi-part ArcGIS polyline feature becomes N sibling
+     * shapes sharing a "{uid}-p{i}" sub-UID scheme, since ATAK's Polyline is single-part. Stroke
+     * styling comes from the layer's DisplayConfig.resolveShapeStyle() (esriSLS), falling back to
+     * ATAK's default blue/solid/2px when no style resolves (e.g. no renderer symbology found). */
+    private List<MapItem> buildPolylineShapes(ArcGISRestClient.DownloadedFeature f,
+            DisplayConfig displayConfig) {
+        List<MapItem> shapes = new ArrayList<>();
+        DisplayConfig.ShapeStyle style = displayConfig != null
+                ? displayConfig.resolveShapeStyle(f.attributes) : null;
+        int strokeColor = style != null ? style.strokeColor : Color.BLUE;
+        float strokeWeight = style != null ? style.strokeWidthPx : 2f;
+        int lineStyle = basicLineStyleFrom(style != null ? style.strokeDash : "solid");
+
+        for (int i = 0; i < f.paths.size(); i++) {
+            List<double[]> path = f.paths.get(i);
+            if (path.size() < 2) continue;
+            String uid = f.paths.size() > 1 ? f.uid + "-p" + i : f.uid;
+            Polyline line = new Polyline(uid);
+            line.setPoints(toGeoPoints(path));
+            line.setStyle(Polyline.STYLE_STROKE_MASK);
+            line.setStrokeColor(strokeColor);
+            line.setStrokeWeight(strokeWeight);
+            line.setBasicLineStyle(lineStyle);
+            applyFeatureMeta(line, f, displayConfig);
+            shapes.add(line);
+        }
+        return shapes;
+    }
+
+    /** One ATAK Polyline shape (closed + filled) for a polygon feature's outer ring. ATAK's
+     * Polyline has no native multi-ring/hole support (its backing point list is a single flat
+     * ring, confirmed against the ATAK 5.7 SDK), so a polygon with holes renders solid rather
+     * than silently dropping the whole feature — holes beyond the first ring are simply not
+     * rendered. Fill/stroke styling comes from the layer's DisplayConfig.resolveShapeStyle()
+     * (esriSFS/esriSLS), falling back to ATAK's default blue/solid/2px stroke with no fill. */
+    private List<MapItem> buildPolygonShapes(ArcGISRestClient.DownloadedFeature f,
+            DisplayConfig displayConfig) {
+        List<MapItem> shapes = new ArrayList<>();
+        List<double[]> outerRing = f.rings.get(0);
+        if (outerRing.size() < 3) return shapes;
+        if (f.rings.size() > 1) {
+            Log.d(TAG, "buildPolygonShapes: " + f.uid + " has " + (f.rings.size() - 1)
+                    + " hole ring(s) — not rendered (outer ring only)");
+        }
+
+        DisplayConfig.ShapeStyle style = displayConfig != null
+                ? displayConfig.resolveShapeStyle(f.attributes) : null;
+        int strokeColor = style != null ? style.strokeColor : Color.BLUE;
+        float strokeWeight = style != null ? style.strokeWidthPx : 2f;
+        int lineStyle = basicLineStyleFrom(style != null ? style.strokeDash : "solid");
+        boolean filled = style != null && !"none".equals(style.fillStyle);
+
+        Polyline poly = new Polyline(f.uid);
+        poly.setPoints(toGeoPoints(outerRing));
+        int styleMask = Polyline.STYLE_CLOSED_MASK | Polyline.STYLE_STROKE_MASK
+                | (filled ? Polyline.STYLE_FILLED_MASK : 0);
+        poly.setStyle(styleMask);
+        poly.setStrokeColor(strokeColor);
+        poly.setStrokeWeight(strokeWeight);
+        poly.setBasicLineStyle(lineStyle);
+        if (filled) poly.setFillColor(style.fillColor);
+        applyFeatureMeta(poly, f, displayConfig);
+        shapes.add(poly);
+        return shapes;
     }
 
     // -------------------------------------------------------------------------
@@ -1381,19 +2244,30 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     // -------------------------------------------------------------------------
 
     private void createPliLayer() {
-        String token    = authManager.getToken();
         String username = authManager.getUsername();
         String portal   = prefs.getString(PREF_PORTAL_URL, "https://www.arcgis.com");
-        if (token == null || username == null) return;
+        if (username == null || !authManager.isAuthenticated()) return;
 
         String layerName = pliLayerNameEdit.getText().toString().trim();
         pliActionBtn.setEnabled(false);
         pliStatusText.setText("Creating feature service…");
 
-        executor.submit(() -> {
+        // C-28 — createPliFeatureService blocks up to 60 s polling the async publish job. On the
+        // old shared 2-thread pool that single call starved every other network action in the
+        // plugin. It runs on the background pool now.
+        submit(bgExecutor, () -> {
+            // Off the UI thread — a refresh here is a network call.
+            final String token = authManager.getToken();
+            if (token == null) {
+                postToUi(() -> {
+                    pliActionBtn.setEnabled(true);
+                    pliStatusText.setText("Sign in to ArcGIS first");
+                });
+                return;
+            }
             String serviceUrl = restClient.createPliFeatureService(
                     portal, username, token, layerName.isEmpty() ? null : layerName);
-            mainHandler.post(() -> {
+            postToUi(() -> {
                 pliActionBtn.setEnabled(true);
                 if (serviceUrl != null) {
                     setPliLayerUrl(serviceUrl);
@@ -1434,15 +2308,15 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         String layerName = pliLayerNameEdit.getText().toString().trim();
         final String url = pliLayerUrl;
 
-        executor.submit(() -> {
+        submit(executor, () -> {
             try {
                 String json = QrHelper.buildPliPayload(portal, url, layerName);
                 Bitmap qr   = QrHelper.generateBitmap(json, 512);
-                mainHandler.post(() -> displayQrDialog(qr, json, "Scan to Connect",
+                postToUi(() -> displayQrDialog(qr, json, "Scan to Connect",
                         "Scan on another device, then sign in with ArcGIS."));
             } catch (Exception e) {
                 Log.e(TAG, "QR generation failed", e);
-                mainHandler.post(() -> Toast.makeText(pluginContext,
+                postToUi(() -> Toast.makeText(pluginContext,
                         "Failed to generate QR code", Toast.LENGTH_SHORT).show());
             }
         });
@@ -1479,7 +2353,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void startPliUrlQrScan() {
         QrScanDialog dialog = new QrScanDialog(getMapView().getContext(), payload -> {
-            mainHandler.post(() -> {
+            postToUi(() -> {
                 String url = null;
                 JSONObject config = QrHelper.parse(payload);
                 if (config != null) {
@@ -1507,7 +2381,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 resolveSavedDatasetLink(payload.trim());
                 return;
             }
-            mainHandler.post(() -> {
+            postToUi(() -> {
                 // Close the Add Layer overlay (if that's what triggered this scan) — the
                 // apply* handlers below navigate to whichever page the result belongs on.
                 hideOverlay();
@@ -1519,7 +2393,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     /** Fetches a Mode 4 link's response body and applies it as a normal scanned payload. */
     private void resolveSavedDatasetLink(String url) {
-        executor.submit(() -> {
+        submit(executor, () -> {
             String body;
             try {
                 body = QrHelper.fetchSavedDatasetLink(url);
@@ -1528,7 +2402,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 body = null;
             }
             final String fetched = body;
-            mainHandler.post(() -> {
+            postToUi(() -> {
                 hideOverlay();
                 if (fetched == null || fetched.isEmpty()) {
                     Toast.makeText(pluginContext, "Could not load config from link",
@@ -1601,14 +2475,14 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     ? cfg.rendererOverride.optString("uid") : null;
             final String groupOverride = (cfg.rendererOverride != null && cfg.rendererOverride.has("group"))
                     ? cfg.rendererOverride.optString("group") : null;
-            executor.submit(() -> {
+            submit(executor, () -> {
                 try {
                     AutoIconset.generate(pluginContext, restClient, cfg.url, null, token,
                             rendererOverride, uidOverride, groupOverride);
                 } catch (Exception e) {
                     Log.w(TAG, "regenerate missing iconset failed for " + cfg.url, e);
                 }
-                mainHandler.post(() -> applyDisplayConfigNow(cfg));
+                postToUi(() -> applyDisplayConfigNow(cfg));
             });
             return;
         }
@@ -1625,7 +2499,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 .setTitle("Missing Icon Set" + (missing.size() > 1 ? "s" : ""))
                 .setMessage("This layer's styling uses " + missing.size()
                         + " custom icon set" + (missing.size() > 1 ? "s" : "")
-                        + " not installed on this device:\n\n" + String.join("\n", missing)
+                        + " not installed on this device:\n\n" + joinLines(missing)
                         + "\n\nUnmatched features will fall back to a default marker until "
                         + "those icon sets are imported (Settings > Import Content). "
                         + "Continue anyway, or stop and get the icon sets first?")
@@ -1640,10 +2514,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             // v:2 — store the config, load the layer, and download with styling applied
             layerDisplayConfigs.put(config.url, config);
             saveDisplayConfigs();
-            executor.submit(() -> {
+            submit(executor, () -> {
                 ArcGISLayer layer = restClient.fetchLayerInfo(config.url);
                 Log.d(TAG, "applyScannedDisplayConfig: fetchLayerInfo -> " + (layer == null ? "null" : ("name=" + layer.name + " url=" + layer.url)));
-                mainHandler.post(() -> {
+                postToUi(() -> {
                     if (layer == null) {
                         Toast.makeText(pluginContext, "Could not load layer from display config",
                                 Toast.LENGTH_SHORT).show();
@@ -1782,9 +2656,14 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         }
 
         addPublicLayerBtn.setEnabled(false);
-        executor.submit(() -> {
-            ArcGISLayer layer = restClient.fetchLayerInfo(url);
-            mainHandler.post(() -> {
+        submit(executor, () -> {
+            // Same defect as the Add Layer path: a scanned secured layer needs the token for its
+            // metadata too, or the name lookup fails and the operator is told the QR is bad.
+            // Safe to resolve here — this lambda already runs on the executor, not the main thread.
+            String metaToken = (authManager.isAuthenticated() && authManager.holdsCredentialsFor(url))
+                    ? authManager.getToken() : null;
+            ArcGISLayer layer = restClient.fetchLayerInfo(url, metaToken);
+            postToUi(() -> {
                 addPublicLayerBtn.setEnabled(true);
                 if (layer != null) {
                     if (!name.isEmpty()) layer.name = name;
@@ -1850,17 +2729,17 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void handlePrefFileSelected(Uri uri) {
-        executor.submit(() -> {
+        submit(executor, () -> {
             String content;
             try {
                 content = readUriAsString(uri);
             } catch (Exception e) {
                 Log.e(TAG, "Failed to read selected pref file: " + uri, e);
-                mainHandler.post(() -> Toast.makeText(pluginContext,
+                postToUi(() -> Toast.makeText(pluginContext,
                         "Could not read file", Toast.LENGTH_SHORT).show());
                 return;
             }
-            mainHandler.post(() -> {
+            postToUi(() -> {
                 hideOverlay();
                 applyScannedPayload(content);
             });
@@ -1894,7 +2773,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             return false;
         }
         if (content.trim().isEmpty()) return false;
-        mainHandler.post(() -> {
+        postToUi(() -> {
             hideOverlay();
             applyScannedPayload(content);
         });
@@ -1916,7 +2795,11 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void startPliScheduler() {
         stopPliScheduler();
         pliScheduler = Executors.newSingleThreadScheduledExecutor();
-        pliScheduler.scheduleAtFixedRate(this::sendPliUpdate, 0, 30, TimeUnit.SECONDS);
+        // scheduleWithFixedDelay, not scheduleAtFixedRate: a PLI send performs blocking HTTP
+        // with 15 s connect + 15 s read timeouts, so on a degraded link a tick can exceed the
+        // 30 s period and fixed-RATE then runs ticks back-to-back with no gap, permanently
+        // (Appendix A §5).
+        pliScheduler.scheduleWithFixedDelay(this::sendPliUpdate, 0, 30, TimeUnit.SECONDS);
         Log.d(TAG, "PLI auto-send started");
     }
 
@@ -1997,16 +2880,17 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private void handleSendToLayer(String uid) {
         if (pliLayerUrl == null || pliLayerUrl.isEmpty()) {
             Toast.makeText(pluginContext,
-                    "Configure a PLI Feature Layer on the Home tab first",
+                    "Configure a PLI Feature Layer on the PLI tab first",
                     Toast.LENGTH_LONG).show();
             return;
         }
         MapItem item = getMapView().getMapItem(uid);
         if (item == null) return;
 
-        String token = authManager.getToken();
-        executor.submit(() -> {
+        submit(executor, () -> {
             try {
+                // Off the UI thread — a refresh here is a network call.
+                final String token = authManager.getToken();
                 GeoPoint pt = null;
                 if (item instanceof PointMapItem) pt = ((PointMapItem) item).getPoint();
                 if (pt == null) return;
@@ -2034,11 +2918,11 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         now,
                         now + 7 * 24 * 60 * 60 * 1000L,
                         "");
-                mainHandler.post(() -> Toast.makeText(pluginContext,
+                postToUi(() -> Toast.makeText(pluginContext,
                         "Sent to Feature Layer: " + callsign, Toast.LENGTH_SHORT).show());
             } catch (Exception e) {
                 Log.e(TAG, "Send to layer failed for " + uid, e);
-                mainHandler.post(() -> Toast.makeText(pluginContext,
+                postToUi(() -> Toast.makeText(pluginContext,
                         "Failed to send to Feature Layer", Toast.LENGTH_SHORT).show());
             }
         });
@@ -2068,6 +2952,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 for (int i = 0; i < arr.length(); i++)
                     sharedPrivateLayers.add(ArcGISLayer.fromJson(arr.getJSONObject(i)));
             }
+            String sharedWithMeJson = prefs.getString(PREF_SHARED_WITH_ME_LAYERS_JSON, null);
+            if (sharedWithMeJson != null) {
+                JSONArray arr = new JSONArray(sharedWithMeJson);
+                for (int i = 0; i < arr.length(); i++)
+                    sharedWithMeLayers.add(ArcGISLayer.fromJson(arr.getJSONObject(i)));
+            }
             pliLayerUrl = prefs.getString(PREF_PLI_LAYER_URL, null);
             if (prefs.getBoolean(PREF_PLI_AUTO_SEND, false)) startPliScheduler();
             updateSetPliEndpointBtn();
@@ -2080,6 +2970,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         publicLayersExpanded        = prefs.getBoolean(PREF_SECTION_PUBLIC_EXPANDED, false);
         applyLayersSectionVisibility();
         checkLayerRecurrence();
+        startRecurrenceScheduler();   // C-25 — and keep checking, forever, not just once.
     }
 
     /** layerDisplayConfigs was purely in-memory until this — a plugin reload (device reboot,
@@ -2147,9 +3038,19 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         }
     }
 
-    private void restoreLayerPreferences(List<ArcGISLayer> layers) {
+    private void saveSharedWithMeLayers() {
         try {
-            String savedJson = prefs.getString(PREF_LAYERS_JSON, null);
+            JSONArray arr = new JSONArray();
+            for (ArcGISLayer l : sharedWithMeLayers) arr.put(l.toJson());
+            prefs.edit().putString(PREF_SHARED_WITH_ME_LAYERS_JSON, arr.toString()).apply();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to save shared-with-me layers", e);
+        }
+    }
+
+    private void restoreLayerPreferences(List<ArcGISLayer> layers, String prefKey) {
+        try {
+            String savedJson = prefs.getString(prefKey, null);
             if (savedJson == null) return;
             JSONArray arr = new JSONArray(savedJson);
             for (int i = 0; i < arr.length(); i++) {
@@ -2170,24 +3071,64 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void checkLayerRecurrence() {
-        final List<ArcGISLayer> privateSnap = new ArrayList<>(privateLayers);
-        final List<ArcGISLayer> sharedPrivateSnap = new ArrayList<>(sharedPrivateLayers);
-        final List<ArcGISLayer> publicSnap  = new ArrayList<>(publicLayers);
-        executor.submit(() -> {
-            long now = System.currentTimeMillis();
-            for (ArcGISLayer layer : privateSnap) {
-                long threshold = layer.recurrenceMillis();
-                if (threshold > 0 && (now - layer.lastSync) >= threshold) downloadLayer(layer);
+        // Deliberately excludes privateLayers/sharedWithMeLayers — those are the "My ArcGIS
+        // Layers"/"Shared with me" browse lists, never-yet-downloaded items the user hasn't
+        // opted into. Every fresh ArcGISLayer defaults to a 180s recurrence with lastSync=0,
+        // which reads as "always overdue" — auto-refreshing this loop against the browse lists
+        // used to silently download every browsable layer in the account on every plugin load.
+        // Only layers already on-device (sharedPrivateLayers/publicLayers) get auto-refreshed.
+        // C-28 — the scan itself no longer runs inside an executor task. It used to call
+        // downloadLayer() from inside executor.submit(), and downloadLayer() submits to the same
+        // pool: a task occupying a thread while enqueuing more work to that pool is a
+        // self-deadlock hazard the moment the pool saturates, which with 2 threads and 2+ overdue
+        // layers it did. The scan is now a cheap main-thread pass that dispatches each download
+        // independently onto the BACKGROUND pool, so an automatic refresh can never starve a
+        // user-initiated action.
+        final long now = System.currentTimeMillis();
+        int dispatched = 0;
+        for (ArcGISLayer layer : new ArrayList<>(sharedPrivateLayers)) {
+            long threshold = layer.recurrenceMillis();
+            if (threshold > 0 && (now - layer.lastSync) >= threshold) {
+                downloadLayer(layer, bgExecutor);
+                dispatched++;
             }
-            for (ArcGISLayer layer : sharedPrivateSnap) {
-                long threshold = layer.recurrenceMillis();
-                if (threshold > 0 && (now - layer.lastSync) >= threshold) downloadLayer(layer);
+        }
+        for (ArcGISLayer layer : new ArrayList<>(publicLayers)) {
+            long threshold = layer.recurrenceMillis();
+            if (threshold > 0 && (now - layer.lastSync) >= threshold) {
+                downloadLayer(layer, bgExecutor);
+                dispatched++;
             }
-            for (ArcGISLayer layer : publicSnap) {
-                long threshold = layer.recurrenceMillis();
-                if (threshold > 0 && (now - layer.lastSync) >= threshold) downloadLayer(layer);
-            }
-        });
+        }
+        if (dispatched > 0) Log.d(TAG, "checkLayerRecurrence: dispatched " + dispatched + " refresh(es)");
+    }
+
+    /**
+     * C-25 — the advertised per-layer auto-refresh never actually repeated.
+     * {@code checkLayerRecurrence()} ran exactly once, from {@code loadSavedData()} at
+     * construction, and was never scheduled; the "Refresh every N seconds" field the operator
+     * edits and the plugin persists therefore did nothing after the first plugin load.
+     *
+     * <p>{@code scheduleWithFixedDelay} (not {@code scheduleAtFixedRate}) so a slow sweep cannot
+     * accumulate back-to-back catch-up ticks on a degraded link. The tick posts to the main
+     * thread because the layer lists are main-thread-confined.
+     */
+    private static final long RECURRENCE_TICK_SECONDS = 30;
+
+    private void startRecurrenceScheduler() {
+        stopRecurrenceScheduler();
+        recurrenceScheduler = Executors.newSingleThreadScheduledExecutor(namedThreads("fl-recur"));
+        recurrenceScheduler.scheduleWithFixedDelay(
+                () -> postToUi(this::checkLayerRecurrence),
+                RECURRENCE_TICK_SECONDS, RECURRENCE_TICK_SECONDS, TimeUnit.SECONDS);
+        Log.d(TAG, "Layer auto-refresh scheduler started (" + RECURRENCE_TICK_SECONDS + "s tick)");
+    }
+
+    private void stopRecurrenceScheduler() {
+        if (recurrenceScheduler != null) {
+            recurrenceScheduler.shutdownNow();
+            recurrenceScheduler = null;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -2196,6 +3137,25 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private int dpToPx(int dp) {
         return Math.round(dp * pluginContext.getResources().getDisplayMetrics().density);
+    }
+
+    /** {@code String.join} is API 26+ and {@code Map.getOrDefault} is API 24+ — both were called
+     * against a declared {@code minSdkVersion 21} with no desugaring, so on an API 21-25 device
+     * resolving a display config threw {@code NoSuchMethodError} and the download crashed
+     * (C-37). minSdk is now 26, but these helpers keep the code independent of that. */
+    private static String joinLines(java.util.Collection<String> parts) {
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(p);
+        }
+        return sb.toString();
+    }
+
+    private static String attrOrMissing(Map<String, String> attrs, String key) {
+        if (attrs == null || key == null) return "<missing>";
+        String v = attrs.get(key);
+        return v != null ? v : "<missing>";
     }
 
     // -------------------------------------------------------------------------
@@ -2213,11 +3173,128 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
             if (uid != null) handleSendToLayer(uid);
         } else if (IMPORT_CONFIG.equals(action)) {
             String config = intent.getStringExtra("config");
+            String source = intent.getStringExtra("source");
             Log.d(TAG, "IMPORT_CONFIG received, payload length=" + (config != null ? config.length() : -1));
-            if (config != null) {
-                hideOverlay();
-                applyScannedPayload(config);
+            if (config == null || config.isEmpty()) return;
+            if (config.length() > MAX_IMPORT_CONFIG_LENGTH) {
+                Toast.makeText(pluginContext, "Rejected an oversized configuration payload",
+                        Toast.LENGTH_LONG).show();
+                return;
             }
+            // Appendix A §12.2: a same-process broadcast is delivered twice (once via
+            // AtakBroadcast's DocumentedIntentFilter, once via the Context registration), which
+            // applied the config twice and produced duplicate layers/markers.
+            if (isDuplicateImport(config)) {
+                Log.d(TAG, "IMPORT_CONFIG: ignoring duplicate delivery of the same payload");
+                return;
+            }
+            hideOverlay();
+            confirmExternalConfig(config, source == null ? "an external application" : source);
+        } else if (OAuthCallbackActivity.BROADCAST_ACTION.equals(action)) {
+            // C-09 — the external-browser leg of the OAuth flow. state is validated inside
+            // ArcGISAuthManager.handleAuthCode against the in-memory pending nonce.
+            String code  = intent.getStringExtra("code");
+            String state = intent.getStringExtra("state");
+            String error = intent.getStringExtra("error");
+            handlePendingOAuthCode(code, state, error);
+        }
+    }
+
+    /** A display config is a few KB of JSON. */
+    private static final int MAX_IMPORT_CONFIG_LENGTH = 512 * 1024;
+    /** Window within which an identical payload is treated as a duplicate delivery. */
+    private static final long IMPORT_DEDUPE_WINDOW_MS = 5_000L;
+    private String lastImportPayloadHash = null;
+    private long lastImportAtMs = 0;
+
+    private boolean isDuplicateImport(String config) {
+        String hash = Integer.toHexString(config.hashCode()) + ":" + config.length();
+        long now = System.currentTimeMillis();
+        boolean dup = hash.equals(lastImportPayloadHash)
+                && (now - lastImportAtMs) < IMPORT_DEDUPE_WINDOW_MS;
+        lastImportPayloadHash = hash;
+        lastImportAtMs = now;
+        return dup;
+    }
+
+    /**
+     * C-02 — mandatory operator consent before applying any externally-sourced configuration.
+     *
+     * <p>The IMPORT_CONFIG path used to apply straight through to {@code applyScannedPayload()}
+     * with no confirmation anywhere: it added feature layers to the operator's map, fetched
+     * attacker-chosen URLs, wrote attacker-named iconset zips to external storage, and rendered
+     * attacker-controlled markers. Even with the signature-level permission now guarding the
+     * broadcast, an externally-delivered config is not something that should land on a tactical
+     * map without the operator seeing where it came from and what it points at. The QR path at
+     * least involves a deliberate camera action; this path involved none.
+     *
+     * <p>A {@code pli_endpoint} payload is <b>never</b> auto-applied — repointing where the
+     * operator's own position reports are transmitted is the single most consequential thing this
+     * payload can do, so it is called out explicitly in the prompt.
+     */
+    private void confirmExternalConfig(String config, String source) {
+        final List<String> targets = extractTargetUrls(config);
+        final boolean repointsPli = mentionsPliEndpoint(config);
+
+        StringBuilder msg = new StringBuilder();
+        msg.append("Source: ").append(source).append("\n\n");
+        if (targets.isEmpty()) {
+            msg.append("Target: (no service URL declared in the payload)\n");
+        } else {
+            msg.append("This configuration points at:\n");
+            for (String t : targets) msg.append("  • ").append(t).append('\n');
+        }
+        if (repointsPli) {
+            msg.append("\nWARNING: this payload changes your PLI endpoint — the destination your "
+                    + "own position reports are sent to. Only accept this if you know who "
+                    + "issued it.");
+        }
+        msg.append("\nApplying it will add layers to your map and download features from those "
+                + "addresses.");
+
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle(pluginContext.getString(R.string.import_config_title))
+                .setMessage(msg.toString())
+                .setCancelable(false)
+                .setPositiveButton(pluginContext.getString(R.string.import_config_accept),
+                        (d, w) -> applyScannedPayload(config))
+                .setNegativeButton(pluginContext.getString(R.string.import_config_reject),
+                        (d, w) -> Log.i(TAG, "Operator rejected an external configuration from " + source))
+                .show();
+    }
+
+    /** Pulls every service URL out of a payload for display in the consent prompt. Best-effort
+     * and defensive: this runs against untrusted input. */
+    private static List<String> extractTargetUrls(String config) {
+        List<String> out = new ArrayList<>();
+        try {
+            JSONObject o = new JSONObject(config);
+            for (String key : new String[]{"url", "featureLayerUrl", "layerUrl", "portal", "pli_url"}) {
+                String v = o.optString(key, "");
+                if (!v.isEmpty() && !out.contains(v)) out.add(v);
+            }
+            JSONArray layers = o.optJSONArray("layers");
+            if (layers != null) {
+                for (int i = 0; i < layers.length() && out.size() < 10; i++) {
+                    JSONObject l = layers.optJSONObject(i);
+                    if (l == null) continue;
+                    String v = l.optString("url", "");
+                    if (!v.isEmpty() && !out.contains(v)) out.add(v);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not extract target URLs from an external config payload", e);
+        }
+        return out;
+    }
+
+    private static boolean mentionsPliEndpoint(String config) {
+        try {
+            JSONObject o = new JSONObject(config);
+            return "pli_endpoint".equals(o.optString("type", ""))
+                    || o.has("pli_endpoint") || o.has("pli_url");
+        } catch (Exception e) {
+            return config.contains("pli_endpoint");
         }
     }
 
@@ -2228,6 +3305,14 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     @Override
     protected boolean onBackButtonPressed() {
+        // Appendix A §12.3: the OAuth container was not checked, so Back mid-sign-in closed the
+        // whole drop-down and left the WebView and its decor-view layout listener attached.
+        if (oauthWebViewContainer != null
+                && oauthWebViewContainer.getVisibility() == View.VISIBLE) {
+            hideOAuthWebView();
+            authManager.cancelOAuthFlow();
+            return true;
+        }
         if (isOverlayShowing()) {
             hideOverlay();
             return true;
@@ -2237,16 +3322,62 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     @Override
     public void disposeImpl() {
-        stopPliScheduler();
-        executor.shutdownNow();
-        if (prefFileResultReceiver != null) {
-            AtakBroadcast.getInstance().unregisterReceiver(prefFileResultReceiver);
-        }
-        // Remove all injected markers from the ATAK map
+        // Order matters. The flag goes first so no in-flight task's posted lambda can touch a
+        // view after this point (Appendix A §5), and map-item removal happens before anything
+        // that can throw, so a partial-initialisation teardown cannot leave the plugin's markers
+        // stranded on the map with no owner (Appendix A §6).
+        disposed = true;
+
         MapGroup root = getMapView().getRootGroup();
-        for (List<Marker> markers : layerMarkers.values()) {
-            for (Marker m : markers) root.removeItem(m);
+        for (List<MapItem> items : layerItems.values()) {
+            for (MapItem item : items) {
+                try { root.removeItem(item); } catch (Exception e) { Log.w(TAG, "removeItem failed", e); }
+            }
         }
-        layerMarkers.clear();
+        layerItems.clear();
+
+        // Not called before: if the plugin was torn down while the OAuth WebView was showing, the
+        // ViewTreeObserver.OnGlobalLayoutListener registered on ATAK's OWN decorView was never
+        // removed, permanently leaking the whole plugin view tree into the host app.
+        try { hideOAuthWebView(); } catch (Exception e) { Log.w(TAG, "hideOAuthWebView failed", e); }
+
+        // FeatureLinkImporter.receiver is a static field holding this receiver. It is nulled in
+        // FeatureLinkMapComponent.onDestroyImpl(), but the two teardown paths have no documented
+        // ordering guarantee — on any path that reaches disposeImpl() without onDestroyImpl(),
+        // that static leaks pluginContext, mainView and every inflated View. Null it here too.
+        FeatureLinkImporter.receiver = null;
+
+        stopPliScheduler();
+        stopRecurrenceScheduler();
+        mainHandler.removeCallbacksAndMessages(null);
+
+        shutdownPool(executor, "interactive");
+        shutdownPool(bgExecutor, "background");
+        shutdownPool(statsExecutor, "statistics");
+
+        if (prefFileResultReceiver != null) {
+            try {
+                AtakBroadcast.getInstance().unregisterReceiver(prefFileResultReceiver);
+            } catch (IllegalArgumentException e) {
+                // Never successfully registered — previously this propagated and aborted the
+                // rest of teardown, stranding every marker the plugin had added.
+                Log.w(TAG, "prefFileResultReceiver was not registered", e);
+            }
+            prefFileResultReceiver = null;
+        }
+    }
+
+    private void shutdownPool(ExecutorService pool, String label) {
+        List<Runnable> abandoned = pool.shutdownNow();
+        if (!abandoned.isEmpty()) {
+            Log.d(TAG, "disposeImpl: abandoned " + abandoned.size() + " queued " + label + " task(s)");
+        }
+        try {
+            if (!pool.awaitTermination(2, TimeUnit.SECONDS)) {
+                Log.w(TAG, "disposeImpl: " + label + " pool did not terminate within 2s");
+            }
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

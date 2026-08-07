@@ -19,7 +19,7 @@
 
 import { reactive } from 'vue';
 import { getCloudTakToken } from './cloudtakInternals.ts';
-import { findZipEntryText } from './zipReader.ts';
+import { findZipEntryText, listZipEntryNames } from './zipReader.ts';
 import { applyConfigText } from './importConfig.ts';
 
 const POLL_MS = 60_000;
@@ -67,9 +67,23 @@ async function processPackage(item: ImportListItem, token: string): Promise<void
     const zipBuf = await rawRes.arrayBuffer();
 
     const text = await findZipEntryText(zipBuf, ENTRY_SUFFIX);
-    if (text === null) return; // named like a FeatureLink share but no matching entry inside — ignore
+    if (text === null) {
+        // A package named like a FeatureLink share that does not contain one. This used to be a
+        // bare `return` — no log, no status, no trace anywhere — so a share that arrived with an
+        // unexpected entry name looked identical to one that never arrived at all, and there was
+        // no way to tell which from inside CloudTAK. Say what was actually in the zip.
+        const names = listZipEntryNames(zipBuf);
+        ingestState.status = 'error';
+        ingestState.message = names.length
+            ? `"${item.name}" has no ${ENTRY_SUFFIX} file — it contains: ${names.join(', ')}`
+            : `"${item.name}" could not be read as a ZIP package`;
+        console.warn('[featurelink] import', item.name, 'contained no', ENTRY_SUFFIX, '— entries:', names);
+        return;
+    }
 
-    const result = await applyConfigText(text);
+    // 'auto': a background poll must respect a deliberate removal. Without this the package sitting
+    // in CloudTAK's Import Manager re-added the layer within 60 seconds of every delete, forever.
+    const result = await applyConfigText(text, 'auto');
     ingestState.status = result.ok ? 'ok' : 'error';
     ingestState.message = result.ok
         ? `Auto-imported "${item.name}": ${result.message}`

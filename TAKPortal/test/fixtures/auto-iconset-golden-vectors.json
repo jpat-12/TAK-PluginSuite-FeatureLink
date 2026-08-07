@@ -1,0 +1,263 @@
+{
+  "$comment": [
+    "SHARED CROSS-LANGUAGE CONFORMANCE FIXTURE for AUTO-ICONSET-SPEC.md.",
+    "",
+    "Canonical path: TAKPortal/test/fixtures/auto-iconset-golden-vectors.json",
+    "",
+    "This file is the contract for the deterministic iconset identity that ATAK (Java), WinTAK",
+    "(C#), CloudTAK (TypeScript) and TAK Portal (JavaScript) must each reproduce BYTE-IDENTICALLY",
+    "for the same input. It exists because the audit (C-39) found the TAK Portal implementation",
+    "applying the 60-character group cap TWICE, and because no implementation had a single test.",
+    "",
+    "Every value below was produced by the reference implementation",
+    "TAKPortal/services/featurelinkArcgisIconset.service.js and is asserted against it by",
+    "TAKPortal/test/goldenVectors.test.js. Other work packages: load this file and assert your",
+    "port produces the same output. Do NOT regenerate it to make a port pass — a disagreement",
+    "means one of the implementations is wrong, and the failure mode in the field is that icons",
+    "silently do not resolve on-device.",
+    "",
+    "Reference implementation functions:",
+    "  canonicalizeUrl(url)      -> spec §2",
+    "  uidFor(canonicalUrl, fld) -> spec §4",
+    "  sanitizeGroupBase(name)   -> spec §5.1, the 60-char cap, applied EXACTLY ONCE",
+    "  groupFor(name)            -> sanitizeGroupBase(name) + ' Icons', max 66 chars",
+    "  fileNameFor(label)        -> spec §5.2",
+    "  dedupe(name, seen)        -> spec §5.3"
+  ],
+
+  "specVersion": 1,
+
+  "canonicalizeUrl": {
+    "$comment": "§2.1-§2.2. Scheme and host lowercased; path case preserved; query, fragment and trailing slash removed; a service root defaults to layer 0; repeated slashes collapsed. Port is preserved.",
+    "cases": [
+      {
+        "name": "already canonical",
+        "in": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/0",
+        "out": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/0"
+      },
+      {
+        "name": "mixed-case host and a query string",
+        "in": "https://SERVICES1.ArcGIS.com/abc/arcgis/rest/services/Damage/FeatureServer/0?f=json",
+        "out": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/0"
+      },
+      {
+        "name": "service root with a trailing slash and doubled separators defaults to layer 0",
+        "in": "https://services1.arcgis.com//abc//arcgis/rest/services/Damage/FeatureServer/",
+        "out": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/0"
+      },
+      {
+        "name": "MapServer with a fragment",
+        "in": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/MapServer/3#frag",
+        "out": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/MapServer/3"
+      },
+      {
+        "name": "non-default port is preserved (ArcGIS Enterprise)",
+        "in": "http://gis.example.mil:6443/arcgis/rest/services/Ops/MapServer",
+        "out": "http://gis.example.mil:6443/arcgis/rest/services/Ops/MapServer/0"
+      },
+      {
+        "name": "multi-digit layer id, trailing slash removed",
+        "in": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/12/",
+        "out": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/12"
+      }
+    ],
+    "mustThrow": [
+      {
+        "name": "Web Map item link (§2.3, not resolved here)",
+        "in": "https://www.arcgis.com/home/item.html?id=abc123"
+      },
+      {
+        "name": "Web Map sharing REST link",
+        "in": "https://www.arcgis.com/sharing/rest/content/items/abc123"
+      },
+      { "name": "not a FeatureServer or MapServer", "in": "https://example.com/some/other/path" },
+      { "name": "not a URL", "in": "not a url" },
+      { "name": "empty", "in": "" }
+    ]
+  },
+
+  "uidFor": {
+    "$comment": "§4. Lowercase hex SHA-256 of (canonicalUrl + '/' + fieldName), UTF-8. The LAYER NAME IS NOT AN INPUT — see the c39DoubleTruncation section on what did and did not change.",
+    "cases": [
+      {
+        "name": "AUTO-ICONSET-SPEC.md §4 published test vector",
+        "canonicalUrl": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/0",
+        "field": "damage_level",
+        "out": "9aa866980d8078ab2a4cbb84b5ad4de9b4c6af6d3192957e15b8ce459dfd2ad9"
+      },
+      {
+        "name": "empty field (simple renderer)",
+        "canonicalUrl": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/0",
+        "field": "",
+        "out": "0409d73b399404bfa0b211ddf6244dee3c7eaa04c306f203f5f969c249f8baaa"
+      },
+      {
+        "name": "field name case is significant — it is NOT folded",
+        "canonicalUrl": "https://services1.arcgis.com/abc/arcgis/rest/services/Damage/FeatureServer/0",
+        "field": "DAMAGE_LEVEL",
+        "out": "2d8bad3ac1f738ab5afab988918b63f843b1039e197949611358b8c891f25365"
+      }
+    ]
+  },
+
+  "groupFor": {
+    "$comment": [
+      "§5.1. sanitizeGroupBase = replace every character outside [A-Za-z0-9 _-] with '_', collapse",
+      "runs of whitespace to one space, trim, then cap at 60. groupFor appends ' Icons', giving a",
+      "maximum of 66 characters. THE 60-CHARACTER CAP IS APPLIED EXACTLY ONCE, TO THE BASE, BEFORE",
+      "THE SUFFIX. Any implementation that caps the final string at 60 is wrong (that was C-39).",
+      "Note 'Damage (2024)' -> 'Damage _2024_ Icons': the spec REPLACES illegal characters with '_'",
+      "and does not delete them; the two parentheses become two underscores."
+    ],
+    "cases": [
+      { "name": "plain", "in": "Damage Assessment", "out": "Damage Assessment Icons" },
+      { "name": "illegal characters become underscores", "in": "Damage (2024)", "out": "Damage _2024_ Icons" },
+      { "name": "slashes and backslashes", "in": "A/B\\C", "out": "A_B_C Icons" },
+      { "name": "whitespace collapsed and trimmed", "in": "  spaced   out  ", "out": "spaced out Icons" },
+      { "name": "empty name", "in": "", "out": " Icons" },
+      { "name": "latin diacritics are not ASCII and are replaced", "in": "\u00dcn\u00efc\u00f6d\u00e9 Layer", "out": "_n_c_d_ Layer Icons" },
+      { "name": "CJK is replaced character by character", "in": "\u6d88\u9632 Layer", "out": "__ Layer Icons" },
+      {
+        "name": "an emoji is a surrogate PAIR in UTF-16 and becomes TWO underscores",
+        "$comment": "Java/C#/JS iterate UTF-16 code units here; Python iterates code points and would produce ONE underscore. Every implementation MUST produce two. See crossLanguageNotes.",
+        "in": "Fire \ud83d\udd25 Layer",
+        "out": "Fire __ Layer Icons"
+      },
+      {
+        "name": "base of exactly 54 -> group of exactly 60, no truncation",
+        "in": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01",
+        "out": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01 Icons"
+      },
+      {
+        "name": "THE C-39 CASE: base of 55 -> group of 61. Pre-fix TAK Portal truncated this to 60.",
+        "in": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012",
+        "out": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012 Icons"
+      },
+      {
+        "name": "base of exactly 60 -> group of 66, the maximum",
+        "in": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567",
+        "out": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567 Icons"
+      },
+      {
+        "name": "base over 60 is cut to 60, then suffixed -> 66",
+        "in": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+        "out": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567 Icons"
+      },
+      {
+        "name": "realistic 79-character layer name",
+        "in": "Damage Assessment Points For Region Seven Central Area Command Post Alpha Bravo",
+        "out": "Damage Assessment Points For Region Seven Central Area Comma Icons"
+      }
+    ]
+  },
+
+  "fileNameFor": {
+    "$comment": "§5.2. Take the last path segment, strip a trailing .png, replace every character outside [A-Za-z0-9._-] with '_', fall back to 'icon' when empty, then append '.png'. There is NO length cap on a filename.",
+    "cases": [
+      { "in": "Minor", "out": "Minor.png" },
+      { "in": "path/to/Major.png", "out": "Major.png" },
+      { "in": "A B", "out": "A_B.png" },
+      { "in": "", "out": "icon.png" },
+      { "in": null, "out": "icon.png" },
+      { "in": "Already.PNG", "out": "Already.png" },
+      { "in": "C:\\icons\\Severe.png", "out": "Severe.png" },
+      { "in": "\u00d6l", "out": "_l.png" },
+      {
+        "name": "no cap on length",
+        "in": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.png"
+      }
+    ]
+  },
+
+  "dedupe": {
+    "$comment": "§5.3. Append _2, _3, ... before the .png extension until unique within the set seen so far. Renderer array order is significant, so process entries in the order the renderer lists them.",
+    "sequences": [
+      {
+        "name": "three identical labels then a distinct one",
+        "labels": ["Minor", "Minor", "Minor", "Major"],
+        "out": ["Minor.png", "Minor_2.png", "Minor_3.png", "Major.png"]
+      },
+      {
+        "name": "labels that sanitize to the same filename collide",
+        "labels": ["A B", "A_B", "A-B"],
+        "out": ["A_B.png", "A_B_2.png", "A-B.png"]
+      },
+      {
+        "name": "a slash is a PATH separator in §5.2, not an illegal character — only the last segment survives",
+        "$comment": "This is a real cross-implementation trap: 'A/B' does NOT become 'A_B.png'. fileNameFor strips the path prefix first, so it becomes 'B.png' and does not collide with 'A B'.",
+        "labels": ["A B", "A/B"],
+        "out": ["A_B.png", "B.png"]
+      }
+    ]
+  },
+
+  "usericonPath": {
+    "$comment": "§5.4. The on-device reference is exactly '{uid}/{group}/{filename}', joined with '/' and with no escaping or normalisation of any part.",
+    "cases": [
+      {
+        "uid": "9aa866980d8078ab2a4cbb84b5ad4de9b4c6af6d3192957e15b8ce459dfd2ad9",
+        "group": "Damage Assessment Icons",
+        "filename": "Minor.png",
+        "out": "9aa866980d8078ab2a4cbb84b5ad4de9b4c6af6d3192957e15b8ce459dfd2ad9/Damage Assessment Icons/Minor.png"
+      }
+    ]
+  },
+
+  "caseFolding": {
+    "$comment": [
+      "canonicalizeUrl lowercases the SCHEME and the HOST only; the path keeps its case. Use",
+      "toLowerCase(Locale.ROOT) in Java, ToLowerInvariant() in C#, toLowerCase() in JS and lower()",
+      "in Python. The vectors below are the JS/Java/Python result.",
+      "",
+      "KNOWN DIVERGENCE, deliberately not papered over: U+0130 LATIN CAPITAL LETTER I WITH DOT",
+      "ABOVE lowercases to the TWO code points 'i' + U+0307 in Java (Locale.ROOT), JS and Python,",
+      "but .NET's ToLowerInvariant maps it to a single 'i' on some runtimes. This CANNOT affect a",
+      "real UID, because the only string canonicalizeUrl case-folds is the host, and DNS/IDNA host",
+      "labels are ASCII by the time a URL is parsed. It is recorded so a future port does not",
+      "extend case folding to the path or the layer name, where it WOULD diverge."
+    ],
+    "cases": [
+      { "in": "SERVICES1.ArcGIS.COM", "out": "services1.arcgis.com" },
+      { "in": "ISTANBUL", "out": "istanbul" },
+      { "in": "\u0130STANBUL", "out": "i\u0307stanbul", "dotNetMayDiffer": true },
+      { "in": "I\u0131\u0130i", "out": "i\u0131i\u0307i", "dotNetMayDiffer": true },
+      { "in": "\u00c5NGSTR\u00d6M", "out": "\u00e5ngstr\u00f6m" },
+      { "in": "\u00c9COLE", "out": "\u00e9cole" }
+    ]
+  },
+
+  "c39DoubleTruncation": {
+    "$comment": [
+      "WHAT CHANGED, precisely — read this before assuming a migration is needed.",
+      "",
+      "The UID DID NOT CHANGE, for any input. uid = SHA-256(canonicalUrl + '/' + field), and the",
+      "layer name is not an input to it. Every previously-computed UID is still correct.",
+      "",
+      "What changed is the GROUP — the middle segment of '{uid}/{group}/{filename}'. TAK Portal",
+      "capped the group base at 60 in sanitizeGroupBase(), appended ' Icons', and then ran the",
+      "result through cleanSetName(), which capped the WHOLE string at 60 again. So for any layer",
+      "name whose sanitized base exceeded 54 characters, TAK Portal STORED a 60-character",
+      "truncation while ATAK, WinTAK and CloudTAK all produced the full string of up to 66.",
+      "",
+      "Worse, the two halves of TAK Portal disagreed with each other: the truncated value was",
+      "returned to the caller as `group`, while the manifest's per-icon groups map was written with",
+      "the UNtruncated value — the same request yielded two different group strings.",
+      "",
+      "Threshold: sanitized base length > 54 (i.e. final group length > 60).",
+      "Unaffected: base <= 54, which is the overwhelming majority of real layer names.",
+      "",
+      "MIGRATION: no UID migration is required and no config's usericonPath needs rewriting — the",
+      "usericonPath already carried the untruncated group. What needs attention is the icon-set",
+      "NAME under which affected sets were stored. Regenerating such a layer now registers the set",
+      "under the full 66-character name and leaves the old 60-character entry orphaned. Operators",
+      "should regenerate affected iconsets and delete the orphaned truncated entries. See",
+      "docs/testing/server.md for the detection recipe."
+    ],
+    "affectedThresholdSanitizedBaseChars": 54,
+    "maxGroupChars": 66,
+    "maxBaseChars": 60,
+    "uidChanged": false,
+    "groupChangedForLongNames": true
+  }
+}

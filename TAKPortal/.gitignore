@@ -1,0 +1,37 @@
+# TAK Portal FeatureLink module — component-level ignores.
+#
+# This file did not previously exist (audit Appendix E §2.1). The root .gitignore also had
+# no `node_modules/` rule of its own — only CloudTAK/.gitignore did — so an `npm install`
+# run inside this directory would have staged thousands of files. Both halves are now fixed:
+# the root file carries `**/node_modules/`, and this file carries the Node/Express specifics.
+#
+# Everything the root .gitignore already covers (OS junk, editor state, logs, .env) is NOT
+# repeated here. Only genuine component deltas belong in this file.
+
+# ── Node ─────────────────────────────────────────────────────────────────────
+node_modules/
+.npm/
+npm-debug.log*
+
+# package-lock.json is deliberately NOT ignored — it is what makes `npm ci` reproducible
+# in .github/workflows/ci.yml and is the input to this component's CycloneDX SBOM (C-30).
+
+# ── Runtime / instance state ─────────────────────────────────────────────────
+# The module writes uploaded display-config datasets and unpacked custom icon sets under
+# the portal's data root at runtime. Nothing generated at runtime belongs in the index.
+uploads/
+tmp/
+data/
+*.sqlite
+*.sqlite3
+*.db
+
+# ── Install-script backups ───────────────────────────────────────────────────
+# install.sh rewrites files in the host portal in place; the remediated version writes a
+# timestamped backup beside each file it patches. Those backups are host state, not source.
+*.featurelink-backup
+*.featurelink-backup.*
+
+# ── Test / coverage output ───────────────────────────────────────────────────
+coverage/
+.nyc_output/

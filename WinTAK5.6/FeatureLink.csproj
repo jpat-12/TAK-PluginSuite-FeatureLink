@@ -22,6 +22,9 @@
   <PropertyGroup>
     <PlatformTarget>x64</PlatformTarget>
     <UseSharedCompilation>false</UseSharedCompilation>
+    <!-- Pin the language version: the source uses C# 7.x features (tuples, pattern matching,
+         out var) and without this the effective version is toolchain-dependent. -->
+    <LangVersion>7.3</LangVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
@@ -123,8 +126,14 @@
     <Compile Include="Models\RecentCotItem.cs" />
     <Compile Include="Services\ArcGisAuthService.cs" />
     <Compile Include="Services\ArcGisFeatureService.cs" />
+    <Compile Include="Services\ArcGisHttp.cs" />
+    <Compile Include="Services\AutoSymbology.cs" />
+    <Compile Include="Services\DialogService.cs" />
     <Compile Include="Services\DisplayStyleResolver.cs" />
+    <Compile Include="Services\Log.cs" />
+    <Compile Include="Services\SafeJson.cs" />
     <Compile Include="Services\SettingsStore.cs" />
+    <Compile Include="Services\UrlGuard.cs" />
     <Compile Include="ViewModels\FeatureLinkDockPane.cs" />
     <Compile Include="Views\Converters.cs" />
     <Compile Include="Views\FeatureLinkView.xaml.cs">
@@ -173,15 +182,25 @@
     Post-build (Debug only): copy DLL into the local WinTAK Plugins folder for live testing.
     WinTAK scans D:\Apps\Plugins\ for DLL files at startup.
   -->
+  <!-- PluginDir is overridable: set FEATURELINK_PLUGIN_DIR (or pass /p:PluginDir=…) so the
+       project builds on a machine that does not have the original developer's D:\Apps\Plugins\.
+       Every Copy is conditional on the directory existing, so a second developer's or a CI
+       runner's Debug build no longer fails outright. -->
   <Target Name="DeployPlugin" AfterTargets="Build"
           Condition="'$(Configuration)' == 'Debug'">
     <PropertyGroup>
-      <PluginDir>D:\Apps\Plugins\</PluginDir>
+      <PluginDir Condition="'$(PluginDir)' == ''">$(FEATURELINK_PLUGIN_DIR)</PluginDir>
+      <PluginDir Condition="'$(PluginDir)' == ''">D:\Apps\Plugins\</PluginDir>
     </PropertyGroup>
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDir)" />
+    <Message Condition="!Exists('$(PluginDir)')" Importance="High"
+             Text="DeployPlugin skipped: '$(PluginDir)' does not exist. Set FEATURELINK_PLUGIN_DIR to your WinTAK Plugins folder to enable live deployment." />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDir)"
+          Condition="Exists('$(PluginDir)')" />
+    <Copy SourceFiles="@(ReferenceCopyLocalPaths)" DestinationFolder="$(PluginDir)"
+          Condition="Exists('$(PluginDir)') AND '%(Extension)' == '.dll'" />
     <Copy SourceFiles="$(TargetDir)$(TargetName).pdb"
           DestinationFolder="$(PluginDir)"
-          Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
+          Condition="Exists('$(PluginDir)') AND Exists('$(TargetDir)$(TargetName).pdb')" />
   </Target>
 
   <!--
@@ -196,16 +215,30 @@
     Bump WpkVersion in the PropertyGroup below when releasing a new version.
   -->
   <PropertyGroup>
-    <WpkVersion>2.6.9</WpkVersion>
-    <WpkName>FeatureLink-$(WpkVersion)-5.6.0.151</WpkName>
+    <!-- Single source of the SDK target string; it used to be a literal repeated in WpkName and
+         in the Exec command line, so a release needed four separate edits to stay consistent. -->
+    <TakSdkVersion>5.6.0.151</TakSdkVersion>
+    <WpkVersion>2.7.0</WpkVersion>
+    <WpkName>FeatureLink-$(WpkVersion)-$(TakSdkVersion)</WpkName>
     <WpkOut>$(OutputPath)$(WpkName).wpk</WpkOut>
+    <!-- Prefer the py launcher: bare `python` may be the Windows Store stub, or Python 2. -->
+    <PythonExe Condition="'$(PythonExe)' == ''">py -3</PythonExe>
   </PropertyGroup>
+
+  <!-- Fail with one clear message rather than ~200 CS0246 errors when libs\ is unpopulated,
+       which is the delivered state of a fresh clone (libs\ is git-ignored by design). -->
+  <Target Name="VerifySdkLibs" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\libs\WinTak.Framework.dll')"
+           Text="libs\ is not populated. Copy the WinTAK $(TakSdkVersion) SDK assemblies (TAK.Engine, WinTak.*, Prism*) from your WinTAK install into WinTAK5.6\libs\ — see README.md." />
+  </Target>
 
   <Target Name="PackageWpk" AfterTargets="Build"
           Condition="'$(Configuration)' == 'Release'">
 
-    <!-- Zip DLL + manifest into the .wpk via build-wpk.py -->
-    <Exec Command="python &quot;$(MSBuildProjectDirectory)\build-wpk.py&quot; $(WpkVersion) 5.6.0.151 &quot;$(TargetPath)&quot; &quot;$(MSBuildProjectDirectory)\Assets&quot; &quot;$(WpkOut)&quot;" />
+    <!-- Packages FeatureLink.dll, its binding-redirect config, the icon, and every non-SDK
+         dependency next to the output (Newtonsoft.Json.dll — C-18). The manifest is templated
+         from the checked-in MANIFEST.xml rather than duplicated inside the script. -->
+    <Exec Command="$(PythonExe) &quot;$(MSBuildProjectDirectory)\build-wpk.py&quot; $(WpkVersion) $(TakSdkVersion) &quot;$(TargetPath)&quot; &quot;$(MSBuildProjectDirectory)\Assets&quot; &quot;$(WpkOut)&quot; --manifest &quot;$(MSBuildProjectDirectory)\MANIFEST.xml&quot;" />
 
     <Message Text="Plugin package: $(WpkOut)" Importance="High" />
   </Target>

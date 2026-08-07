@@ -27,6 +27,15 @@
         <item name="android:textStyle">bold</item>
     </style>
 
+    <!-- Lighter-weight header for a subsection nested inside a card (e.g. "Shared with me"
+         inside "My ArcGIS Layers") — smaller and secondary-colored vs. FL.Text.SectionHeader so
+         it reads as a step down in the hierarchy, not a sibling section. -->
+    <style name="FL.Text.SubsectionHeader" parent="">
+        <item name="android:textColor">@color/fl_text_secondary</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+
     <style name="FL.Text.Body" parent="">
         <item name="android:textColor">@color/fl_text_secondary</item>
         <item name="android:textSize">@dimen/fl_text_body</item>

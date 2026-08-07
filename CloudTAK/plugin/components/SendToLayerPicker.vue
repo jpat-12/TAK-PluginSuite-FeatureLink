@@ -45,7 +45,10 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { store, findLayer } from '../lib/store.ts';
+import { store } from '../lib/store.ts';
+// findLayer used to be defined twice, identically, in store.ts and layerActions.ts, with different
+// components importing different copies (§7.3). There is now one.
+import { findLayer } from '../lib/layerActions.ts';
 import { listCotMarkers, findCotMarker } from '../lib/cot.ts';
 import * as auth from '../lib/arcgisAuth.ts';
 import * as rest from '../lib/arcgisRest.ts';
@@ -73,7 +76,13 @@ async function doSend(): Promise<void> {
     }
 
     const layer = findLayer(targetUrl.value);
-    if (!layer) return;
+    if (!layer) {
+        // Silent no-op with no message before: the user clicked Send and nothing happened at all
+        // (§5.3). Reachable when the target layer is removed between selection and send.
+        ok.value = false;
+        message.value = 'That target layer is no longer in your list — pick another.';
+        return;
+    }
 
     busy.value = true;
     try {
@@ -87,9 +96,15 @@ async function doSend(): Promise<void> {
             timeMs: now, startMs: now, staleMs: now + 7 * 24 * 3600 * 1000,
             rawCotXml: '',
         };
-        const objectId = await rest.addPliFeature(layer.url, token, input);
-        ok.value = objectId >= 0;
-        message.value = ok.value ? `Sent "${marker.callsign}" to ${layer.name}` : 'Send failed';
+        // addPliFeature now returns a discriminated result. It used to return -1 both on real
+        // failure AND on a success the server did not echo an objectId for, and it never inspected
+        // the ArcGIS error at all — so "Send failed" was shown for successes and the actual cause
+        // ("Invalid field: tak_callsign") was thrown away (§5.3).
+        const result = await rest.addPliFeature(layer.url, token, input);
+        ok.value = result.ok;
+        message.value = result.ok
+            ? `Sent "${marker.callsign}" to ${layer.name}`
+            : `Send failed: ${result.error ?? 'ArcGIS rejected the feature'}`;
     } catch (e) {
         ok.value = false;
         message.value = e instanceof Error ? e.message : 'Send failed';
