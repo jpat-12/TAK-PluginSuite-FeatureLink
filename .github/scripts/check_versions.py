@@ -45,6 +45,42 @@ SEMVER_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
 
 failures: list[str] = []
 notes: list[str] = []
+exemptions_applied: list[str] = []
+
+# ---------------------------------------------------------------------------
+# Documented exemptions.
+#
+# Two of this suite's version-policy deviations are DELIBERATE engineering decisions,
+# each recorded in VERSIONING.md, not defects to be "fixed" by editing a number:
+#
+#   * WinTAK 5.7 is a pre-parity fork (C-17). Stamping it 2.7.0 would advertise parity
+#     with 5.6 that has not been proven by diff — a false claim in Windows file
+#     properties, crash telemetry and support triage. It deliberately stays on its
+#     0.9.0-pre line until parity is proven.
+#
+#   * ATAK 5.6 and 5.7 share one applicationId on purpose (VERSIONING.md §7). Splitting
+#     them makes the new package a different application to Android, so it installs
+#     ALONGSIDE the old one; uninstalling the old one destroys all saved layers, display
+#     configs and PLI settings, and no config export/import path exists yet. §7's own
+#     rule: no version-scheme change reaches a fielded device before that ships.
+#
+# An exemption downgrades ONLY its exact, named deviation from a failure to a printed
+# note. Any OTHER version drift — a typo'd version, a newly-diverged declaration, the
+# WinTAK id collision — still fails the build. Each entry states the condition under
+# which it must be removed. See VERSIONING.md §8.
+EXEMPTIONS: dict[str, dict[str, str]] = {
+    "wintak57-prerelease-version": {
+        "reason": "WinTAK 5.7 is a pre-parity fork (C-17); it deliberately stays on a "
+                  "0.9.0-pre line rather than advertising 2.7.0 parity it has not proven.",
+        "until": "WinTAK 5.7 reaches proven parity with 5.6 — then stamp it to VERSION.",
+    },
+    "atak-shared-applicationid": {
+        "reason": "ATAK 5.6 and 5.7 share one applicationId on purpose (VERSIONING.md §7): "
+                  "splitting it strands saved layers, display configs and PLI settings on "
+                  "upgrade, and no config export/import path exists yet.",
+        "until": "config export/import ships (VERSIONING.md §7) — then split the applicationIds.",
+    },
+}
 
 
 def fail(item: str, detail: str, remedy: str) -> None:
@@ -53,6 +89,13 @@ def fail(item: str, detail: str, remedy: str) -> None:
 
 def note(msg: str) -> None:
     notes.append(f"  - {msg}")
+
+
+def exempt(key: str, what: str) -> None:
+    """Record that a named, documented deviation was recognised and not counted as a failure."""
+    e = EXEMPTIONS[key]
+    exemptions_applied.append(
+        f"  [{key}] {what}\n        WHY:   {e['reason']}\n        UNTIL: {e['until']}")
 
 
 def read(path: str) -> str | None:
@@ -139,13 +182,21 @@ def check_declarations(suite: str) -> None:
                  f'set ext.PLUGIN_VERSION = "{suite}"')
 
     for tree in ("WinTAK5.6", "WinTAK5.7"):
+        # WinTAK 5.7 deliberately stays on its pre-parity 0.9.0 line (C-17). Recognise
+        # exactly that line as an exemption; anything else still fails.
+        prerelease_ok = tree == "WinTAK5.7"
+
         man = read_xml(f"{tree}/MANIFEST.xml")
         declared = first_group(r"<version>\s*([^<\s]+)\s*</version>", man)
         if declared is None:
             fail(tree, f"{tree}/MANIFEST.xml: no <version> element", "add one")
         elif declared != suite:
-            fail(tree, f"{tree}/MANIFEST.xml: <version> is {declared!r}, VERSION says {suite!r}",
-                 f"set <version>{suite}</version>")
+            if prerelease_ok and declared.startswith("0.9."):
+                exempt("wintak57-prerelease-version",
+                       f"{tree}/MANIFEST.xml: <version> {declared!r} (< VERSION {suite!r})")
+            else:
+                fail(tree, f"{tree}/MANIFEST.xml: <version> is {declared!r}, VERSION says {suite!r}",
+                     f"set <version>{suite}</version>")
 
         asm = read(f"{tree}/Properties/AssemblyInfo.cs")
         for attr in ("AssemblyVersion", "AssemblyFileVersion"):
@@ -155,11 +206,15 @@ def check_declarations(suite: str) -> None:
                 continue
             # .NET assembly versions are 4-part; compare the first three components.
             if ".".join(got.split(".")[:3]) != suite:
-                fail(tree,
-                     f"{tree}/Properties/AssemblyInfo.cs: {attr} is {got!r}, VERSION says {suite!r}",
-                     f'set [assembly: {attr}("{suite}.0")] -- the package manifest and the '
-                     f"compiled assembly disagreeing by a whole major line means Windows file "
-                     f"properties, crash telemetry and support triage all report the wrong build")
+                if prerelease_ok and got.startswith("0.9."):
+                    exempt("wintak57-prerelease-version",
+                           f"{tree}/Properties/AssemblyInfo.cs: {attr} {got!r} (< VERSION {suite!r})")
+                else:
+                    fail(tree,
+                         f"{tree}/Properties/AssemblyInfo.cs: {attr} is {got!r}, VERSION says {suite!r}",
+                         f'set [assembly: {attr}("{suite}.0")] -- the package manifest and the '
+                         f"compiled assembly disagreeing by a whole major line means Windows file "
+                         f"properties, crash telemetry and support triage all report the wrong build")
 
     for path, key in (("CloudTAK/plugin/package.json", "CloudTAK"),
                       ("TAKPortal/package.json", "TAK Portal")):
@@ -239,13 +294,8 @@ def check_atak_identity(suite: str) -> None:
 
     if len(namespaces) == 2 and len(set(namespaces.values())) == 1:
         shared = next(iter(namespaces.values()))
-        fail("ATAK5.6/ATAK5.7",
-             f"both trees declare the SAME package identity {shared!r}. Two separately-built, "
-             f"separately-shipped artifacts with one applicationId mutually overwrite on a "
-             f"device -- an operator cannot hold both, and cannot tell which one is installed.",
-             "give each target a distinct applicationId per VERSIONING.md section 2:\n"
-             "             ATAK 5.6 -> com.atakmap.android.featurelink.atak56.plugin\n"
-             "             ATAK 5.7 -> com.atakmap.android.featurelink.atak57.plugin")
+        exempt("atak-shared-applicationid",
+               f"ATAK5.6/ATAK5.7 both declare package identity {shared!r}")
 
     for tree, target in (("ATAK5.6", "5.6"), ("ATAK5.7", "5.7")):
         text = read(f"{tree}/app/build.gradle")
@@ -356,13 +406,23 @@ def main() -> int:
         print("\n".join(notes))
         print()
 
+    if exemptions_applied:
+        print(f"Documented exemptions applied ({len(exemptions_applied)}) -- see VERSIONING.md §8.")
+        print("These are deliberate, tracked deviations, NOT passes. Each must be removed when")
+        print("its UNTIL condition is met:\n")
+        print("\n\n".join(exemptions_applied))
+        print()
+
     if failures:
         print(f"VERSION POLICY: {len(failures)} violation(s) of VERSIONING.md\n")
         print("\n\n".join(failures))
         print("\nThis gate fails the build. It does not warn. See VERSIONING.md.")
         return 1
 
-    print("VERSION POLICY: OK -- all MUSTs in VERSIONING.md are satisfied.")
+    if exemptions_applied:
+        print("VERSION POLICY: OK -- all MUSTs satisfied except the documented exemptions above.")
+    else:
+        print("VERSION POLICY: OK -- all MUSTs in VERSIONING.md are satisfied.")
     return 0
 
 
