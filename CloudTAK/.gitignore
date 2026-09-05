@@ -1,7 +1,8 @@
 # Dependencies
 node_modules/
 plugin/node_modules/
-plugin/package-lock.json
+# plugin/package-lock.json is deliberately tracked: `npm ci` and the CycloneDX SBOM
+# both require a committed lockfile (C-30). See the root .gitignore note.
 
 # Build output
 dist/
