@@ -7,7 +7,7 @@
 import { store } from './store.ts';
 import * as rest from './arcgisRest.ts';
 import { parseDisplayConfig } from './displayConfig.ts';
-import { addPublicLayer, downloadLayer, findLayer, unexcludeLayer, tokenForUrl } from './layerActions.ts';
+import { addPublicLayer, downloadLayerReporting, findLayer, unexcludeLayer, tokenForUrl } from './layerActions.ts';
 import { isAuthenticated } from './arcgisAuth.ts';
 import { setPliLayerUrl } from './store.ts';
 import { layerQueryUrl } from './arcgisUrl.ts';
@@ -79,7 +79,7 @@ export async function applyConfigText(text: string, source: ImportSource = 'manu
 
         const existing = findLayer(url);
         if (existing) {
-            void downloadLayer(existing);
+            void downloadLayerReporting(existing);
             return { ok: true, message: `Styling applied to existing layer: ${existing.name}` };
         }
 
@@ -110,7 +110,7 @@ export async function applyConfigText(text: string, source: ImportSource = 'manu
         } else {
             store.publicLayers.push(layer);
         }
-        void downloadLayer(layer);
+        void downloadLayerReporting(layer);
         return { ok: true, message: `Added: ${layer.name}` };
     }
 
@@ -125,7 +125,7 @@ export async function applyConfigText(text: string, source: ImportSource = 'manu
             if (payload.private) {
                 const existing = findLayer(payload.url);
                 if (existing) {
-                    void downloadLayer(existing);
+                    void downloadLayerReporting(existing);
                     return { ok: true, message: `Styling applied to existing layer: ${existing.name}` };
                 }
                 const layer = await rest.fetchLayerInfo(payload.url, await tokenForUrl(payload.url));
@@ -140,7 +140,7 @@ export async function applyConfigText(text: string, source: ImportSource = 'manu
                 layer.type = 'private';
                 if (payload.name) layer.name = payload.name;
                 store.privateLayers.push(layer);
-                void downloadLayer(layer);
+                void downloadLayerReporting(layer);
                 return { ok: true, message: `Added: ${layer.name}` };
             }
             return addPublicLayer(payload.url);

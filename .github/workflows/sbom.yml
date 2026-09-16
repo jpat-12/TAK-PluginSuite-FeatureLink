@@ -99,12 +99,12 @@ jobs:
           pip install "cyclonedx-bom==7.3.1"
           if [ -f Infra-TAK/requirements.txt ]; then
             cyclonedx-py requirements Infra-TAK/requirements.txt \
-              --output-format JSON --outfile sbom-infratak.cdx.json
+              --output-format JSON --output-file sbom-infratak.cdx.json
           else
             echo "::warning::Infra-TAK has no requirements.txt — its dependency set is"
             echo "::warning::undeclared, so the SBOM records only the component itself."
             echo "::warning::Declare Flask and every other import in a pinned requirements.txt."
-            cyclonedx-py environment --output-format JSON --outfile sbom-infratak.cdx.json
+            cyclonedx-py environment --output-format JSON --output-file sbom-infratak.cdx.json
           fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

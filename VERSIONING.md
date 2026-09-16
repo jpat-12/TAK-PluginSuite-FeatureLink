@@ -228,3 +228,24 @@ consequence of this fix, tracked as an open gap in
 `docs/remediation/wp5-crosscutting.md` and `QUESTIONS-FOR-OWNER.md`. The required capability
 is specified there. **No version-scheme change should reach a fielded device before config
 export/import ships.**
+
+---
+
+## 8. Documented exemptions (deliberate, tracked — not defects)
+
+Two current deviations from §1 and §2 are conscious engineering decisions, not numbers left
+wrong by accident. The CI gate (`.github/scripts/check_versions.py`) recognises **exactly**
+these two and reports them as printed exemptions instead of failures. Every other version
+deviation — a mistyped version, a newly-diverged declaration, the WinTAK `<id>` collision of
+§2 — still fails the build. Each exemption names the condition under which it must be removed;
+when that condition is met, delete the entry from `EXEMPTIONS` and make the declaration
+conform.
+
+| Key | Deviation | Why it is deliberate | Remove when |
+|---|---|---|---|
+| `wintak57-prerelease-version` | `WinTAK5.7` declares a `0.9.0`-pre version in `MANIFEST.xml` and `AssemblyInfo.cs` instead of `VERSION` | WinTAK 5.7 is a pre-parity fork (C-17). Stamping it `2.7.0` would advertise parity with 5.6 that has not been proven by diff — a false claim in Windows file properties, crash telemetry and support triage. | WinTAK 5.7 reaches proven parity with 5.6; then stamp it to `VERSION`. |
+| `atak-shared-applicationid` | `ATAK5.6` and `ATAK5.7` share one `applicationId` | Splitting it makes the new package a different application to Android, so it installs **alongside** the old one; uninstalling the old one destroys all saved layers, display configs and PLI settings, and no config export/import path exists yet (§7). | Config export/import ships (§7); then give each target a distinct `applicationId` per §2. |
+
+An exemption is a debt with a name and a payoff condition, kept visible in every CI run — not
+a silent suppression. Making the gate green this way keeps "green" honest: it means *every
+declaration conforms, or is a deviation someone consciously signed off and wrote down here.*
