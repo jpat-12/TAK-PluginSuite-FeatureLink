@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
-using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,35 +11,13 @@ using FeatureLink.Models;
 namespace FeatureLink.Services
 {
     /// <summary>
-    /// ArcGIS Online / Portal OAuth2 PKCE sign-in, ported from the ATAK plugin's
-    /// ArcGISAuthManager + OAuthHelper.
+    /// The stateful half of ArcGIS sign-in: the loopback redirect listener, the tokens for the
+    /// signed-in account, and the refresh gate that keeps concurrent callers from invalidating
+    /// each other's rotated refresh token.
     ///
-    /// Redirect mechanism — DESIGN NOTE:
-    /// The ATAK plugin captures the OAuth redirect via ATAK's own WebView because a mobile app can
-    /// register a custom URL scheme and ATAK hosts an embeddable WebView. WinTAK has no
-    /// equivalent, so this uses the standard desktop OAuth pattern: open the system browser to the
-    /// /sharing/rest/oauth2/authorize URL and capture the redirect with a short-lived loopback
-    /// HTTP listener. The ArcGIS OAuth application MUST have a loopback redirect URI registered.
-    ///
-    /// Audit remediation applied here:
-    ///  • <b>C-09</b> — a cryptographically random <c>state</c> nonce is generated per sign-in,
-    ///    sent on the authorize URL and <b>required to match</b> on the callback. Without it, any
-    ///    local process (or a browser following a crafted link) could hit
-    ///    <c>http://localhost:5100x/callback/?code=…</c> and inject an attacker-controlled
-    ///    authorization code, binding the plugin to the attacker's ArcGIS identity — textbook
-    ///    authorization-code injection. The nonce lives in memory only, is cleared on completion,
-    ///    and is never persisted or logged.
-    ///  • The listener loops until a request actually carrying <c>code</c>/<c>error</c> arrives,
-    ///    so a favicon or probe request no longer consumes the single-shot capture.
-    ///  • <see cref="GetTokenAsync"/> serialises refreshes behind a semaphore and applies a
-    ///    60-second expiry skew. ArcGIS rotates refresh tokens, so N concurrent refreshes (this is
-    ///    called from six places, several on timers) invalidated each other and produced a
-    ///    spontaneous sign-out under normal load.
-    ///  • The authorize URL is asserted to be absolute https before <c>Process.Start</c>, since
-    ///    the portal URL is restored from disk and <c>UseShellExecute=true</c> on a non-http
-    ///    scheme invokes an arbitrary registered protocol handler.
-    ///  • <see cref="Logout"/> revokes the refresh token at the portal instead of only forgetting
-    ///    it locally.
+    /// The protocol itself — PKCE, the state nonce, the authorize URL and the token-endpoint
+    /// calls — lives in <see cref="ArcGisOAuth"/>, which also carries the design note explaining
+    /// why the loopback redirect exists at all on WinTAK. Read that first.
     /// </summary>
     public sealed class ArcGisAuthService
     {
@@ -60,16 +37,6 @@ namespace FeatureLink.Services
         /// with 200 ms of life left passed the freshness check and then 401'd mid-request.</summary>
         private static readonly TimeSpan ExpirySkew = TimeSpan.FromSeconds(60);
 
-        private static readonly HttpClient Http = CreateClient();
-
-        private static HttpClient CreateClient()
-        {
-            ArcGisHttp.EnsureTlsConfigured();
-            // The token endpoint had no timeout at all (the 100 s default), so a refresh could
-            // stall any calling path — including the PLI timer — for a minute and a half.
-            return new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        }
-
         private readonly SemaphoreSlim _refreshGate = new SemaphoreSlim(1, 1);
 
         private string _accessToken;
@@ -77,10 +44,6 @@ namespace FeatureLink.Services
         private string _username;
         private string _refreshToken;
         private string _portalUrl = ArcGisFeatureService.DefaultPortalUrl;
-
-        /// <summary>The pending OAuth <c>state</c> nonce. In memory only, one at a time, cleared
-        /// as soon as a callback is adjudicated.</summary>
-        private string _pendingState;
 
         /// <summary>"Authenticated" now means "holds a credential that can produce a token", not
         /// merely "a username was once restored from disk" — the UI used to show a green
@@ -91,12 +54,16 @@ namespace FeatureLink.Services
 
         public ArcGisAuthService()
         {
-            var stored = SettingsStore.LoadTokenState();
-            if (stored != null && !string.IsNullOrEmpty(stored.RefreshToken))
+            // Only the ACTIVE account is restored into this session's fields. The rest stay on
+            // disk untouched until something explicitly switches accounts — this type still models
+            // exactly one signed-in identity.
+            var stored = SettingsStore.LoadAccountSet();
+            var active = stored == null ? null : stored.Active;
+            if (active != null && !string.IsNullOrEmpty(active.RefreshToken))
             {
-                _username = stored.Username;
-                _refreshToken = stored.RefreshToken;
-                _portalUrl = string.IsNullOrEmpty(stored.PortalUrl) ? _portalUrl : stored.PortalUrl;
+                _username = active.Username;
+                _refreshToken = active.RefreshToken;
+                _portalUrl = string.IsNullOrEmpty(active.PortalUrl) ? _portalUrl : active.PortalUrl;
             }
         }
 
@@ -106,55 +73,50 @@ namespace FeatureLink.Services
         /// </summary>
         public async Task SignInAsync(string portalUrl, CancellationToken cancellationToken = default(CancellationToken))
         {
-            _portalUrl = NormalizePortal(portalUrl);
+            _portalUrl = ArcGisOAuth.NormalizePortal(portalUrl);
 
-            var pkce = GeneratePkce();
+            var pkce = ArcGisOAuth.GeneratePkce();
             string codeVerifier = pkce.verifier;
-            string state = GenerateStateNonce();
-            _pendingState = state;
+            // Deliberately a local, not a field: two sign-in flows started at once would otherwise
+            // adjudicate each other's callback, and the second one to start would hand the first
+            // one's listener a state it is bound to reject.
+            string state = ArcGisOAuth.GenerateStateNonce();
 
             int port = FindAvailableLoopbackPort();
             string redirectUri = $"http://localhost:{port}/callback/";
-            string authUrl = BuildAuthUrl(_portalUrl, ClientId, pkce.challenge, redirectUri, state);
-            AssertBrowsableHttpsUrl(authUrl);
+            string authUrl = ArcGisOAuth.BuildAuthUrl(_portalUrl, ClientId, pkce.challenge, redirectUri, state);
+            ArcGisOAuth.AssertBrowsableHttpsUrl(authUrl);
 
-            try
+            using (var listener = new HttpListener())
             {
-                using (var listener = new HttpListener())
+                listener.Prefixes.Add(redirectUri);
+                listener.Start();
+
+                Log.Info("Opening the system browser for ArcGIS sign-in.");
+                Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+
+                var callback = await AwaitCallbackAsync(listener, cancellationToken).ConfigureAwait(false);
+
+                // C-09: reject anything whose state does not match the pending request. A
+                // missing state is also a rejection — an injected callback simply omits it.
+                if (!ArcGisOAuth.FixedTimeEquals(callback.State, state))
                 {
-                    listener.Prefixes.Add(redirectUri);
-                    listener.Start();
-
-                    Log.Info("Opening the system browser for ArcGIS sign-in.");
-                    Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
-
-                    var callback = await AwaitCallbackAsync(listener, cancellationToken).ConfigureAwait(false);
-
-                    // C-09: reject anything whose state does not match the pending request. A
-                    // missing state is also a rejection — an injected callback simply omits it.
-                    if (!FixedTimeEquals(callback.State, state))
-                    {
-                        Log.Error("Rejected an OAuth callback whose state did not match the pending request.");
-                        throw new InvalidOperationException(
-                            "The sign-in response did not match this sign-in request and was rejected. "
-                            + "Start sign-in again, and do not follow FeatureLink sign-in links from other applications.");
-                    }
-
-                    if (callback.Error != null)
-                        throw new InvalidOperationException(
-                            $"OAuth error: {callback.ErrorDescription ?? callback.Error}");
-                    if (string.IsNullOrEmpty(callback.Code))
-                        throw new InvalidOperationException("No authorization code received.");
-
-                    var tokens = await ExchangeCodeAsync(_portalUrl, ClientId, callback.Code, codeVerifier,
-                        redirectUri, cancellationToken).ConfigureAwait(false);
-                    ApplyTokens(tokens);
-                    Log.Info("ArcGIS sign-in completed.");
+                    Log.Error("Rejected an OAuth callback whose state did not match the pending request.");
+                    throw new InvalidOperationException(
+                        "The sign-in response did not match this sign-in request and was rejected. "
+                        + "Start sign-in again, and do not follow FeatureLink sign-in links from other applications.");
                 }
-            }
-            finally
-            {
-                _pendingState = null;
+
+                if (callback.Error != null)
+                    throw new InvalidOperationException(
+                        $"OAuth error: {callback.ErrorDescription ?? callback.Error}");
+                if (string.IsNullOrEmpty(callback.Code))
+                    throw new InvalidOperationException("No authorization code received.");
+
+                var tokens = await ArcGisOAuth.ExchangeCodeAsync(_portalUrl, ClientId, callback.Code,
+                    codeVerifier, redirectUri, cancellationToken).ConfigureAwait(false);
+                ApplyTokens(tokens);
+                Log.Info("ArcGIS sign-in completed.");
             }
         }
 
@@ -245,8 +207,8 @@ namespace FeatureLink.Services
                     return _accessToken;
                 if (string.IsNullOrEmpty(_refreshToken)) return null;
 
-                var tokens = await RefreshAccessTokenAsync(_portalUrl, ClientId, _refreshToken, cancellationToken)
-                    .ConfigureAwait(false);
+                var tokens = await ArcGisOAuth.RefreshAccessTokenAsync(_portalUrl, ClientId, _refreshToken,
+                    cancellationToken).ConfigureAwait(false);
                 if (tokens == null) return null;
                 ApplyTokens(tokens);
                 return _accessToken;
@@ -267,7 +229,7 @@ namespace FeatureLink.Services
                 {
                     _refreshToken = null;
                     _accessToken = null;
-                    SettingsStore.ClearTokenState();
+                    ForgetActiveAccount();
                 }
                 return null;
             }
@@ -285,11 +247,14 @@ namespace FeatureLink.Services
             string refreshToken = _refreshToken;
             string portal = _portalUrl;
 
+            // Forget the stored account BEFORE the fields are cleared — the key is derived from
+            // them, and a cleared username keys a different (non-existent) account.
+            ForgetActiveAccount();
+
             _accessToken = null;
             _accessTokenExpiryUtc = DateTime.MinValue;
             _username = null;
             _refreshToken = null;
-            SettingsStore.ClearTokenState();
 
             // Revoke at the portal too: a long-lived credential used to stay valid after the user
             // believed they had signed out. Best-effort and off the UI path.
@@ -309,8 +274,9 @@ namespace FeatureLink.Services
                     ["f"] = "json",
                 };
                 using (var content = new FormUrlEncodedContent(form))
-                using (var response = await Http.PostAsync(
-                    NormalizePortal(portalUrl) + "/sharing/rest/oauth2/revokeToken", content).ConfigureAwait(false))
+                using (var response = await ArcGisOAuth.Http.PostAsync(
+                    ArcGisOAuth.NormalizePortal(portalUrl) + "/sharing/rest/oauth2/revokeToken",
+                    content).ConfigureAwait(false))
                 {
                     Log.Info("Refresh-token revocation returned HTTP " + (int)response.StatusCode + ".");
                 }
@@ -328,153 +294,56 @@ namespace FeatureLink.Services
             if (!string.IsNullOrEmpty(tokens.Username)) _username = tokens.Username;
             if (!string.IsNullOrEmpty(tokens.RefreshToken)) _refreshToken = tokens.RefreshToken;
 
-            SettingsStore.SaveTokenState(new StoredTokenState
+            PersistActiveAccount();
+        }
+
+        /// <summary>Writes this session's account into the stored set as the active one, leaving
+        /// every other account's refresh token alone. A plain overwrite here would delete the
+        /// other accounts on every token refresh — and a refresh happens on a timer.</summary>
+        private void PersistActiveAccount()
+        {
+            string key = ArcGisAccountKey.Make(_portalUrl, _username);
+            var accounts = LoadAccountsExcept(key);
+            accounts.Insert(0, new StoredTokenState
             {
                 PortalUrl = _portalUrl,
                 Username = _username,
                 RefreshToken = _refreshToken,
             });
+            SettingsStore.SaveAccountSet(accounts, key);
         }
 
-        // -------------------------------------------------------------------------
-        // PKCE + state + REST
-        // -------------------------------------------------------------------------
-
-        internal static (string verifier, string challenge) GeneratePkce()
+        /// <summary>Drops this session's account from the stored set. The blob is deleted only
+        /// when it was the last one — otherwise the remaining accounts must survive, and the first
+        /// of them becomes active.</summary>
+        private void ForgetActiveAccount()
         {
-            var bytes = new byte[32];
-            using (var rng = RandomNumberGenerator.Create())
-                rng.GetBytes(bytes);
-            // RFC 7636 §4.1: the verifier is an ASCII string drawn from the unreserved set;
-            // base64url of 32 random bytes satisfies that, which is why ASCII encoding below is
-            // correct rather than incidental. Changing the verifier alphabet would break it.
-            string verifier = Base64UrlEncode(bytes);
-
-            using (var sha256 = SHA256.Create())
+            var remaining = LoadAccountsExcept(ArcGisAccountKey.Make(_portalUrl, _username));
+            if (remaining.Count == 0)
             {
-                var digest = sha256.ComputeHash(Encoding.ASCII.GetBytes(verifier));
-                return (verifier, Base64UrlEncode(digest));
+                SettingsStore.ClearTokenState();
+                return;
             }
+            var first = remaining[0];
+            SettingsStore.SaveAccountSet(remaining,
+                ArcGisAccountKey.Make(first.PortalUrl, first.Username));
         }
 
-        /// <summary>Computes the S256 code challenge for a given verifier. Exposed so the test
-        /// suite can assert against RFC 7636 Appendix B's published vector.</summary>
-        internal static string ComputeCodeChallenge(string verifier)
+        private static List<StoredTokenState> LoadAccountsExcept(string key)
         {
-            using (var sha256 = SHA256.Create())
-                return Base64UrlEncode(sha256.ComputeHash(Encoding.ASCII.GetBytes(verifier)));
-        }
+            var result = new List<StoredTokenState>();
+            var stored = SettingsStore.LoadAccountSet();
+            if (stored == null || stored.Accounts == null) return result;
 
-        /// <summary>256 bits of CSPRNG entropy, base64url-encoded (C-09).</summary>
-        internal static string GenerateStateNonce()
-        {
-            var bytes = new byte[32];
-            using (var rng = RandomNumberGenerator.Create())
-                rng.GetBytes(bytes);
-            return Base64UrlEncode(bytes);
-        }
-
-        /// <summary>Length-and-content comparison that does not short-circuit on the first
-        /// differing character. Overkill for a nonce compared once, but free.</summary>
-        internal static bool FixedTimeEquals(string a, string b)
-        {
-            if (a == null || b == null) return false;
-            if (a.Length != b.Length) return false;
-            int diff = 0;
-            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-            return diff == 0;
-        }
-
-        internal static string Base64UrlEncode(byte[] bytes) =>
-            Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-        internal static string BuildAuthUrl(string portalUrl, string clientId, string codeChallenge,
-            string redirectUri, string state)
-        {
-            return NormalizePortal(portalUrl)
-                + "/sharing/rest/oauth2/authorize"
-                + "?client_id=" + Uri.EscapeDataString(clientId)
-                + "&response_type=code"
-                + "&redirect_uri=" + Uri.EscapeDataString(redirectUri)
-                + "&code_challenge=" + Uri.EscapeDataString(codeChallenge)
-                + "&code_challenge_method=S256"
-                + "&state=" + Uri.EscapeDataString(state);
-        }
-
-        /// <summary>The portal URL is restored from <c>settings.xml</c>/<c>tokens.bin</c>, so a
-        /// tampered file could otherwise turn <c>Process.Start(UseShellExecute=true)</c> into an
-        /// arbitrary protocol-handler invocation (<c>ms-settings:</c>, a UNC path, <c>file:</c>).</summary>
-        internal static void AssertBrowsableHttpsUrl(string url)
-        {
-            Uri uri;
-            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)
-                || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException(
-                    "Refusing to open a non-https sign-in URL. Check the configured ArcGIS portal URL.");
-        }
-
-        private static async Task<OAuthTokens> ExchangeCodeAsync(string portalUrl, string clientId,
-            string code, string codeVerifier, string redirectUri, CancellationToken cancellationToken)
-        {
-            var body = new Dictionary<string, string>
+            foreach (var account in stored.Accounts)
             {
-                ["grant_type"] = "authorization_code",
-                ["client_id"] = clientId,
-                ["code"] = code,
-                ["redirect_uri"] = redirectUri,
-                ["code_verifier"] = codeVerifier,
-            };
-            return await PostForTokensAsync(NormalizePortal(portalUrl) + "/sharing/rest/oauth2/token",
-                body, cancellationToken).ConfigureAwait(false);
-        }
-
-        private static async Task<OAuthTokens> RefreshAccessTokenAsync(string portalUrl, string clientId,
-            string refreshToken, CancellationToken cancellationToken)
-        {
-            var body = new Dictionary<string, string>
-            {
-                ["grant_type"] = "refresh_token",
-                ["client_id"] = clientId,
-                ["refresh_token"] = refreshToken,
-            };
-            return await PostForTokensAsync(NormalizePortal(portalUrl) + "/sharing/rest/oauth2/token",
-                body, cancellationToken).ConfigureAwait(false);
-        }
-
-        private static async Task<OAuthTokens> PostForTokensAsync(string endpoint,
-            Dictionary<string, string> form, CancellationToken cancellationToken)
-        {
-            using (var content = new FormUrlEncodedContent(form))
-            using (var response = await Http.PostAsync(endpoint, content, cancellationToken).ConfigureAwait(false))
-            {
-                string json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    // A 500 with an HTML body used to make the deserializer return null or throw a
-                    // JsonReaderException, surfacing as an opaque message with no status code.
-                    throw new InvalidOperationException(
-                        $"The ArcGIS token endpoint returned HTTP {(int)response.StatusCode} "
-                        + $"({response.ReasonPhrase}).");
-                }
-
-                OAuthTokens tokens;
-                try
-                {
-                    tokens = SafeJson.Deserialize<OAuthTokens>(json);
-                }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException(
-                        "The ArcGIS token endpoint returned a response that was not JSON.", ex);
-                }
-
-                if (tokens == null) throw new InvalidOperationException("Token exchange returned no data");
-                if (!string.IsNullOrEmpty(tokens.Error))
-                    throw new InvalidOperationException(
-                        "OAuth error: " + (tokens.ErrorDescription ?? tokens.Error));
-                return tokens;
+                if (account == null) continue;
+                if (string.Equals(ArcGisAccountKey.Make(account.PortalUrl, account.Username), key,
+                        StringComparison.Ordinal))
+                    continue;
+                result.Add(account);
             }
+            return result;
         }
 
         private static void WriteCallbackResponse(HttpListenerResponse response, bool success)
@@ -532,8 +401,5 @@ namespace FeatureLink.Services
                 "No available loopback port for OAuth redirect capture. On a locked-down Windows "
                 + "image this usually means an HTTP URL reservation is required — see the README.");
         }
-
-        internal static string NormalizePortal(string url) =>
-            string.IsNullOrWhiteSpace(url) ? ArcGisFeatureService.DefaultPortalUrl : url.Trim().TrimEnd('/');
     }
 }

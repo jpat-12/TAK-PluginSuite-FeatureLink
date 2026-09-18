@@ -41,6 +41,26 @@ namespace FeatureLink.Models
 
         public bool IsPrivate => Type == "private";
 
+        private string _ownerAccountKey;
+        /// <summary>Which signed-in ArcGIS account owns this layer, and therefore whose token
+        /// syncs it once more than one account can be signed in at a time.
+        ///
+        /// <para>Null means UNBOUND: public layers, layers persisted by a build from before
+        /// multi-account existed, and layers received while signed out.</para>
+        ///
+        /// <para>It is <b>this</b> field — not <see cref="IsPrivate"/> — that selects the token.
+        /// <see cref="IsPrivate"/> is unchanged and remains the public/private classification, but
+        /// with several accounts signed in "private" no longer answers <i>whose</i> token, so it is
+        /// no longer sufficient on its own.</para>
+        ///
+        /// <para>The value is an opaque key of the form <c>portalUrl|username</c>. Do not parse it
+        /// here; only compare and store it.</para></summary>
+        public string OwnerAccountKey
+        {
+            get => _ownerAccountKey;
+            set { _ownerAccountKey = value; RaisePropertyChanged(); }
+        }
+
         private string _access = "org";
         /// <summary>ArcGIS portal sharing scope for a "My ArcGIS Layers" browse item: "public"
         /// (shared to Everyone), "org", or "private". Only meaningful for items returned by
@@ -49,6 +69,21 @@ namespace FeatureLink.Models
         /// SharedPrivateLayers. Layers added via URL or received via a share default to "org"
         /// since there's no portal item to ask.</summary>
         public string Access { get => _access; set { _access = value; RaisePropertyChanged(); } }
+
+        private bool _largeDownloadAccepted;
+        /// <summary>The operator has already agreed to sync this layer despite its size, so the
+        /// "large layer" prompt must not appear again for it.
+        ///
+        /// <para>Persisted deliberately. The prompt fires on feature count, and a layer over the
+        /// threshold is over it on every single sync — including every recurrence tick — so
+        /// without a remembered answer a 15-second recurrence turns one reasonable question into
+        /// a modal dialog that reappears forever. The decision is the operator's and it is made
+        /// once.</para></summary>
+        public bool LargeDownloadAccepted
+        {
+            get => _largeDownloadAccepted;
+            set { _largeDownloadAccepted = value; RaisePropertyChanged(); }
+        }
 
         private bool _hasDisplayConfig;
         /// <summary>Whether a display config (icons/colors/labels/popups) is attached — set from
@@ -211,7 +246,11 @@ namespace FeatureLink.Models
                 new XElement("Url", Url ?? string.Empty),
                 new XElement("Type", Type ?? "public"),
                 new XElement("Access", Access ?? "org"),
+                // Empty element for an unbound layer, read back as null by NullIfEmpty, so a
+                // round-trip of a public/legacy layer is stable rather than turning null into "".
+                new XElement("OwnerAccountKey", OwnerAccountKey ?? string.Empty),
                 new XElement("HasDisplayConfig", HasDisplayConfig),
+                new XElement("LargeDownloadAccepted", LargeDownloadAccepted),
                 new XElement("SymJson", SymJson ?? string.Empty),
                 new XElement("LblJson", LblJson ?? string.Empty),
                 new XElement("PopupJson", PopupJson ?? string.Empty),
@@ -240,7 +279,10 @@ namespace FeatureLink.Models
                 Url = Text(el, "Url") ?? string.Empty,
                 Type = Text(el, "Type") ?? "public",
                 Access = Text(el, "Access") ?? "org",
+                // Absent (a settings.xml written before multi-account) and empty both mean unbound.
+                OwnerAccountKey = NullIfEmpty(Text(el, "OwnerAccountKey")),
                 HasDisplayConfig = Bool(el, "HasDisplayConfig", false),
+                LargeDownloadAccepted = Bool(el, "LargeDownloadAccepted", false),
                 SymJson = NullIfEmpty(Text(el, "SymJson")),
                 LblJson = NullIfEmpty(Text(el, "LblJson")),
                 PopupJson = NullIfEmpty(Text(el, "PopupJson")),

@@ -25,21 +25,30 @@
 #     VERSION file, which is the single source of truth (VERSIONING.md §1). A release
 #     cannot introduce a version that CI has not already validated.
 #
-# Also fixed: the old workflows both ran `gh release create "v${version}"`, so releasing
-# 5.7 at a version already released for 5.6 — which identical PLUGIN_VERSION strings made
-# the default case — would have collided on the tag or overwritten the 5.6 release. Tags
-# are now namespaced per target (VERSIONING.md §4).
+# Also fixed: the old workflows both ran `gh release create "v${version}"` from two
+# INDEPENDENT workflows, so releasing 5.7 at a version already released for 5.6 — which
+# identical PLUGIN_VERSION strings made the default case — would have collided on the tag
+# or overwritten the 5.6 release.
+#
+# WHY ONE TAG, NOT ONE PER TARGET (VERSIONING.md §4)
+# --------------------------------------------------
+# That collision was a concurrency defect: two workflows racing for one tag. It is fixed by
+# there being ONE workflow that publishes ONE release carrying every artifact as a separate
+# asset — not by giving each artifact its own tag. Per-target tags were tried and did no
+# work: `Collect release assets` below globs every .apk/.wpk in the CI output and never
+# filtered on the target, so all four per-target releases carried byte-identical assets,
+# differing only in name. Four dispatches, four tags, four releases, one set of files.
+#
+# Disambiguating WHICH BUILD IS THIS is section 2's job, not the tag's: each target carries
+# a distinct applicationId, a versionName with SemVer build metadata (2.7.0+atak5.6), and a
+# distinct archivesBaseName. Those travel inside the installed package, where an operator
+# and a crash report can actually read them. A tag name does not.
 
 name: Release
 
 on:
   workflow_dispatch:
     inputs:
-      target:
-        description: 'Which artifact to release'
-        required: true
-        type: choice
-        options: [atak5.6, atak5.7, wintak5.6, wintak5.7]
       release_notes:
         description: 'Release notes (plain text; treated as untrusted data)'
         required: false
@@ -76,8 +85,6 @@ jobs:
       # therefore no untrusted value anywhere near the build script.
       - name: Resolve and validate the version
         id: v
-        env:
-          TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
@@ -85,15 +92,8 @@ jobs:
             echo "::error::VERSION contains '$version', which is not MAJOR.MINOR.PATCH."
             exit 1
           fi
-          # $TARGET is a `choice` input, so GitHub constrains it to the declared options —
-          # but it is re-validated here rather than trusted, because a workflow that is
-          # correct only because of a UI constraint is one refactor away from being wrong.
-          case "$TARGET" in
-            atak5.6|atak5.7|wintak5.6|wintak5.7) ;;
-            *) echo "::error::unrecognised target '$TARGET'"; exit 1 ;;
-          esac
-          echo "version=$version"        >> "$GITHUB_OUTPUT"
-          echo "tag=v${version}-${TARGET}" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}"  >> "$GITHUB_OUTPUT"
 
       # A release must not be cuttable from a tree that violates the version policy — that
       # is how nine artifacts shipped with a frozen versionCode.
@@ -121,7 +121,7 @@ jobs:
       contents: read
 
   publish:
-    name: Publish ${{ inputs.target }}
+    name: Publish
     needs: [validate, sbom]
     runs-on: ubuntu-latest
     permissions:
@@ -175,7 +175,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.validate.outputs.tag }}
           VERSION: ${{ needs.validate.outputs.version }}
-          TARGET: ${{ inputs.target }}
           # THE FIX FOR INJECTION #1. The untrusted release notes arrive as an environment
           # variable and are referenced as "$RELEASE_NOTES". They are never expanded into
           # the script text by GitHub before the shell parses it, so no value of this input
@@ -188,7 +187,7 @@ jobs:
           if [ -n "$RELEASE_NOTES" ]; then
             printf '%s\n' "$RELEASE_NOTES" > "$notes_file"
           else
-            printf 'FeatureLink %s (%s)\n' "$VERSION" "$TARGET" > "$notes_file"
+            printf 'FeatureLink %s\n' "$VERSION" > "$notes_file"
           fi
           {
             echo
@@ -204,7 +203,10 @@ jobs:
             echo 'SECURITY.md for the supported-version window.'
           } >> "$notes_file"
 
-          args=(--title "FeatureLink ${VERSION} (${TARGET})" --notes-file "$notes_file")
+          # --target pins the tag to the exact commit that was built. Without it `gh` creates
+          # the tag on the default branch's HEAD, which is whatever main happens to be when
+          # the workflow runs — not necessarily the tree these artifacts came from.
+          args=(--title "FeatureLink ${VERSION}" --target "$GITHUB_SHA" --notes-file "$notes_file")
           if [ "$PRERELEASE" = "true" ]; then args+=(--prerelease); fi
 
           gh release create "$TAG" "${args[@]}" release/*

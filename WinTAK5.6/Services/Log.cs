@@ -27,10 +27,37 @@ namespace FeatureLink.Services
         private static readonly object FileLock = new object();
         private static string _logPath;
         private static bool _fileLoggingFailed;
+        private static StreamWriter _writer;
+        private static long _bytesWritten;
 
         /// <summary>Set to false in tests (or by an operator preference) to keep everything in
         /// the TraceSource only.</summary>
         public static bool FileLoggingEnabled { get; set; } = true;
+
+        /// <summary>Directory the rolling log is written to. Null means the default,
+        /// <c>%AppData%\WinTAK\FeatureLink</c>.
+        ///
+        /// <para>Settable for two reasons: an operator on a locked-down or roaming profile may
+        /// need the log somewhere else, and the roll behaviour is otherwise untestable — it is
+        /// the part of this class most likely to break, and it handles a file handle across a
+        /// rename. Assigning closes the current writer, so the next line opens under the new
+        /// path.</para></summary>
+        public static string LogDirectory
+        {
+            get => _logDirectory;
+            set
+            {
+                lock (FileLock)
+                {
+                    _logDirectory = value;
+                    _logPath = null;
+                    _fileLoggingFailed = false;
+                    CloseWriterQuietly();
+                }
+            }
+        }
+
+        private static string _logDirectory;
 
         public static void Info(string message) => Write(TraceEventType.Information, message, null);
 
@@ -66,6 +93,22 @@ namespace FeatureLink.Services
         private static readonly Regex BearerValue = new Regex(
             @"Bearer\s+[A-Za-z0-9\-\._~\+/=]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        /// <summary>
+        /// Appends one line to the rolling log file.
+        ///
+        /// <para>This used to be <c>File.AppendAllText</c> — an open, write, flush and close for
+        /// every single line — preceded by a <c>FileInfo</c> stat to check the roll threshold, all
+        /// under a process-wide lock. That is fine at the rate a UI produces messages, and badly
+        /// wrong on the download path, where a systematic per-feature warning turns a
+        /// 50,000-feature sync into 50,000 handle open/close cycles and 50,000 directory stats on
+        /// the thread doing the work. The scenario where diagnostics matter most — a large layer
+        /// misbehaving — was exactly the scenario where the log sink became the bottleneck.</para>
+        ///
+        /// <para>The writer is now held open with <see cref="StreamWriter.AutoFlush"/> on, so a
+        /// line still reaches disk immediately (a crash log is worthless if the tail is buffered
+        /// away) while the handle and the path resolution are paid once. The roll threshold is
+        /// tracked with a counter rather than re-stated per line.</para>
+        /// </summary>
         private static void AppendToFile(string line)
         {
             if (!FileLoggingEnabled || _fileLoggingFailed) return;
@@ -73,24 +116,13 @@ namespace FeatureLink.Services
             {
                 lock (FileLock)
                 {
-                    if (_logPath == null)
-                    {
-                        string dir = Path.Combine(
-                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                            "WinTAK", "FeatureLink");
-                        Directory.CreateDirectory(dir);
-                        _logPath = Path.Combine(dir, "featurelink.log");
-                    }
+                    if (_writer == null && !OpenWriter()) return;
 
-                    var info = new FileInfo(_logPath);
-                    if (info.Exists && info.Length > MaxLogBytes)
-                    {
-                        string rolled = _logPath + ".1";
-                        try { if (File.Exists(rolled)) File.Delete(rolled); } catch { }
-                        try { File.Move(_logPath, rolled); } catch { }
-                    }
+                    _writer.WriteLine(line);
 
-                    File.AppendAllText(_logPath, line + Environment.NewLine);
+                    // +2 covers the newline; exactness does not matter for a roll threshold.
+                    _bytesWritten += line.Length + 2;
+                    if (_bytesWritten > MaxLogBytes) Roll();
                 }
             }
             catch
@@ -98,7 +130,70 @@ namespace FeatureLink.Services
                 // Read-only profile, AV lock, roaming-profile hiccup — stop trying rather than
                 // throwing out of a logging call on every subsequent operation.
                 _fileLoggingFailed = true;
+                CloseWriterQuietly();
             }
+        }
+
+        /// <summary>Opens the log for append. Returns false (and disables file logging) when the
+        /// location is not writable at all.</summary>
+        private static bool OpenWriter()
+        {
+            try
+            {
+                if (_logPath == null)
+                {
+                    string dir = _logDirectory ?? Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "WinTAK", "FeatureLink");
+                    Directory.CreateDirectory(dir);
+                    _logPath = Path.Combine(dir, "featurelink.log");
+                }
+
+                var info = new FileInfo(_logPath);
+                _bytesWritten = info.Exists ? info.Length : 0;
+
+                _writer = new StreamWriter(
+                    new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+                {
+                    AutoFlush = true,
+                };
+                return true;
+            }
+            catch
+            {
+                _fileLoggingFailed = true;
+                return false;
+            }
+        }
+
+        /// <summary>Rotates featurelink.log to featurelink.log.1 and starts a fresh file. Called
+        /// with <see cref="FileLock"/> held.</summary>
+        private static void Roll()
+        {
+            CloseWriterQuietly();
+            try
+            {
+                string rolled = _logPath + ".1";
+                if (File.Exists(rolled)) File.Delete(rolled);
+                File.Move(_logPath, rolled);
+            }
+            catch { /* another process holds it — keep appending to the current file instead */ }
+
+            _bytesWritten = 0;
+            OpenWriter();
+        }
+
+        private static void CloseWriterQuietly()
+        {
+            try { _writer?.Dispose(); } catch { }
+            _writer = null;
+        }
+
+        /// <summary>Releases the log handle. Call from the plugin's dispose path so the file is
+        /// not held open by a pane that has gone away.</summary>
+        public static void Shutdown()
+        {
+            lock (FileLock) CloseWriterQuietly();
         }
     }
 }

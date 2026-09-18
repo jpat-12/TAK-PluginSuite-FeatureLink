@@ -82,6 +82,18 @@ namespace FeatureLink.ViewModels
         /// <summary>Schema version this build writes and is willing to read.</summary>
         private const int ShareSchemaVersion = 2;
 
+        /// <summary>Feature count above which the operator is asked to confirm a download, and the
+        /// count above which it is refused outright.
+        ///
+        /// <para><b>SME-UNCONFIRMED.</b> These two numbers are engineering estimates, not values
+        /// anyone has validated against a fielded workstation or a CAP mission profile. They exist
+        /// because the previous behaviour — no ceiling at all, up to the client's own
+        /// 5,000-page × 1,000-row limit — froze the application with no warning. A wrong-but-stated
+        /// limit is recoverable; no limit is not. Confirm both with an operator who has run a large
+        /// layer on target hardware, then delete this paragraph.</para></summary>
+        private const long LargeDownloadPromptThreshold = 5000;
+        private const long MaxDownloadableFeatures = 50000;
+
         // ── Injected services ────────────────────────────────────────────────────
 
         private readonly ICotMessageSender _cotSender;
@@ -514,7 +526,7 @@ namespace FeatureLink.ViewModels
             var ex = task.Exception?.GetBaseException();
             if (ex is OperationCanceledException) return;
             Log.Error($"Unhandled failure during {operation}.", ex);
-            SetStatus($"{Capitalize(operation)} failed: {Describe(ex)}");
+            SetStatus(ErrorText.WithContext(Capitalize(operation) + " failed", ex, IsAuthenticated));
         }
 
         /// <summary>Synchronous counterpart of <see cref="RunGuarded"/> for command handlers that
@@ -525,24 +537,22 @@ namespace FeatureLink.ViewModels
             catch (Exception ex)
             {
                 Log.Error($"Unhandled failure during {operation}.", ex);
-                SetStatus($"{Capitalize(operation)} failed: {Describe(ex)}");
+                SetStatus(ErrorText.WithContext(Capitalize(operation) + " failed", ex, IsAuthenticated));
             }
         }
 
         private static string Capitalize(string s) =>
             string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
 
-        /// <summary>Turns an exception into something an operator can act on. A typed
-        /// <see cref="ArcGisServiceException"/> already carries the ArcGIS reason.</summary>
-        private static string Describe(Exception ex)
-        {
-            if (ex == null) return "unknown error";
-            var arc = ex as ArcGisServiceException;
-            if (arc != null)
-                return arc.IsAuthFailure ? arc.Message + " (sign in again)" : arc.Message;
-            if (ex is TaskCanceledException || ex is TimeoutException) return "the operation timed out";
-            return ex.Message;
-        }
+        /// <summary>Turns an exception into something an operator can act on.
+        ///
+        /// <para>This used to hand the raw ArcGIS wording straight to the status bar, plus a bare
+        /// "(sign in again)" for every auth failure — advice that is actively wrong when the
+        /// operator is already signed in and the layer simply is not shared with them. All of the
+        /// mapping now lives in <see cref="ErrorText"/>, which is pure logic and unit-tested;
+        /// this method only supplies the one piece of context ErrorText cannot know, namely
+        /// whether there is a live ArcGIS session.</para></summary>
+        private string Describe(Exception ex) => ErrorText.ForOperator(ex, IsAuthenticated);
 
         /// <summary>Every status assignment goes through here so it is always marshalled to the
         /// dispatcher and always logged. Assignments used to be made directly from background
@@ -695,6 +705,7 @@ namespace FeatureLink.ViewModels
             to.LastSyncTicks = from.LastSyncTicks;
             to.Visible = from.Visible;
             to.HasDisplayConfig = from.HasDisplayConfig;
+            to.LargeDownloadAccepted = from.LargeDownloadAccepted;
             to.SymJson = from.SymJson;
             to.LblJson = from.LblJson;
             to.PopupJson = from.PopupJson;
@@ -772,8 +783,50 @@ namespace FeatureLink.ViewModels
             try
             {
                 var ct = LinkedToken(OperationTimeout, out cts);
-                var layer = await _restClient.FetchLayerInfoAsync(url, null, ct).ConfigureAwait(false);
-                layer.Type = "public";
+
+                // Try anonymously FIRST, because that is what actually determines whether the
+                // layer is public — not what the operator believes about it.
+                //
+                // This used to pass a null token unconditionally, so "Add Layer" was permanently
+                // anonymous even while the operator was signed in. Pasting the URL of a layer in
+                // your OWN ArcGIS organisation therefore failed with ArcGIS 499 "Token Required",
+                // reported as the bare "Could not load layer from URL: Token Required" — which
+                // reads as a broken URL, not as "you need to be signed in for this one". The
+                // operator's only recourse was the browse list, and nothing said so.
+                ArcGisLayer layer;
+                bool neededAuth = false;
+                try
+                {
+                    layer = await _restClient.FetchLayerInfoAsync(url, null, ct).ConfigureAwait(false);
+                }
+                catch (ArcGisServiceException ex) when (ex.IsAuthFailure)
+                {
+                    if (!IsAuthenticated)
+                    {
+                        // Not signed in and the service wants a token: say precisely that, rather
+                        // than letting the raw ArcGIS wording stand.
+                        SetStatus("That layer is not public — sign in to ArcGIS first, then add it.");
+                        return;
+                    }
+
+                    string token = await _authService.GetTokenAsync(ct).ConfigureAwait(false);
+                    if (token == null)
+                    {
+                        SetStatus("That layer requires sign-in, and the ArcGIS session has expired — sign in again.");
+                        return;
+                    }
+
+                    Log.Info("Add Layer: anonymous fetch was refused; retrying with the signed-in token.");
+                    layer = await _restClient.FetchLayerInfoAsync(url, token, ct).ConfigureAwait(false);
+                    neededAuth = true;
+                }
+
+                // Classify by what the service actually required. A layer that only loads with a
+                // token is not a public layer, and filing it as one would make every later sync
+                // fetch it anonymously and fail exactly the same way. (IsPrivate is computed from
+                // Type, and it is what DownloadLayerAsync consults to decide whether to attach a
+                // token — so this assignment is what makes recurring syncs keep working.)
+                layer.Type = neededAuth ? "private" : "public";
 
                 await DownloadLayerAsync(layer).ConfigureAwait(false);
 
@@ -781,7 +834,10 @@ namespace FeatureLink.ViewModels
                 // a permanently marker-less layer in the operator's list.
                 RunOnUi(() =>
                 {
-                    PublicLayers.Add(layer);
+                    // A layer that needed a token belongs with the other on-device non-public
+                    // layers, not in the Public list where it would be fetched anonymously.
+                    if (neededAuth) SharedPrivateLayers.Add(layer);
+                    else PublicLayers.Add(layer);
                     NewPublicLayerUrl = string.Empty;
                     RaisePropertyChanged(nameof(StatusLayersText));
                     HideOverlay();
@@ -793,7 +849,7 @@ namespace FeatureLink.ViewModels
             catch (Exception ex)
             {
                 Log.Error("Add layer failed for " + Log.Redact(url), ex);
-                SetStatus("Could not load layer from URL: " + Describe(ex));
+                SetStatus(ErrorText.WithContext("Could not add that layer", ex, IsAuthenticated));
             }
             finally { cts?.Dispose(); }
         }
@@ -1286,7 +1342,7 @@ namespace FeatureLink.ViewModels
             SaveSettings();
         }
 
-        private async Task DownloadLayerAsync(ArcGisLayer layer)
+        private async Task DownloadLayerAsync(ArcGisLayer layer, bool interactive = true)
         {
             if (layer == null || string.IsNullOrEmpty(layer.Url)) return;
 
@@ -1316,6 +1372,9 @@ namespace FeatureLink.ViewModels
 
                 await ResolveSymbologyAsync(layer, token, ct).ConfigureAwait(false);
 
+                if (!await ConfirmDownloadSizeAsync(layer, token, ct, interactive).ConfigureAwait(false))
+                    return;
+
                 var download = await _restClient
                     .DownloadLayerAsCotAsync(layer.Url, token, null, ct).ConfigureAwait(false);
 
@@ -1338,6 +1397,7 @@ namespace FeatureLink.ViewModels
 
                 var uids = new List<string>(download.Features.Count);
                 int shapeStyled = 0;
+                var tally = new PostTally();
                 foreach (var f in download.Features)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -1365,7 +1425,8 @@ namespace FeatureLink.ViewModels
                         }
                     }
 
-                    PostFeatureAsCot(f, layer.Visible, staleness, iconsetPath, color, label, remarks);
+                    await PostFeatureAsCotAsync(f, layer.Visible, staleness, iconsetPath, color, label,
+                        remarks, tally).ConfigureAwait(false);
                     uids.Add(f.Uid);
                     previousUids.Remove(f.Uid);
                 }
@@ -1403,6 +1464,11 @@ namespace FeatureLink.ViewModels
                 if (download.Truncated) summary += " — TRUNCATED, not all features were downloaded.";
 
                 Log.Info(summary);
+
+                // One line for the whole layer instead of one per affected feature.
+                if (tally.Any)
+                    Log.Warn($"\"{layer.Name}\" sync had problem features: {tally.Describe()}.");
+
                 RunOnUi(() =>
                 {
                     StatusText = summary;
@@ -1449,17 +1515,33 @@ namespace FeatureLink.ViewModels
                     return;
                 }
 
+                // Picture-marker (esriPMS) symbols carry embedded bitmaps and need a real iconset
+                // installed before a marker can reference one. That is what used to dead-end here
+                // with "this build cannot translate" — the renderer was understood perfectly well,
+                // there was simply nothing on WinTAK that could create the icons. Try that first,
+                // because an icon beats a coloured dot whenever the layer publishes one.
+                bool iconsResolved = TryResolveIconset(layer, meta);
+
                 var extracted = AutoSymbology.Extract(meta.Renderer);
                 if (extracted.IsEmpty)
                 {
-                    Log.Info($"Layer \"{layer.Name}\" has a renderer this build cannot translate "
-                             + "(picture-marker-only renderers need an installed iconset).");
+                    if (!iconsResolved)
+                        Log.Info($"Layer \"{layer.Name}\" publishes a renderer this build cannot "
+                                 + "translate into either icons or colours — default styling applies.");
                     return;
                 }
 
-                if (string.IsNullOrEmpty(layer.SymJson))
+                // Icons win over the colour/shape fallback, matching ATAK's precedence.
+                if (string.IsNullOrEmpty(layer.SymJson) && !iconsResolved)
                     layer.AutoSymJson = DisplayStyleResolver.BuildMarkerSymConfigJson(extracted)
                         ?.ToString(Newtonsoft.Json.Formatting.None);
+
+                // The Config/No Config badge binds to HasDisplayConfig, which was only ever set on
+                // the share-import path — so a layer whose styling we derived from its OWN
+                // renderer still reported "No Config". The badge is the operator's only signal
+                // that symbology resolved, so it has to reflect auto-derived config too.
+                if (!string.IsNullOrEmpty(layer.AutoSymJson))
+                    RunOnUi(() => layer.HasDisplayConfig = true);
 
                 if (string.IsNullOrEmpty(layer.ShpJson))
                 {
@@ -1479,14 +1561,203 @@ namespace FeatureLink.ViewModels
             }
         }
 
+        /// <summary>
+        /// Generates and installs an iconset from the layer's own picture-marker renderer, and
+        /// points the layer's symbology config at it. Returns true when icons are available.
+        ///
+        /// <para>This is the step WinTAK never had. The resolver and the CoT emitter could already
+        /// carry an <c>iconsetpath</c>; nothing ever created the set it named, so every
+        /// <c>esriPMS</c> layer fell back to default markers and said so in the log once per
+        /// sync.</para>
+        ///
+        /// <para>Never throws and never fails a download — symbology is an enhancement. A failure
+        /// leaves <c>AutoSymJson</c> alone so the colour/shape path can still apply.</para>
+        /// </summary>
+        private bool TryResolveIconset(ArcGisLayer layer, LayerInfo meta)
+        {
+            try
+            {
+                string canonical = AutoIconset.Canonicalize(layer.Url);
+                var icons = AutoIconset.ExtractPictureSymbols(meta.Renderer);
+
+                if (icons.IsEmpty)
+                {
+                    if (icons.UnsupportedSymbols > 0)
+                        Log.Info($"Layer \"{layer.Name}\" uses {icons.UnsupportedSymbols} CIM symbol(s), "
+                                 + "which no TAK platform can render; falling back to colour styling.");
+                    return false;
+                }
+
+                // The naming source is the FeatureServer layer's own name, never the operator's
+                // local label for it — every platform must derive the same group string.
+                string group = AutoIconset.GroupFor(meta.Name ?? layer.Name);
+                string uid = AutoIconset.Uid(canonical, icons.Field ?? string.Empty);
+
+                byte[] zip = AutoIconset.BuildZipBytes(uid, group, icons.Symbols);
+
+                string zipPath;
+                if (!IconsetInstaller.Install(uid, group, zip, out zipPath)) return false;
+
+                var sym = AutoIconset.BuildIconSymConfig(uid, group, icons);
+                if (sym == null) return false;
+
+                layer.AutoSymJson = sym.ToString(Newtonsoft.Json.Formatting.None);
+                RunOnUi(() => layer.HasDisplayConfig = true);
+
+                SetStatus($"Icons ready for \"{layer.Name}\" — {icons.Symbols.Count} symbol(s).");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Could not build an iconset for \"{layer.Name}\": {ErrorText.ForOperator(ex)}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Pre-flight size guard for a layer download.
+        ///
+        /// <para><c>ArcGisFeatureService</c> pages correctly, but its own ceiling is
+        /// <c>MaxPages</c> × <c>DefaultPageSize</c> — millions of features, every one of which
+        /// becomes an individual CoT marker on the map. Nothing consulted the layer's feature
+        /// count before starting, even though <c>QueryFeatureCountAsync</c> already existed and
+        /// was already being called to populate the Home tab's statistics. Pointing Add Layer at a
+        /// county parcel or national hydrography service therefore froze the workstation with no
+        /// warning and no way out short of the operation timeout.</para>
+        ///
+        /// <para>Returns false when the download must not proceed. A count that cannot be obtained
+        /// is NOT treated as a refusal — some valid services do not answer
+        /// <c>returnCountOnly</c>, and failing closed there would break working layers. In that
+        /// case the download proceeds and the service's own
+        /// <c>exceededTransferLimit</c>/<c>Truncated</c> path remains the backstop.</para>
+        /// </summary>
+        private async Task<bool> ConfirmDownloadSizeAsync(ArcGisLayer layer, string token, CancellationToken ct,
+            bool interactive)
+        {
+            long count;
+            try
+            {
+                count = await _restClient.QueryFeatureCountAsync(layer.Url, token, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                // Fail OPEN, loudly. See the remarks above.
+                Log.Warn($"Could not pre-check the feature count for \"{layer.Name}\" "
+                         + $"({Describe(ex)}); proceeding with the download.");
+                return true;
+            }
+
+            if (count > MaxDownloadableFeatures)
+            {
+                string refusal =
+                    $"\"{layer.Name}\" contains {count:N0} features, over this plugin's limit of "
+                    + $"{MaxDownloadableFeatures:N0}.\n\nPlotting that many markers would make the map "
+                    + "unusable. Filter the layer at the source, or publish a smaller view of it.";
+                Log.Warn($"Refused to download \"{layer.Name}\": {count} features exceeds the "
+                         + $"{MaxDownloadableFeatures} hard cap.");
+                SetStatus($"\"{layer.Name}\" has {count:N0} features — too many to plot (limit {MaxDownloadableFeatures:N0}).");
+                await RunOnUiAsync(() => { DialogService.Inform(refusal, "Layer too large"); return true; })
+                    .ConfigureAwait(false);
+                return false;
+            }
+
+            if (count > LargeDownloadPromptThreshold)
+            {
+                // Asked once per layer, ever. A layer over the threshold is over it on every sync,
+                // so prompting per download turned one reasonable question into a modal that
+                // reappeared on every recurrence tick.
+                if (layer.LargeDownloadAccepted) return true;
+
+                // A background refresh must never raise a modal dialog. The operator did not ask
+                // for anything, is probably looking at something else, and a timer-driven prompt
+                // steals focus from the map during an incident. Skip the sync instead and say so
+                // in the status line, where it can be acted on when convenient.
+                if (!interactive)
+                {
+                    Log.Info($"Skipping the scheduled refresh of \"{layer.Name}\" ({count} features): "
+                             + "over the large-layer threshold and not yet approved by the operator.");
+                    SetStatus($"\"{layer.Name}\" ({count:N0} features) needs approval — press sync to download it.");
+                    return false;
+                }
+
+                string question =
+                    $"\"{layer.Name}\" contains {count:N0} features.\n\n"
+                    + "Each one is plotted as a separate marker, so a layer this size will take a "
+                    + "while to sync and may slow the map down.\n\n"
+                    + "Download it anyway? This is remembered for this layer.";
+                bool proceed = await RunOnUiAsync(() => DialogService.Confirm(question, "Large layer")).ConfigureAwait(false);
+                if (!proceed)
+                {
+                    Log.Info($"Operator declined the {count}-feature download of \"{layer.Name}\".");
+                    SetStatus($"Sync of \"{layer.Name}\" ({count:N0} features) was cancelled.");
+                    return false;
+                }
+
+                Log.Info($"Operator accepted the {count}-feature download of \"{layer.Name}\"; "
+                         + "not asking again for this layer.");
+                RunOnUi(() => { layer.LargeDownloadAccepted = true; SaveSettings(); });
+            }
+
+            return true;
+        }
+
         /// <summary>Converts one downloaded ArcGIS feature into a CoT event and injects it onto the
-        /// WinTAK map. Colour is applied post-creation via WinTak.Graphics.MapMarker.Color.</summary>
-        private void PostFeatureAsCot(DownloadedFeature f, bool visible, TimeSpan staleness,
-            string iconsetPath = null, Color? color = null, string label = null, string remarks = null)
+        /// WinTAK map. Colour is applied post-creation via WinTak.Graphics.MapMarker.Color.
+        ///
+        /// <para>Awaits <c>ICotMessageSender.ProcessAsync</c> rather than calling the <c>void</c>
+        /// <c>Process</c> overload. The void form gives no completion signal and no success
+        /// signal, so the immediately-following <c>GetMapItem(uid)</c> raced marker creation:
+        /// when it lost, <c>Visible</c> and <c>Color</c> were silently never applied and the
+        /// operator saw markers for a layer they had toggled hidden, or default-coloured markers
+        /// for a styled layer — intermittently, which is the worst way for a tactical display to
+        /// be wrong. <c>ProcessAsync</c> returns <c>Task&lt;bool&gt;</c>; both the ordering and
+        /// the discarded failure signal are now honoured.</para>
+        ///
+        /// <para>These SDK types do NOT require the dispatcher: <c>MapItem</c> derives from
+        /// <c>WinTak.Framework.PropertyChangedBase</c> (→ <c>object</c>), with no
+        /// <c>DispatcherObject</c>/<c>DependencyObject</c> anywhere in the chain, so there is no
+        /// <c>VerifyAccess()</c> affinity to violate by mutating them from the download's
+        /// thread-pool continuation. Verified against the 5.6.0.151 assemblies.</para></summary>
+        /// <summary>
+        /// Per-download tally of the conditions that used to emit one log line per feature.
+        ///
+        /// A systematic fault — a layer whose geometry is all out of range, a display config whose
+        /// iconset paths are all malformed — produced one identical warning for every feature in
+        /// the layer. That buries the rest of the log, and it is strictly less useful to a support
+        /// engineer than a single line saying how many. Counted here, reported once by
+        /// <see cref="DownloadLayerAsync"/>.
+        /// </summary>
+        private sealed class PostTally
+        {
+            public int OutOfRange;
+            public int Rejected;
+            public int NotMaterialised;
+            public int StyleFailed;
+            public int UnsafeIconset;
+
+            public bool Any => OutOfRange + Rejected + NotMaterialised + StyleFailed + UnsafeIconset > 0;
+
+            public string Describe()
+            {
+                var parts = new List<string>(5);
+                if (OutOfRange > 0) parts.Add($"{OutOfRange} with out-of-range coordinates");
+                if (Rejected > 0) parts.Add($"{Rejected} rejected by WinTAK");
+                if (NotMaterialised > 0) parts.Add($"{NotMaterialised} with no map item after ProcessAsync");
+                if (StyleFailed > 0) parts.Add($"{StyleFailed} whose visibility/colour could not be applied");
+                if (UnsafeIconset > 0) parts.Add($"{UnsafeIconset} with an unsafe iconset path dropped");
+                return string.Join(", ", parts);
+            }
+        }
+
+        private async Task PostFeatureAsCotAsync(DownloadedFeature f, bool visible, TimeSpan staleness,
+            string iconsetPath = null, Color? color = null, string label = null, string remarks = null,
+            PostTally tally = null)
         {
             if (!ArcGisFeatureService.IsPlottable(f.Lat, f.Lon))
             {
-                Log.Warn($"Refusing to plot feature {f.Uid}: coordinates out of range.");
+                if (tally != null) tally.OutOfRange++;
+                else Log.Warn($"Refusing to plot feature {f.Uid}: coordinates out of range.");
                 return;
             }
 
@@ -1525,7 +1796,8 @@ namespace FeatureLink.ViewModels
                 }
                 else
                 {
-                    Log.Warn("Dropped an unsafe iconsetpath from a display config.");
+                    if (tally != null) tally.UnsafeIconset++;
+                    else Log.Warn("Dropped an unsafe iconsetpath from a display config.");
                 }
             }
 
@@ -1543,8 +1815,18 @@ namespace FeatureLink.ViewModels
                 qos: null,
                 access: null);
 
-            // Always post (create) the marker, then set its live Visible via IMapItemFinderService.
-            _cotSender.Process(cotEvent);
+            // Post (create) the marker and WAIT for the host to have processed it, then set its
+            // live Visible/Color via IMapItemFinderService.
+            bool accepted = await _cotSender.ProcessAsync(cotEvent).ConfigureAwait(false);
+            if (!accepted)
+            {
+                // The void Process() overload discarded this entirely, so a marker the host
+                // refused simply never appeared and nothing anywhere said so.
+                if (tally != null) tally.Rejected++;
+                else Log.Warn($"WinTAK did not accept the CoT event for feature {f.Uid}; no marker was created.");
+                return;
+            }
+
             if (!visible || color.HasValue)
             {
                 try
@@ -1552,10 +1834,13 @@ namespace FeatureLink.ViewModels
                     var item = _mapItemFinder?.GetMapItem(f.Uid);
                     if (item == null)
                     {
-                        // Process() may not have materialised the item yet. Log it rather than
-                        // silently skipping visibility/colour, which is what used to happen.
-                        Log.Warn($"Map item {f.Uid} was not available immediately after Process(); "
-                                 + "visibility/colour were not applied.");
+                        // Should now be unreachable for an accepted event — ProcessAsync has
+                        // completed. Kept as a real signal: if it fires, marker creation is not
+                        // synchronous with ProcessAsync's completion after all, and the fix is to
+                        // apply styling from IMapItemFinderService.Created instead.
+                        if (tally != null) tally.NotMaterialised++;
+                        else Log.Warn($"Map item {f.Uid} was still not available after ProcessAsync completed; "
+                                      + "visibility/colour were not applied.");
                     }
                     else if (!item.IsDisposed)
                     {
@@ -1565,7 +1850,8 @@ namespace FeatureLink.ViewModels
                 }
                 catch (Exception ex)
                 {
-                    Log.Warn($"Could not apply visibility/colour to marker {f.Uid}: {ex.Message}");
+                    if (tally != null) tally.StyleFailed++;
+                    else Log.Warn($"Could not apply visibility/colour to marker {f.Uid}: {ex.Message}");
                 }
             }
         }
@@ -2026,7 +2312,8 @@ namespace FeatureLink.ViewModels
                 foreach (var layer in due)
                 {
                     if (_lifetime.IsCancellationRequested) return;
-                    await DownloadLayerAsync(layer).ConfigureAwait(false);
+                    // interactive:false — a scheduled refresh must not raise a modal dialog.
+                    await DownloadLayerAsync(layer, interactive: false).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) { }
@@ -2163,6 +2450,10 @@ namespace FeatureLink.ViewModels
 
             _lifetime.Dispose();
             Log.Info("FeatureLink dock pane disposed.");
+
+            // The log writer is held open for the life of the pane (see Log.AppendToFile).
+            // Release it here so a disabled/reloaded plugin does not keep a handle on the file.
+            Log.Shutdown();
         }
     }
 }

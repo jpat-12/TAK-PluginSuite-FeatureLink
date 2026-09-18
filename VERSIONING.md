@@ -167,21 +167,55 @@ The gate fails the build. It does not warn.
 
 ## 4. Release tags and artifact names
 
-Tags are namespaced per target, because a single `v{version}` tag cannot describe two
-artifacts. The pre-existing `release.yml` ran `gh release create "v${version}"` from
-**byte-identical** workflows in both ATAK trees, so releasing 5.7 at a version already
-released for 5.6 would have collided on the tag or overwritten the 5.6 release.
+One suite version, one tag, one release:
 
 ```
-v{version}                    suite-wide release; the umbrella tag
-v{version}-atak5.6            ATAK 5.6 artifact
-v{version}-atak5.7            ATAK 5.7 artifact
-v{version}-wintak5.6          WinTAK 5.6 artifact
-v{version}-wintak5.7          WinTAK 5.7 artifact
-v{version}-cloudtak
-v{version}-takportal
-v{version}-infratak
+v{version}        e.g. v2.7.0 — carries every artifact as a separate asset
 ```
+
+**MUST:** a release is cut by one `workflow_dispatch` of `.github/workflows/release.yml`,
+which derives the tag from the tracked `VERSION` file. The tag is never typed by a human,
+and never created by `git tag` on a workstation.
+
+**MUST:** the tag points at the exact commit that was built (`gh release create --target
+"$GITHUB_SHA"`). Without it `gh` creates the tag on the default branch's HEAD, which is
+whatever `main` happens to be when the workflow runs — not necessarily the tree the
+artifacts came from.
+
+**MUST NOT:** a published tag be deleted or re-pointed. A re-pointed tag invalidates every
+checksum and attestation already distributed against it. To correct a bad release, bump
+`VERSION` and cut another. The workflow refuses to overwrite an existing tag.
+
+### 4.1 Why not one tag per target
+
+An earlier revision of this policy namespaced tags per target — `v{version}-atak5.6`,
+`-atak5.7`, `-wintak5.6`, `-wintak5.7`, plus `-cloudtak`, `-takportal`, `-infratak` — on the
+reasoning that one tag cannot describe two artifacts. It was withdrawn, for three reasons:
+
+1. **It did not do what it claimed.** The `Collect release assets` step globs every `.apk`
+   and `.wpk` in the CI output and never filtered on the dispatched target. All four
+   per-target releases therefore carried **byte-identical asset sets**, differing only in
+   name. Four dispatches, four tags, four releases, one set of files.
+2. **The defect it was introduced to fix was a concurrency defect, not a naming one.** Two
+   *independent, byte-identical* workflows both ran `gh release create "v${version}"` and
+   would have raced for the tag. One workflow publishing one release cannot race with
+   itself.
+3. **Build identity is §2's job, and §2 does it properly.** Each target carries a distinct
+   `applicationId`, a `versionName` with SemVer build metadata (`2.7.0+atak5.6`), and a
+   distinct `archivesBaseName`. Those travel *inside the installed package*, where an
+   operator holding a device and an engineer reading a crash report can actually read them.
+   A tag name cannot be read off a fielded device.
+
+Three of the eight namespaces (`-cloudtak`, `-takportal`, `-infratak`) and the umbrella tag
+were unreachable in any case: `release.yml`'s `target` input only ever offered the four
+ATAK/WinTAK values.
+
+**Legacy tags.** Three tags predate this policy and do not conform to it:
+`ATAK5.6-v2.6.13`, `ATAK5.6-v2.6.22` (lightweight, and pointing at an *older* commit than
+`2.6.13`), and `TAKPortal-v2.3.1`. They are left in place — see the MUST NOT above; deleting
+a published tag is the same class of harm as re-pointing one. `CHANGELOG.md` records that
+pre-`2.7.0` tags use the superseded `Component-vX.Y.Z` scheme and that no artifact released
+under it has provenance (§6).
 
 **MUST:** every published artifact is accompanied by a `SHA256SUMS` file and a CycloneDX
 SBOM, and is covered by an `actions/attest-build-provenance` attestation (C-35, EO 14028 /

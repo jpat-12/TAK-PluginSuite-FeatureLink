@@ -54,6 +54,8 @@
     <Reference Include="System" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Security" />
     <Reference Include="System.Windows.Forms" />
@@ -124,14 +126,20 @@
     <Compile Include="Models\OAuthTokens.cs" />
     <Compile Include="Models\PliSettings.cs" />
     <Compile Include="Models\RecentCotItem.cs" />
+    <Compile Include="Services\ArcGisAccountKey.cs" />
+    <Compile Include="Services\ArcGisOAuth.cs" />
     <Compile Include="Services\ArcGisAuthService.cs" />
     <Compile Include="Services\ArcGisFeatureService.cs" />
     <Compile Include="Services\ArcGisHttp.cs" />
+    <Compile Include="Services\AutoIconset.cs" />
     <Compile Include="Services\AutoSymbology.cs" />
     <Compile Include="Services\DialogService.cs" />
     <Compile Include="Services\DisplayStyleResolver.cs" />
+    <Compile Include="Services\ErrorText.cs" />
+    <Compile Include="Services\IconsetInstaller.cs" />
     <Compile Include="Services\Log.cs" />
     <Compile Include="Services\SafeJson.cs" />
+    <Compile Include="Services\TokenBlobFormat.cs" />
     <Compile Include="Services\SettingsStore.cs" />
     <Compile Include="Services\UrlGuard.cs" />
     <Compile Include="ViewModels\FeatureLinkDockPane.cs" />
@@ -218,7 +226,7 @@
     <!-- Single source of the SDK target string; it used to be a literal repeated in WpkName and
          in the Exec command line, so a release needed four separate edits to stay consistent. -->
     <TakSdkVersion>5.6.0.151</TakSdkVersion>
-    <WpkVersion>2.7.0</WpkVersion>
+    <WpkVersion>2.8.0</WpkVersion>
     <WpkName>FeatureLink-$(WpkVersion)-$(TakSdkVersion)</WpkName>
     <WpkOut>$(OutputPath)$(WpkName).wpk</WpkOut>
     <!-- Prefer the py launcher: bare `python` may be the Windows Store stub, or Python 2. -->

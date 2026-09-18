@@ -67,10 +67,15 @@
     <Compile Include="..\..\Models\DownloadedFeature.cs"    Link="Production\Models\DownloadedFeature.cs" />
     <Compile Include="..\..\Models\OAuthTokens.cs"          Link="Production\Models\OAuthTokens.cs" />
     <Compile Include="..\..\Models\PliSettings.cs"          Link="Production\Models\PliSettings.cs" />
+    <Compile Include="..\..\Services\ArcGisAccountKey.cs" Link="Production\Services\ArcGisAccountKey.cs" />
+    <Compile Include="..\..\Services\ArcGisOAuth.cs" Link="Production\Services\ArcGisOAuth.cs" />
+    <Compile Include="..\..\Services\TokenBlobFormat.cs" Link="Production\Services\TokenBlobFormat.cs" />
     <Compile Include="..\..\Services\ArcGisFeatureService.cs" Link="Production\Services\ArcGisFeatureService.cs" />
     <Compile Include="..\..\Services\ArcGisHttp.cs"         Link="Production\Services\ArcGisHttp.cs" />
+    <Compile Include="..\..\Services\AutoIconset.cs"        Link="Production\Services\AutoIconset.cs" />
     <Compile Include="..\..\Services\AutoSymbology.cs"      Link="Production\Services\AutoSymbology.cs" />
     <Compile Include="..\..\Services\DisplayStyleResolver.cs" Link="Production\Services\DisplayStyleResolver.cs" />
+    <Compile Include="..\..\Services\ErrorText.cs"          Link="Production\Services\ErrorText.cs" />
     <Compile Include="..\..\Services\Log.cs"                Link="Production\Services\Log.cs" />
     <Compile Include="..\..\Services\SafeJson.cs"           Link="Production\Services\SafeJson.cs" />
     <Compile Include="..\..\Services\UrlGuard.cs"           Link="Production\Services\UrlGuard.cs" />
