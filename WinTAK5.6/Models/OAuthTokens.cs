@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using FeatureLink.Services;
 using Newtonsoft.Json;
 
 namespace FeatureLink.Models
@@ -42,5 +45,43 @@ namespace FeatureLink.Models
 
         [JsonProperty("refreshToken")]
         public string RefreshToken { get; set; }
+    }
+
+    /// <summary>
+    /// Every ArcGIS account persisted in <c>tokens.bin</c>, plus which one is currently active.
+    ///
+    /// This is the in-memory shape only — it is deliberately NOT what gets serialized. The blob on
+    /// disk is a superset that also carries a flat <c>portalUrl</c>/<c>username</c>/<c>refreshToken</c>
+    /// view of the active account, so a downgraded build still finds a session where it expects
+    /// one; see <c>TokenBlobFormat</c>, which owns both directions of that translation.
+    /// </summary>
+    public sealed class StoredAccountSet
+    {
+        public List<StoredTokenState> Accounts { get; set; } = new List<StoredTokenState>();
+
+        /// <summary>Key (portal|username) of the active account. May be null or name an account
+        /// that is not in <see cref="Accounts"/> — <see cref="Active"/> resolves both cases.</summary>
+        public string ActiveAccountKey { get; set; }
+
+        /// <summary>The active account, or the first one when <see cref="ActiveAccountKey"/> is
+        /// missing or stale. Never throws: a set with no accounts is "signed out", not an error.</summary>
+        public StoredTokenState Active
+        {
+            get
+            {
+                if (Accounts == null || Accounts.Count == 0) return null;
+                if (!string.IsNullOrEmpty(ActiveAccountKey))
+                {
+                    foreach (var account in Accounts)
+                    {
+                        if (account != null && string.Equals(
+                                ArcGisAccountKey.Make(account.PortalUrl, account.Username),
+                                ActiveAccountKey, StringComparison.Ordinal))
+                            return account;
+                    }
+                }
+                return Accounts[0];
+            }
+        }
     }
 }

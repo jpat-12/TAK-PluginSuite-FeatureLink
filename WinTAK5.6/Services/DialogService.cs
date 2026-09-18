@@ -19,10 +19,19 @@ namespace FeatureLink.Services
         /// <summary>Yes/No confirmation. Replaceable for tests.</summary>
         public static Func<string, string, bool> ConfirmHandler { get; set; } = DefaultConfirm;
 
+        /// <summary>Informational notice — no question, one button. Replaceable for tests.</summary>
+        public static Action<string, string> InformHandler { get; set; } = DefaultInform;
+
         /// <summary>Accept/decline prompt for an inbound layer share. Replaceable for tests.</summary>
         public static Func<ShareImportRequest, bool> ShareImportHandler { get; set; } = DefaultShareImport;
 
         public static bool Confirm(string message, string caption) => ConfirmHandler(message, caption);
+
+        /// <summary>Tells the operator something and offers no choice. Distinct from
+        /// <see cref="Confirm"/> because a refusal ("this layer is too large to plot") is not a
+        /// question, and putting Yes/No buttons on a statement invites the operator to answer one
+        /// that was never asked.</summary>
+        public static void Inform(string message, string caption) => InformHandler(message, caption);
 
         /// <summary>Describes an inbound ".featurelinkshare" for the consent prompt.</summary>
         public sealed class ShareImportRequest
@@ -60,6 +69,11 @@ namespace FeatureLink.Services
         {
             return MessageBox.Show(message, caption, MessageBoxButton.YesNo, MessageBoxImage.Question)
                 == MessageBoxResult.Yes;
+        }
+
+        private static void DefaultInform(string message, string caption)
+        {
+            MessageBox.Show(message, caption, MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private static bool DefaultShareImport(ShareImportRequest request)

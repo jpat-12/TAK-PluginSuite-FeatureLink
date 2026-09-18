@@ -5,7 +5,6 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Xml.Linq;
 using FeatureLink.Models;
-using Newtonsoft.Json;
 
 namespace FeatureLink.Services
 {
@@ -32,6 +31,9 @@ namespace FeatureLink.Services
 
         // Binds the encrypted token blob to this app so a copied tokens.bin from another DPAPI
         // consumer on the same account can't be fed back in and silently decrypt.
+        // DO NOT CHANGE THIS VALUE. It is part of the DPAPI key derivation, so a new entropy
+        // string makes every existing tokens.bin undecryptable — i.e. it signs every user out on
+        // upgrade, which is precisely what the versioned JSON document inside it exists to avoid.
         private static readonly byte[] Entropy =
             System.Text.Encoding.UTF8.GetBytes("FeatureLink.ArcGIS.TokenStore.v1");
 
@@ -176,19 +178,23 @@ namespace FeatureLink.Services
         /// when the blob cannot be written: <c>ProtectedData.Protect</c> throws
         /// <c>CryptographicException</c> on some domain/profile configurations, and a read-only
         /// profile fails the write. The caller stays signed in for this session and reports
-        /// "signed in but not persisted" rather than "sign-in failed".</summary>
-        public static bool SaveTokenState(StoredTokenState state)
+        /// "signed in but not persisted" rather than "sign-in failed".
+        ///
+        /// An empty (or null) account list deletes the blob — that is the only way the file is
+        /// removed short of <see cref="ClearTokenState"/>, which belongs to signing the LAST
+        /// account out.</summary>
+        public static bool SaveAccountSet(IReadOnlyList<StoredTokenState> accounts, string activeKey)
         {
             try
             {
                 Directory.CreateDirectory(RootDir);
-                if (state == null)
+                if (accounts == null || accounts.Count == 0)
                 {
                     if (File.Exists(TokensPath)) File.Delete(TokensPath);
                     return true;
                 }
 
-                var json = JsonConvert.SerializeObject(state);
+                var json = TokenBlobFormat.Serialize(accounts, activeKey);
                 var plainBytes = System.Text.Encoding.UTF8.GetBytes(json);
                 var protectedBytes = ProtectedData.Protect(plainBytes, Entropy, DataProtectionScope.CurrentUser);
 
@@ -206,7 +212,10 @@ namespace FeatureLink.Services
             }
         }
 
-        public static StoredTokenState LoadTokenState()
+        /// <summary>Returns every stored account and which one is active, or null when there is no
+        /// readable session. A blob written by a pre-multi-account build is migrated in
+        /// <see cref="TokenBlobFormat.Deserialize"/> rather than discarded.</summary>
+        public static StoredAccountSet LoadAccountSet()
         {
             if (!File.Exists(TokensPath)) return null;
             try
@@ -214,10 +223,10 @@ namespace FeatureLink.Services
                 var protectedBytes = File.ReadAllBytes(TokensPath);
                 var plainBytes = ProtectedData.Unprotect(protectedBytes, Entropy, DataProtectionScope.CurrentUser);
                 var json = System.Text.Encoding.UTF8.GetString(plainBytes);
-                // Explicit settings pin TypeNameHandling.None: JsonConvert.DefaultSettings is
-                // process-wide and every WinTAK plugin shares one AppDomain, so another plugin
-                // enabling TypeNameHandling would otherwise turn this into a deserialization sink.
-                return SafeJson.Deserialize<StoredTokenState>(json);
+                // Parsing is TokenBlobFormat's job, and it goes through SafeJson — TypeNameHandling
+                // is pinned to None there because JsonConvert.DefaultSettings is process-wide and
+                // every WinTAK plugin shares one AppDomain.
+                return TokenBlobFormat.Deserialize(json);
             }
             catch (Exception ex)
             {
@@ -228,6 +237,8 @@ namespace FeatureLink.Services
             }
         }
 
+        /// <summary>Deletes the whole blob. Only correct when the LAST account signs out —
+        /// removing one of several accounts is a <see cref="SaveAccountSet"/> of the rest.</summary>
         public static void ClearTokenState()
         {
             try

@@ -364,7 +364,71 @@ jobs:
   # for atak5.6/5.7 and wintak5.6/5.7 still run in .github/workflows/sbom.yml, and
   # release.yml still enforces the version policy and attests provenance before publishing.
   # A private mirror that holds the SDK secrets can reintroduce compiled build jobs there.
+  #
+  # WinTAK is NOT left without coverage by that removal: its SDK-independent unit tests run
+  # in the `wintak-tests` job immediately below, which needs neither an SDK nor a secret.
   # ===========================================================================
+
+  # ===========================================================================
+  # WinTAK unit tests. Needs NO SDK and NO secrets.
+  #
+  # WHY THIS IS ITS OWN JOB
+  # -----------------------
+  # WinTAK5.6/Tests/FeatureLink.Tests is an SDK-style net8.0 project that compiles the
+  # SDK-independent production sources by <Compile Include="..\..\Services\..." Link="...">
+  # rather than referencing FeatureLink.csproj — precisely so it can run without the
+  # licensed WinTAK assemblies (see that project's header comment).
+  #
+  # Those 216 tests were nonetheless wired into the old `wintak` build job, which hard-failed
+  # when WINTAK_SDK_URL_5_6 was unset. The result was that a suite needing no SDK never ran
+  # at all, because it sat behind a gate for an SDK it does not use — which is how the
+  # highest-value coverage in the tree (pagination, ArcGIS error bodies, the symbology and
+  # shape-style resolvers, the UID formula, the URL guard, the JSON caps) stayed unexercised
+  # on every push.
+  #
+  # Splitting it out is what made removing that unbuildable job (see the block above) safe:
+  # the compiled build left public CI, the test coverage did not go with it.
+  #
+  # RUNNER / TOOLCHAIN
+  # ------------------
+  # windows-latest, for two reasons: it is the platform the plugin actually ships on, and
+  # its image ships the .NET SDK preinstalled — so this job needs no `actions/setup-dotnet`
+  # and therefore adds no new third-party action to pin by SHA. If you ever want an explicit
+  # SDK version here, add actions/setup-dotnet pinned by 40-char commit SHA, per the ACTION
+  # PINNING note at the top of this file.
+  # ===========================================================================
+
+  wintak-tests:
+    name: WinTAK 5.6 unit tests (no SDK required)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Show toolchain
+        run: dotnet --info
+
+      - name: Unit tests (net8.0, no WinTAK SDK)
+        run: |
+          set -euo pipefail
+          dotnet test WinTAK5.6/Tests/FeatureLink.Tests/FeatureLink.Tests.csproj \
+            -f net8.0 --nologo --verbosity minimal \
+            --logger "trx;LogFileName=wintak56-tests.trx" \
+            --results-directory "$GITHUB_WORKSPACE/test-results"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wintak56-test-results
+          path: test-results/**
+          retention-days: 14
+          if-no-files-found: warn
+
   # ===========================================================================
   # Aggregate gate. Branch protection should require THIS check, so that adding a new
   # component job automatically becomes required without editing branch settings.
@@ -380,6 +444,7 @@ jobs:
       - cloudtak
       - takportal
       - infratak
+      - wintak-tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
