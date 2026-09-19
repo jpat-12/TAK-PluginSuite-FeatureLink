@@ -1370,13 +1370,16 @@ namespace FeatureLink.ViewModels
                     return;
                 }
 
-                await ResolveSymbologyAsync(layer, token, ct).ConfigureAwait(false);
+                LayerInfo meta = await ResolveSymbologyAsync(layer, token, ct).ConfigureAwait(false);
 
                 if (!await ConfirmDownloadSizeAsync(layer, token, ct, interactive).ConfigureAwait(false))
                     return;
 
+                // meta.DisplayField is the attribute ArcGIS itself labels features with, so a
+                // marker gets the name the operator already recognises instead of "Feature-7".
                 var download = await _restClient
-                    .DownloadLayerAsCotAsync(layer.Url, token, null, ct).ConfigureAwait(false);
+                    .DownloadLayerAsCotAsync(layer.Url, token, null, ct, meta?.DisplayField)
+                    .ConfigureAwait(false);
 
                 JObject sym = SafeJson.ParseObjectOrNull(layer.SymJson) ?? SafeJson.ParseObjectOrNull(layer.AutoSymJson);
                 JObject lbl = SafeJson.ParseObjectOrNull(layer.LblJson);
@@ -1455,6 +1458,12 @@ namespace FeatureLink.ViewModels
                 // makes the recurrence scheduler treat it as a successful sync.
                 layer.LastSync = DateTime.UtcNow;
 
+                // The download is the authoritative count and it was never recorded: FeatureCount
+                // was written in exactly one place, the Home-tab stats refresh, which only runs on
+                // an explicit layer refresh and skips the browse list entirely. So a layer could
+                // plot 29 markers and still show "0 features" in its own row indefinitely.
+                RunOnUi(() => layer.FeatureCount = download.Features.Count);
+
                 string summary = $"Downloaded: {layer.Name} ({download.Features.Count} features";
                 if (shapeStyled > 0) summary += $", {shapeStyled} shape-styled";
                 if (download.SkippedFeatures > 0) summary += $", {download.SkippedFeatures} skipped";
@@ -1500,15 +1509,18 @@ namespace FeatureLink.ViewModels
         /// <c>drawingInfo</c> outright in <c>FetchLayerInfoAsync</c>, so no symbology of any kind
         /// was resolved on the download path.
         /// </summary>
-        private async Task ResolveSymbologyAsync(ArcGisLayer layer, string token, CancellationToken ct)
+        private async Task<LayerInfo> ResolveSymbologyAsync(ArcGisLayer layer, string token, CancellationToken ct)
         {
-            // An explicitly configured layer keeps its config: a Portal/share-authored config always
-            // wins over whatever the layer's own renderer says.
-            if (!string.IsNullOrEmpty(layer.SymJson) && !string.IsNullOrEmpty(layer.ShpJson)) return;
+            // An explicitly configured layer keeps its config: a Portal/share-authored config
+            // always wins over whatever the layer's own renderer says. The metadata is still
+            // fetched in that case, because the caller needs its displayField to name markers.
+            bool configured = !string.IsNullOrEmpty(layer.SymJson) && !string.IsNullOrEmpty(layer.ShpJson);
+            LayerInfo resolvedMeta = null;
 
             try
             {
                 var meta = await _restClient.FetchLayerMetadataAsync(layer.Url, token, ct).ConfigureAwait(false);
+                resolvedMeta = meta;
 
                 // An item-level override is what the operator actually SEES in ArcGIS Online, so
                 // it wins over the service's published renderer. Styling saved on the item's
@@ -1530,10 +1542,11 @@ namespace FeatureLink.ViewModels
                     }
                 }
 
-                if (meta.Renderer == null)
+                if (configured || meta.Renderer == null)
                 {
-                    Log.Info($"Layer \"{layer.Name}\" publishes no renderer — features keep WinTAK's default styling.");
-                    return;
+                    if (!configured)
+                        Log.Info($"Layer \"{layer.Name}\" publishes no renderer — features keep WinTAK's default styling.");
+                    return meta;
                 }
 
                 // Picture-marker (esriPMS) symbols carry embedded bitmaps and need a real iconset
@@ -1555,7 +1568,7 @@ namespace FeatureLink.ViewModels
                 {
                     Log.Info($"Layer \"{layer.Name}\" publishes a renderer this build cannot "
                              + "translate into either icons or colours — default styling applies.");
-                    return;
+                    return meta;
                 }
 
                 if (string.IsNullOrEmpty(layer.SymJson))
@@ -1593,7 +1606,10 @@ namespace FeatureLink.ViewModels
                 // Symbology is an enhancement — never fail the download over it, but never fail
                 // it silently either, which is exactly what the old code did by not looking at all.
                 Log.Warn($"Could not resolve symbology for \"{layer.Name}\": {ex.Message}");
+                return null;
             }
+
+            return resolvedMeta;
         }
 
         /// <summary>
@@ -1711,6 +1727,10 @@ namespace FeatureLink.ViewModels
                          + $"({Describe(ex)}); proceeding with the download.");
                 return true;
             }
+
+            // Free and accurate — record it whatever happens next, so a layer the operator
+            // declines still reports its real size rather than a dash.
+            RunOnUi(() => layer.FeatureCount = count);
 
             if (count > MaxDownloadableFeatures)
             {

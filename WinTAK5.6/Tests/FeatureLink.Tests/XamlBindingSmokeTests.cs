@@ -130,7 +130,8 @@ namespace FeatureLink.Tests
             {
                 // ArcGisLayer
                 "Name", "Url", "Type", "IsPrivate", "Access", "HasDisplayConfig",
-                "FeatureCount", "LastSyncTicks", "ActionGlyph", "DownloadEnabled",
+                "FeatureCount", "FeatureCountKnown", "FeatureCountText",
+                "LastSyncTicks", "ActionGlyph", "DownloadEnabled",
                 "RecurrenceInterval", "RecurrenceUnit", "IsPliLayer", "Visible", "EyeIconSource",
                 // RecentCotItem
                 "Uid", "Callsign", "CotType", "LastSeen", "LastSeenLabel",

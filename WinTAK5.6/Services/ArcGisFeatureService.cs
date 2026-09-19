@@ -20,6 +20,12 @@ namespace FeatureLink.Services
         public string GeometryType { get; set; }
         public int MaxRecordCount { get; set; }
         public string ObjectIdField { get; set; }
+
+        /// <summary>The layer's own <c>displayField</c> — the attribute ArcGIS itself uses to
+        /// label a feature, and what its pop-ups title on. Every hosted feature layer declares
+        /// one, so it is the correct source for a marker callsign and far better than a
+        /// positional "Feature-N".</summary>
+        public string DisplayField { get; set; }
         /// <summary>The layer's <c>drawingInfo.renderer</c>. This was previously read and thrown
         /// away, which is the whole of C-07 on this platform.</summary>
         public JObject Renderer { get; set; }
@@ -265,6 +271,7 @@ namespace FeatureLink.Services
                 GeometryType = (string)json["geometryType"] ?? string.Empty,
                 MaxRecordCount = (int?)json["maxRecordCount"] ?? DefaultPageSize,
                 ObjectIdField = (string)json["objectIdField"] ?? "OBJECTID",
+                DisplayField = (string)json["displayField"],
                 Renderer = (json["drawingInfo"] as JObject)?["renderer"] as JObject,
                 Raw = json,
             };
@@ -294,8 +301,11 @@ namespace FeatureLink.Services
         /// polygon geometry (polyline/polygon uses the first vertex, the same simplification the
         /// ATAK plugin makes).
         /// </summary>
+        /// <param name="displayField">The layer's own <c>displayField</c>, used to name each
+        /// marker. Null falls back to the positional "Feature-N".</param>
         public async Task<LayerDownloadResult> DownloadLayerAsCotAsync(string serviceUrl, string token,
-            int? pageSizeOverride = null, CancellationToken cancellationToken = default(CancellationToken))
+            int? pageSizeOverride = null, CancellationToken cancellationToken = default(CancellationToken),
+            string displayField = null)
         {
             var result = new LayerDownloadResult();
             string layerUrl = EnsureLayerIndex(serviceUrl);
@@ -350,7 +360,7 @@ namespace FeatureLink.Services
 
                 foreach (var feat in features)
                 {
-                    var parsed = ParseFeature(feat as JObject, uidSalt, result.Features.Count);
+                    var parsed = ParseFeature(feat as JObject, uidSalt, result.Features.Count, displayField);
                     if (parsed == null) { result.SkippedFeatures++; continue; }
                     if (!IsPlottable(parsed.Lat, parsed.Lon)) { result.OutOfRangeCoordinates++; continue; }
                     result.Features.Add(parsed);
@@ -388,7 +398,8 @@ namespace FeatureLink.Services
             && !double.IsInfinity(lat) && !double.IsInfinity(lon)
             && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 
-        private static DownloadedFeature ParseFeature(JObject feat, string uidSalt, int index)
+        private static DownloadedFeature ParseFeature(JObject feat, string uidSalt, int index,
+            string displayField)
         {
             if (feat == null) return null;
             try
@@ -425,7 +436,7 @@ namespace FeatureLink.Services
                 if (string.IsNullOrEmpty(cotType))
                     cotType = string.Empty; // the caller applies the "unknown" fallback + validation
                 if (string.IsNullOrEmpty(callsign))
-                    callsign = "Feature-" + index.ToString(CultureInfo.InvariantCulture);
+                    callsign = DeriveCallsign(attrMap, displayField, index);
 
                 return new DownloadedFeature(uid, cotType, callsign, remarks ?? string.Empty,
                     lat, lon, hae, attrMap, geometryKind);
@@ -435,6 +446,72 @@ namespace FeatureLink.Services
                 Log.Warn("Skipping a malformed feature: " + ex.Message);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Names a marker from the layer's own data rather than its position in the result set.
+        ///
+        /// <para>Order: the explicit <c>tak_callsign</c> column if the layer carries one (handled
+        /// by the caller), then the layer's declared <c>displayField</c> — which is precisely what
+        /// ArcGIS itself labels features with and titles pop-ups on, so it is what the operator
+        /// already recognises — then a short list of conventional name columns for layers whose
+        /// <c>displayField</c> is unhelpful (it often defaults to <c>OBJECTID</c>), and only then
+        /// the positional fallback.</para>
+        ///
+        /// <para>A <c>displayField</c> pointing at the object-id column is deliberately skipped:
+        /// "1", "2", "3" is no more meaningful than "Feature-1" and loses the hint that the name
+        /// is a placeholder.</para>
+        /// </summary>
+        internal static string DeriveCallsign(IReadOnlyDictionary<string, string> attrs,
+            string displayField, int index)
+        {
+            string value;
+
+            if (!string.IsNullOrEmpty(displayField)
+                && !LooksLikeObjectId(displayField)
+                && TryAttr(attrs, displayField, out value))
+                return value;
+
+            foreach (string candidate in ConventionalNameFields)
+                if (TryAttr(attrs, candidate, out value))
+                    return value;
+
+            return "Feature-" + index.ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>Conventional name columns, in preference order, for layers whose
+        /// <c>displayField</c> is missing or points at the object id.</summary>
+        private static readonly string[] ConventionalNameFields =
+        {
+            "name", "Name", "NAME", "title", "TITLE", "label", "LABEL",
+            "callsign", "CALLSIGN", "description", "DESCRIPTION",
+        };
+
+        private static bool LooksLikeObjectId(string field) =>
+            field.Equals("OBJECTID", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("FID", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("OID", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("ObjectId", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Case-insensitive attribute lookup that rejects blank and null-ish values —
+        /// ArcGIS writes a literal "&lt;Null&gt;" often enough to be worth excluding, and naming a
+        /// marker that would be worse than the positional fallback.</summary>
+        private static bool TryAttr(IReadOnlyDictionary<string, string> attrs, string field, out string value)
+        {
+            value = null;
+            if (attrs == null || string.IsNullOrEmpty(field)) return false;
+
+            foreach (var kv in attrs)
+            {
+                if (!string.Equals(kv.Key, field, StringComparison.OrdinalIgnoreCase)) continue;
+                string candidate = kv.Value?.Trim();
+                if (string.IsNullOrEmpty(candidate)) return false;
+                if (candidate.Equals("<Null>", StringComparison.OrdinalIgnoreCase)) return false;
+                if (candidate.Equals("null", StringComparison.OrdinalIgnoreCase)) return false;
+                value = candidate;
+                return true;
+            }
+            return false;
         }
 
         private static bool TryReadCoordinates(JObject geom, out double lon, out double lat, out string kind)

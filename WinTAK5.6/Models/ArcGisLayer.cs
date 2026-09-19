@@ -147,7 +147,43 @@ namespace FeatureLink.Models
         public string AutoShpJson { get; set; }
 
         private long _featureCount;
-        public long FeatureCount { get => _featureCount; set { _featureCount = value; RaisePropertyChanged(); } }
+        /// <summary>Features in the source layer. Assigning also marks the count KNOWN — see
+        /// <see cref="FeatureCountText"/> for why the distinction matters.</summary>
+        public long FeatureCount
+        {
+            get => _featureCount;
+            set
+            {
+                _featureCount = value;
+                FeatureCountKnown = true;
+                RaisePropertyChanged();
+                RaisePropertyChanged(nameof(FeatureCountText));
+            }
+        }
+
+        private bool _featureCountKnown;
+        /// <summary>Whether a count has ever been obtained for this layer.</summary>
+        public bool FeatureCountKnown
+        {
+            get => _featureCountKnown;
+            set
+            {
+                _featureCountKnown = value;
+                RaisePropertyChanged();
+                RaisePropertyChanged(nameof(FeatureCountText));
+            }
+        }
+
+        /// <summary>What the layer row shows.
+        ///
+        /// <para>"0 features" used to appear for two completely different situations: a layer that
+        /// genuinely holds nothing, and a layer nobody has counted yet. The second is by far the
+        /// common one — a browse-list row that has never been downloaded — and reporting it as
+        /// zero states something false about the source data. An unknown count now reads as a
+        /// dash.</para></summary>
+        public string FeatureCountText => FeatureCountKnown
+            ? FeatureCount.ToString("N0", System.Globalization.CultureInfo.CurrentCulture) + " features"
+            : "— features";
 
         private long _lastSyncTicks;
         /// <summary>Last successful download time (UTC ticks), 0 = never synced.</summary>
@@ -276,6 +312,7 @@ namespace FeatureLink.Models
                 new XElement("PopupJson", PopupJson ?? string.Empty),
                 new XElement("ShpJson", ShpJson ?? string.Empty),
                 new XElement("FeatureCount", FeatureCount),
+                new XElement("FeatureCountKnown", FeatureCountKnown),
                 new XElement("LastSyncTicks", LastSyncTicks),
                 new XElement("DownloadEnabled", DownloadEnabled),
                 new XElement("RecurrenceInterval", RecurrenceInterval),
@@ -309,6 +346,7 @@ namespace FeatureLink.Models
                 PopupJson = NullIfEmpty(Text(el, "PopupJson")),
                 ShpJson = NullIfEmpty(Text(el, "ShpJson")),
                 FeatureCount = Long(el, "FeatureCount", 0),
+                FeatureCountKnown = Bool(el, "FeatureCountKnown", false),
                 LastSyncTicks = Long(el, "LastSyncTicks", 0),
                 DownloadEnabled = Bool(el, "DownloadEnabled", false),
                 // Unit first: the interval clamp depends on it.

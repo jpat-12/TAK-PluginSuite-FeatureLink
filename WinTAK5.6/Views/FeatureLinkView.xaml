@@ -334,7 +334,7 @@
 
                                 <Border Background="{StaticResource BadgeCountBg}" CornerRadius="8"
                                         Padding="7,1" Margin="4,0,0,0">
-                                    <TextBlock Text="{Binding FeatureCount, StringFormat={}{0} features}"
+                                    <TextBlock Text="{Binding FeatureCountText}"
                                                FontSize="9" FontWeight="Bold"
                                                Foreground="{StaticResource BadgeCountText}"/>
                                 </Border>
