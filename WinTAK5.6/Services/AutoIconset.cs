@@ -316,10 +316,21 @@ namespace FeatureLink.Services
 
             var taken = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (string arrayName in new[] { "uniqueValueInfos", "classBreakInfos" })
+            // Classified categories, from EITHER unique-value layout. Reading only the classic
+            // uniqueValueInfos array meant a modern ArcGIS Online renderer
+            // (uniqueValueGroups/classes) yielded no categories, fell through to defaultSymbol,
+            // and stamped one icon on every feature — see AutoSymbology.EnumerateValueEntries.
+            foreach (var entry in AutoSymbology.EnumerateValueEntries(renderer))
             {
-                if (!(renderer[arrayName] is JArray infos)) continue;
-                foreach (var entry in infos.OfType<JObject>())
+                string raw = string.IsNullOrEmpty(entry.Label) ? entry.Value : entry.Label;
+                AddSymbol(result, taken, entry.Symbol, raw, entry.Value, isDefault: false);
+            }
+
+            // Class breaks match by numeric range rather than value equality, so they cannot be
+            // resolved per feature; only their symbols are harvested, as they were before.
+            if (renderer["classBreakInfos"] is JArray breaks)
+            {
+                foreach (var entry in breaks.OfType<JObject>())
                 {
                     string raw = (string)entry["label"];
                     if (string.IsNullOrEmpty(raw))

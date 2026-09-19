@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 
 namespace FeatureLink.Services
@@ -107,6 +108,105 @@ namespace FeatureLink.Services
                 || StrokeByValue.Count > 0 || FillByValue.Count > 0;
         }
 
+        /// <summary>One classified renderer category: the attribute value it matches, its label,
+        /// and its symbol.</summary>
+        public sealed class ValueEntry
+        {
+            public string Value { get; set; }
+            public string Label { get; set; }
+            public JObject Symbol { get; set; }
+        }
+
+        /// <summary>
+        /// Yields a renderer's classified categories, in renderer order, from EITHER unique-value
+        /// layout.
+        ///
+        /// <para><b>Why both.</b> ArcGIS has two shapes for the same thing. The classic one is a
+        /// flat <c>uniqueValueInfos</c> array. Modern ArcGIS Online publishes
+        /// <c>uniqueValueGroups[].classes[]</c> instead, where each class carries
+        /// <c>values: [["A"]]</c> — an array of arrays, because a unique-value renderer can key on
+        /// up to three fields.</para>
+        ///
+        /// <para>Reading only the classic shape is silently catastrophic rather than merely
+        /// incomplete: a modern renderer's categories are simply not seen, so the extractors fall
+        /// through to <c>defaultSymbol</c> and every feature gets one symbol. That is exactly what
+        /// happened in the field — a layer showing twelve distinct symbols in ArcGIS produced a
+        /// single orange dot on every marker, with no error anywhere, because the one thing we
+        /// did find was the default.</para>
+        ///
+        /// <para>Order is preserved: <c>AUTO-ICONSET-SPEC.md</c> §5.3 assigns filename collision
+        /// suffixes in renderer array order, and every platform must agree on it.</para>
+        /// </summary>
+        public static List<ValueEntry> EnumerateValueEntries(JObject renderer)
+        {
+            var entries = new List<ValueEntry>();
+            if (renderer == null) return entries;
+
+            // Classic: flat uniqueValueInfos.
+            if (renderer["uniqueValueInfos"] is JArray infos)
+            {
+                foreach (var info in infos.OfType<JObject>())
+                {
+                    var symbol = info["symbol"] as JObject;
+                    if (symbol == null) continue;
+                    entries.Add(new ValueEntry
+                    {
+                        Value = OptString(info, "value", null),
+                        Label = OptString(info, "label", null),
+                        Symbol = symbol,
+                    });
+                }
+            }
+
+            // Modern: uniqueValueGroups -> classes -> values[][].
+            if (renderer["uniqueValueGroups"] is JArray groups)
+            {
+                // Multi-field renderers join their key parts with this; ArcGIS defaults to ",".
+                string delimiter = OptString(renderer, "fieldDelimiter", ",");
+
+                foreach (var group in groups.OfType<JObject>())
+                {
+                    if (!(group["classes"] is JArray classes)) continue;
+                    foreach (var cls in classes.OfType<JObject>())
+                    {
+                        var symbol = cls["symbol"] as JObject;
+                        if (symbol == null) continue;
+                        string label = OptString(cls, "label", null);
+
+                        // One class can cover SEVERAL values sharing a symbol; each becomes its
+                        // own entry so per-value resolution finds any of them.
+                        var values = cls["values"] as JArray;
+                        if (values == null || values.Count == 0)
+                        {
+                            entries.Add(new ValueEntry { Value = null, Label = label, Symbol = symbol });
+                            continue;
+                        }
+
+                        foreach (var v in values)
+                        {
+                            string composed;
+                            if (v is JArray parts)
+                                composed = string.Join(delimiter,
+                                    parts.Select(p => p == null || p.Type == JTokenType.Null
+                                        ? string.Empty
+                                        : p.ToString(Newtonsoft.Json.Formatting.None).Trim('"')));
+                            else
+                                composed = v.ToString(Newtonsoft.Json.Formatting.None).Trim('"');
+
+                            entries.Add(new ValueEntry
+                            {
+                                Value = composed,
+                                Label = label,
+                                Symbol = symbol,
+                            });
+                        }
+                    }
+                }
+            }
+
+            return entries;
+        }
+
         /// <summary>
         /// Extracts esriSMS/esriSLS/esriSFS styling from a renderer, mirroring the
         /// simple/uniqueValue/classBreaks/defaultSymbol traversal AutoIconset uses.
@@ -131,21 +231,20 @@ namespace FeatureLink.Services
                 if (type == "uniqueValue" || type == "uniqueValueRenderer")
                 {
                     field = OptString(renderer, "field1", null) ?? OptString(renderer, "field", string.Empty);
-                    if (renderer["uniqueValueInfos"] is JArray infos)
+
+                    // Covers BOTH uniqueValueInfos and uniqueValueGroups/classes — see
+                    // EnumerateValueEntries. Reading only the former made a modern ArcGIS Online
+                    // renderer look like it had no categories at all.
+                    foreach (var entry in EnumerateValueEntries(renderer))
                     {
-                        foreach (var infoToken in infos)
-                        {
-                            if (!(infoToken is JObject info)) continue;
-                            string value = OptString(info, "value", string.Empty);
-                            var symbol = info["symbol"] as JObject;
-                            if (value.Length == 0 || symbol == null) continue;
-                            var s = StrokeFrom(symbol);
-                            var f = FillFrom(symbol);
-                            var m = MarkerFrom(symbol);
-                            if (s != null) strokeByValue[value] = s;
-                            if (f != null) fillByValue[value] = f;
-                            if (m != null) markerByValue[value] = m;
-                        }
+                        string value = entry.Value;
+                        if (string.IsNullOrEmpty(value) || entry.Symbol == null) continue;
+                        var s = StrokeFrom(entry.Symbol);
+                        var f = FillFrom(entry.Symbol);
+                        var m = MarkerFrom(entry.Symbol);
+                        if (s != null) strokeByValue[value] = s;
+                        if (f != null) fillByValue[value] = f;
+                        if (m != null) markerByValue[value] = m;
                     }
                     if (renderer["defaultSymbol"] is JObject defSymbol)
                     {

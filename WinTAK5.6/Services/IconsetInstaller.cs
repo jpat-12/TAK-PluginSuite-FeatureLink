@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 
 namespace FeatureLink.Services
 {
@@ -63,14 +64,30 @@ namespace FeatureLink.Services
                     return false;
                 }
 
-                // The UID is a hash of the layer URL and its driving field, so it IS the content
-                // identity: if the host already has this set, re-importing it would do nothing but
-                // cost time on every sync. Re-generation only matters when the published renderer
-                // changes, which changes the icons but not the UID — handled by ForceReinstall.
-                if (manager.ContainsIconset(uid)) return true;
-
                 Directory.CreateDirectory(IconsetDirectory);
                 zipPath = Path.Combine(IconsetDirectory, uid + ".zip");
+
+                // The UID hashes the layer URL and driving field, NOT the symbols — so it stays
+                // the same when the published renderer changes, and so did the installed icons.
+                // A plain ContainsIconset short-circuit therefore served stale icons forever: a
+                // layer whose renderer we had once mis-read kept its wrong iconset even after the
+                // reader was fixed, because the UID still matched. The content fingerprint below
+                // is what actually decides whether a reinstall is needed.
+                //
+                // The zip's own bytes cannot be used for this — ZipArchive stamps each entry with
+                // the current time, so two zips of identical content differ every run.
+                string fingerprint = ContentFingerprint(zipBytes);
+                string fingerprintPath = zipPath + ".fingerprint";
+
+                if (manager.ContainsIconset(uid) && ReadFingerprint(fingerprintPath) == fingerprint)
+                    return true;
+
+                if (manager.ContainsIconset(uid))
+                {
+                    Log.Info($"Iconset \"{group}\" changed since it was installed; regenerating.");
+                    try { manager.RemoveIconset(uid, false); }
+                    catch (Exception ex) { Log.Warn("Could not remove the stale iconset: " + ex.Message); }
+                }
 
                 // Write via a temp file and move, so an interrupted write cannot leave a truncated
                 // zip that the host would then try to import.
@@ -98,6 +115,7 @@ namespace FeatureLink.Services
                     return false;
                 }
 
+                TryWriteFingerprint(fingerprintPath, fingerprint);
                 Log.Info($"Installed iconset \"{group}\" ({installed.IconCount} icons, uid {uid}).");
                 return true;
             }
@@ -106,6 +124,45 @@ namespace FeatureLink.Services
                 Log.Error($"Could not install the iconset for \"{group}\".", ex);
                 return false;
             }
+        }
+
+        /// <summary>
+        /// A stable hash of what the zip CONTAINS, used to decide whether an installed set is
+        /// still current. Reads the archive back and hashes each entry's name and bytes in order,
+        /// deliberately ignoring the zip container's own metadata — entry timestamps make the raw
+        /// bytes differ on every build of identical content.
+        /// </summary>
+        private static string ContentFingerprint(byte[] zipBytes)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            using (var buffer = new MemoryStream(zipBytes))
+            using (var zip = new System.IO.Compression.ZipArchive(buffer, System.IO.Compression.ZipArchiveMode.Read))
+            {
+                var accumulator = new MemoryStream();
+                foreach (var entry in zip.Entries.OrderBy(e => e.FullName, StringComparer.Ordinal))
+                {
+                    byte[] name = System.Text.Encoding.UTF8.GetBytes(entry.FullName + "\n");
+                    accumulator.Write(name, 0, name.Length);
+                    using (var content = entry.Open()) content.CopyTo(accumulator);
+                }
+                accumulator.Position = 0;
+                byte[] digest = sha.ComputeHash(accumulator);
+                var sb = new System.Text.StringBuilder(64);
+                foreach (byte b in digest) sb.Append(b.ToString("x2", CultureInfo.InvariantCulture));
+                return sb.ToString();
+            }
+        }
+
+        private static string ReadFingerprint(string path)
+        {
+            try { return File.Exists(path) ? File.ReadAllText(path).Trim() : null; }
+            catch { return null; }
+        }
+
+        private static void TryWriteFingerprint(string path, string fingerprint)
+        {
+            // Best effort: a missing fingerprint only costs one redundant reinstall next sync.
+            try { File.WriteAllText(path, fingerprint); } catch { }
         }
 
         /// <summary>Drops a previously installed set so the next download regenerates it. For a
