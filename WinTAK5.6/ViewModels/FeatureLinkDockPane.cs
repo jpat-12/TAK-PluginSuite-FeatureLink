@@ -1603,13 +1603,13 @@ namespace FeatureLink.ViewModels
                 string canonical = AutoIconset.Canonicalize(layer.Url);
                 var icons = AutoIconset.ExtractPictureSymbols(meta.Renderer);
 
-                if (icons.IsEmpty)
-                {
-                    if (icons.UnsupportedSymbols > 0)
-                        Log.Info($"Layer \"{layer.Name}\" uses {icons.UnsupportedSymbols} CIM symbol(s), "
-                                 + "which no TAK platform can render; falling back to colour styling.");
-                    return null;
-                }
+                // Always report WHAT the renderer declared versus what came out. A layer that is
+                // richly styled in ArcGIS but yields one icon here is not visible any other way —
+                // no exception is thrown and the output is perfectly valid for what was parsed.
+                string explanation = AutoIconset.ExplainExtraction(icons);
+                if (explanation != null) Log.Info($"Layer \"{layer.Name}\" {explanation}");
+
+                if (icons.IsEmpty) return null;
 
                 // The naming source is the FeatureServer layer's own name, never the operator's
                 // local label for it — every platform must derive the same group string.

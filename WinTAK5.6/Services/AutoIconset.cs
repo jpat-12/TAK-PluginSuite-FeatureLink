@@ -289,6 +289,20 @@ namespace FeatureLink.Services
             /// yielding only a default icon is visible rather than mysterious.</summary>
             public int UnsupportedSymbols { get; set; }
 
+            /// <summary>The renderer's own type string, for diagnostics.</summary>
+            public string RendererType { get; set; } = string.Empty;
+
+            /// <summary>How many classified categories the renderer DECLARED, before any were
+            /// skipped. The single most valuable diagnostic in this class: declared=0 against a
+            /// layer the operator can see is richly styled means the categories are in a layout
+            /// this build does not read — which is exactly how the uniqueValueGroups gap hid for
+            /// as long as it did.</summary>
+            public int DeclaredEntries { get; set; }
+
+            /// <summary>Distinct symbol types that were seen and not used, e.g. "esriSMS",
+            /// "CIMSymbolReference". Drives <see cref="ExplainExtraction"/>.</summary>
+            public HashSet<string> SkippedTypes { get; } = new HashSet<string>(StringComparer.Ordinal);
+
             public bool IsEmpty => Symbols.Count == 0;
         }
 
@@ -307,6 +321,7 @@ namespace FeatureLink.Services
             if (renderer == null) return result;
 
             string type = (string)renderer["type"] ?? string.Empty;
+            result.RendererType = type.Length == 0 ? "(untyped)" : type;
 
             if (!string.IsNullOrEmpty(fieldOverride)) result.Field = fieldOverride;
             else if (type.IndexOf("uniqueValue", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -320,7 +335,9 @@ namespace FeatureLink.Services
             // uniqueValueInfos array meant a modern ArcGIS Online renderer
             // (uniqueValueGroups/classes) yielded no categories, fell through to defaultSymbol,
             // and stamped one icon on every feature — see AutoSymbology.EnumerateValueEntries.
-            foreach (var entry in AutoSymbology.EnumerateValueEntries(renderer))
+            var classified = AutoSymbology.EnumerateValueEntries(renderer);
+            result.DeclaredEntries = classified.Count;
+            foreach (var entry in classified)
             {
                 string raw = string.IsNullOrEmpty(entry.Label) ? entry.Value : entry.Label;
                 AddSymbol(result, taken, entry.Symbol, raw, entry.Value, isDefault: false);
@@ -330,14 +347,18 @@ namespace FeatureLink.Services
             // resolved per feature; only their symbols are harvested, as they were before.
             if (renderer["classBreakInfos"] is JArray breaks)
             {
+                result.DeclaredEntries += breaks.Count;
                 foreach (var entry in breaks.OfType<JObject>())
                 {
-                    string raw = (string)entry["label"];
+                    // Stringify through JToken rather than casting: a JSON NUMBER cast straight
+                    // to string yields null on some token types, and class-break values are
+                    // numeric by definition. ATAK reads these with optString, which stringifies.
+                    string raw = TokenText(entry["label"]);
                     if (string.IsNullOrEmpty(raw))
-                        raw = (string)entry["value"] ?? (string)entry["classMaxValue"];
+                        raw = TokenText(entry["value"]) ?? TokenText(entry["classMaxValue"]);
 
                     AddSymbol(result, taken, entry["symbol"] as JObject, raw,
-                        (string)entry["value"], isDefault: false);
+                        TokenText(entry["value"]), isDefault: false);
                 }
             }
 
@@ -353,6 +374,17 @@ namespace FeatureLink.Services
             return result;
         }
 
+        /// <summary>Reads a token as text regardless of its JSON type. ArcGIS writes category
+        /// values as numbers as often as strings, and a direct string cast does not survive
+        /// that.</summary>
+        private static string TokenText(JToken token)
+        {
+            if (token == null || token.Type == JTokenType.Null) return null;
+            return token.Type == JTokenType.String
+                ? (string)token
+                : token.ToString(Newtonsoft.Json.Formatting.None).Trim('"');
+        }
+
         private static void AddSymbol(Extraction result, ISet<string> taken, JObject symbol,
             string rawLabel, string value, bool isDefault)
         {
@@ -362,20 +394,32 @@ namespace FeatureLink.Services
             if (!string.Equals(symbolType, "esriPMS", StringComparison.OrdinalIgnoreCase))
             {
                 // esriSMS/SLS/SFS are AutoSymbology's job. Anything else — CIMSymbolReference
-                // above all — is unsupported everywhere, and worth counting so the operator is
-                // told why a layer produced fewer icons than it has categories.
+                // above all — is unsupported everywhere. Record the TYPE, not just a count: an
+                // operator looking at a layer that produced one icon needs to know whether the
+                // symbols were geometric (so colour styling applies) or an encoding nothing
+                // parses. ATAK has logged this for a while; WinTAK not doing so is why the
+                // uniqueValueGroups gap stayed invisible in the logs.
+                result.SkippedTypes.Add(symbolType.Length == 0 ? "(untyped)" : symbolType);
                 if (symbolType.IndexOf("CIM", StringComparison.OrdinalIgnoreCase) >= 0)
                     result.UnsupportedSymbols++;
                 return;
             }
 
             string imageData = (string)symbol["imageData"];
-            if (string.IsNullOrEmpty(imageData)) return;
+            if (string.IsNullOrEmpty(imageData))
+            {
+                result.SkippedTypes.Add("esriPMS(no imageData)");
+                return;
+            }
 
             byte[] png;
             try { png = Convert.FromBase64String(imageData); }
-            catch (FormatException) { return; }
-            if (png.Length == 0) return;
+            catch (FormatException)
+            {
+                result.SkippedTypes.Add("esriPMS(bad base64)");
+                return;
+            }
+            if (png.Length == 0) { result.SkippedTypes.Add("esriPMS(empty)"); return; }
 
             // §6: an unlabelled default becomes Other.png; everything else goes through §5.2.
             string fileName = isDefault && string.IsNullOrEmpty(rawLabel)
@@ -389,6 +433,52 @@ namespace FeatureLink.Services
                 Png = png,
                 IsDefault = isDefault,
             });
+        }
+
+        /// <summary>
+        /// One line explaining why a renderer produced the icon count it did.
+        ///
+        /// <para>Ported from ATAK's <c>AutoIconset.logExtraction</c>, which WinTAK lacked. That
+        /// absence is why a renderer layout this build could not read stayed invisible for as
+        /// long as it did: the extractors behaved correctly for what they saw, produced one
+        /// default icon, and said nothing. <c>declared=0</c> against a layer the operator can see
+        /// is richly styled is the tell, and it only helps if it is written down.</para>
+        ///
+        /// <para>Returns null when there is nothing worth saying — a fully successful extraction
+        /// is not news.</para>
+        /// </summary>
+        public static string ExplainExtraction(Extraction extraction)
+        {
+            if (extraction == null) return null;
+
+            var reasons = new List<string>();
+
+            if (extraction.DeclaredEntries == 0 && extraction.Symbols.Count <= 1)
+                reasons.Add("the renderer declared no classified categories this build can read — "
+                          + "if the layer shows several symbols in ArcGIS, its categories are in a "
+                          + "layout this extractor does not parse");
+
+            if (extraction.SkippedTypes.Contains("esriSMS"))
+                reasons.Add("esriSMS is a geometric marker (shape and colour, no embedded image), "
+                          + "so there are no icon bytes to extract — those categories get colour "
+                          + "styling instead");
+
+            if (extraction.SkippedTypes.Any(t => t.IndexOf("CIM", StringComparison.OrdinalIgnoreCase) >= 0))
+                reasons.Add("CIMSymbolReference is the modern ArcGIS Map Viewer encoding and is not "
+                          + "parsed by any TAK platform");
+
+            foreach (string skipped in extraction.SkippedTypes)
+                if (skipped.StartsWith("esriPMS(", StringComparison.Ordinal))
+                    reasons.Add("a picture symbol carried no usable image data (" + skipped + ")");
+
+            string summary = string.Format(CultureInfo.InvariantCulture,
+                "renderer '{0}': declared={1} extracted={2}",
+                extraction.RendererType, extraction.DeclaredEntries, extraction.Symbols.Count);
+
+            if (reasons.Count == 0)
+                return extraction.Symbols.Count == 0 ? summary : null;
+
+            return summary + " — " + string.Join(" ", reasons) + ".";
         }
 
         // ─────────────────────────────────────────────────────────────────────────

@@ -160,14 +160,40 @@ namespace FeatureLink.Tests
             Assert.Empty(r.StrokeByValue);              // ranges are not resolvable per feature
         }
 
+        /// <summary>
+        /// This test previously asserted the opposite — that a class-breaks renderer with no
+        /// defaultSymbol falls back to <c>classBreakInfos[0]</c>. That behaviour was wrong and
+        /// dangerous, and it was also a divergence from ATAK, which refuses here deliberately.
+        ///
+        /// <para>Break 0 is the LOWEST-value class. Styling the whole layer with it renders every
+        /// feature as though it sat in the bottom bucket — on a tactical display that is a map
+        /// which looks authoritative and is not. Numeric range matching is not implemented on any
+        /// TAK platform, so the honest outcome is no styling at all.</para>
+        /// </summary>
         [Fact]
-        public void ClassBreaks_WithNoDefaultSymbol_FallsBackToTheFirstBreak()
+        public void ClassBreaks_WithNoDefaultSymbol_DeclinesToStyle_RatherThanUseTheLowestBucket()
         {
             var r = AutoSymbology.Extract(J(@"{
               'type':'classBreaksRenderer','field':'POP',
               'classBreakInfos':[{'symbol':{'type':'esriSLS','color':[9,9,9],'width':7}}]
             }".Replace('\'', '"')));
-            Assert.Equal(7f, r.SingleStroke.WidthPx);
+
+            Assert.Null(r.SingleStroke);
+            Assert.True(r.IsEmpty);
+        }
+
+        /// <summary>A defaultSymbol IS usable for the whole layer — it is the renderer's own
+        /// statement about unclassified features, not a guess on our part.</summary>
+        [Fact]
+        public void ClassBreaks_WithADefaultSymbol_StillStylesFromIt()
+        {
+            var r = AutoSymbology.Extract(J(@"{
+              'type':'classBreaksRenderer','field':'POP',
+              'defaultSymbol':{'type':'esriSLS','color':[1,2,3],'width':4},
+              'classBreakInfos':[{'symbol':{'type':'esriSLS','color':[9,9,9],'width':7}}]
+            }".Replace('\'', '"')));
+
+            Assert.Equal(4f, r.SingleStroke.WidthPx);
         }
 
         [Fact]

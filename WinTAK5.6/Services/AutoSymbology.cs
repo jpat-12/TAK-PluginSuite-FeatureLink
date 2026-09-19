@@ -260,8 +260,17 @@ namespace FeatureLink.Services
                     // feature here (same limitation as AutoIconset); only a fallback symbol is
                     // usable as a single style for the whole layer.
                     var fallback = renderer["defaultSymbol"] as JObject;
-                    if (fallback == null && renderer["classBreakInfos"] is JArray breaks && breaks.Count > 0)
-                        fallback = (breaks[0] as JObject)?["symbol"] as JObject;
+                    if (fallback == null)
+                    {
+                        // Deliberately NOT classBreakInfos[0], which this used to fall back to.
+                        // Break 0 is the LOWEST-value class, so using it styles the whole layer as
+                        // if every feature sat in the bottom bucket — a map that looks
+                        // authoritative and is not. ATAK refuses here for exactly this reason;
+                        // WinTAK doing otherwise was both a divergence and the more dangerous of
+                        // the two behaviours. Refuse to style rather than mislead.
+                        Log.Info("classBreaks renderer has no defaultSymbol — declining to style "
+                                 + "(numeric range matching is not implemented).");
+                    }
                     if (fallback != null)
                     {
                         singleStroke = StrokeFrom(fallback);

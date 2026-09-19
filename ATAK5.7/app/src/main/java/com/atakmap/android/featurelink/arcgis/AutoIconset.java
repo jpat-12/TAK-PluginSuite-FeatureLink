@@ -303,17 +303,20 @@ public final class AutoIconset {
 
         if ("uniqueValue".equals(type) || "uniqueValueRenderer".equals(type)) {
             ex.field = renderer.optString("field1", renderer.optString("field", ""));
-            JSONArray infos = renderer.optJSONArray("uniqueValueInfos");
-            if (infos != null) {
-                ex.declared = infos.length();
-                for (int i = 0; i < infos.length(); i++) {
-                    JSONObject info = infos.optJSONObject(i);
-                    if (info == null) continue;
-                    String value = info.optString("value", "");
-                    String label = info.optString("label", value);
-                    Pms p = pmsFrom(info.optJSONObject("symbol"), value, label, false, ex.skipped);
-                    if (p != null) out.add(p);
-                }
+            // Both unique-value layouts, in renderer order — see
+            // AutoSymbology.enumerateValueEntries. Reading only uniqueValueInfos meant a modern
+            // ArcGIS Online renderer declared nothing here, so the zip held just the default
+            // symbol's Other.png while another platform built the SAME spec uid holding the real
+            // icons — the §0 "one uid, one resolvable set of strings" guarantee, broken silently.
+            List<AutoSymbology.ValueEntry> entries = AutoSymbology.enumerateValueEntries(renderer);
+            // Counts symbol-bearing categories from both layouts; a category with no symbol is
+            // not declared symbology and the enumerator has already dropped it.
+            ex.declared = entries.size();
+            for (AutoSymbology.ValueEntry e : entries) {
+                String value = e.value != null ? e.value : "";
+                String label = e.label != null ? e.label : value;
+                Pms p = pmsFrom(e.symbol, value, label, false, ex.skipped);
+                if (p != null) out.add(p);
             }
             addDefault(renderer, out, ex.skipped);
         } else if ("classBreaks".equals(type) || "classBreaksRenderer".equals(type)) {

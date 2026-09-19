@@ -946,13 +946,14 @@ final class DisplayConfig {
                 case "uniqueValueRenderer": {
                     String field = r.optString("field1", r.optString("field", ""));
                     List<UvEntry> entries = new ArrayList<>();
-                    JSONArray infos = r.optJSONArray("uniqueValueInfos");
-                    if (infos != null) {
-                        for (int i = 0; i < infos.length(); i++) {
-                            JSONObject info = infos.getJSONObject(i);
-                            entries.add(new UvEntry(info.optString("value", ""),
-                                    esriSymbolColor(info.optJSONObject("symbol"))));
-                        }
+                    // Both unique-value layouts — see AutoSymbology.enumerateValueEntries. A
+                    // modern ArcGIS Online renderer carries its categories in uniqueValueGroups;
+                    // reading only uniqueValueInfos left this list empty, and an empty uv list
+                    // means resolveColor() answers defaultColor for every feature — a layer that
+                    // looks deliberately styled in one flat colour rather than unstyled.
+                    for (AutoSymbology.ValueEntry e : AutoSymbology.enumerateValueEntries(r)) {
+                        entries.add(new UvEntry(e.value != null ? e.value : "",
+                                esriSymbolColor(e.symbol)));
                     }
                     int defaultColor = esriSymbolColor(r.optJSONObject("defaultSymbol"));
                     return new SymConfig("uv", defaultColor, Color.BLACK, 12, "circle",

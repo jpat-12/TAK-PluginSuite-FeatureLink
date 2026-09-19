@@ -5,8 +5,10 @@ import android.graphics.Color;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -95,6 +97,123 @@ public final class AutoSymbology {
 
     private AutoSymbology() {}
 
+    /** One classified renderer category: the attribute value it matches, its label, and its
+     * symbol. {@code value} and {@code label} are null when the renderer did not declare them
+     * (callers substitute their own fallback); {@code symbol} is never null. */
+    public static final class ValueEntry {
+        public final String value;
+        public final String label;
+        public final JSONObject symbol;
+
+        ValueEntry(String value, String label, JSONObject symbol) {
+            this.value = value;
+            this.label = label;
+            this.symbol = symbol;
+        }
+    }
+
+    /**
+     * Enumerates a renderer's classified categories, in renderer order, from EITHER unique-value
+     * layout. Shared by {@link AutoIconset}, {@link #extract} and DisplayConfig.fromEsriRenderer
+     * so all three agree on what a renderer declares.
+     *
+     * <p>ArcGIS encodes the same thing two ways: the classic flat {@code uniqueValueInfos} array,
+     * and the modern {@code uniqueValueGroups[].classes[]} that ArcGIS Online now publishes, where
+     * each class carries {@code values: [["A"],["B"]]} — an array of arrays, because a unique-value
+     * renderer may key on up to three fields (joined by {@code fieldDelimiter}, Esri default ",")
+     * and one class may cover several values sharing one symbol.
+     *
+     * <p>Reading only the classic array is silently catastrophic rather than merely incomplete: a
+     * modern renderer's categories are not seen at all, so every caller falls through to
+     * {@code defaultSymbol} and one symbol is applied to every feature. Field-confirmed on WinTAK —
+     * a layer with twelve distinct symbols rendered as twenty-nine identical dots, the only
+     * evidence being an iconset zip containing a single Other.png.
+     *
+     * <p>This is also a cross-platform correctness requirement, not just a local fidelity one: the
+     * iconset uid is sha256(canonicalUrl + "/" + field) and is identical on every platform, so a
+     * platform that reads only the classic shape builds the SAME uid holding a DIFFERENT (empty)
+     * set of icons — and AUTO-ICONSET-SPEC.md §0 requires one uid to mean one resolvable set of
+     * {uid}/{group}/{filename} strings. A CoT authored on a platform that reads both would not
+     * resolve its icon here.
+     *
+     * <p>Order is preserved across both layouts (classic first, then groups): spec §5.3 assigns
+     * filename collision suffixes (_2, _3) in renderer array order, and every platform must derive
+     * the same suffix for the same symbol.
+     *
+     * <p>A class or info without a {@code symbol} is skipped — there is nothing to extract from it
+     * and callers count what this returns as the renderer's declared category count.
+     */
+    public static List<ValueEntry> enumerateValueEntries(JSONObject renderer) {
+        List<ValueEntry> entries = new ArrayList<>();
+        if (renderer == null) return entries;
+
+        JSONArray infos = renderer.optJSONArray("uniqueValueInfos");
+        if (infos != null) {
+            for (int i = 0; i < infos.length(); i++) {
+                JSONObject info = infos.optJSONObject(i);
+                if (info == null) continue;
+                JSONObject symbol = info.optJSONObject("symbol");
+                if (symbol == null) continue;
+                entries.add(new ValueEntry(optStringOrNull(info, "value"),
+                        optStringOrNull(info, "label"), symbol));
+            }
+        }
+
+        JSONArray groups = renderer.optJSONArray("uniqueValueGroups");
+        if (groups != null) {
+            String delimiter = renderer.optString("fieldDelimiter", ",");
+            for (int g = 0; g < groups.length(); g++) {
+                JSONObject group = groups.optJSONObject(g);
+                if (group == null) continue;
+                JSONArray classes = group.optJSONArray("classes");
+                if (classes == null) continue;
+                for (int c = 0; c < classes.length(); c++) {
+                    JSONObject cls = classes.optJSONObject(c);
+                    if (cls == null) continue;
+                    JSONObject symbol = cls.optJSONObject("symbol");
+                    if (symbol == null) continue;
+                    String label = optStringOrNull(cls, "label");
+
+                    JSONArray values = cls.optJSONArray("values");
+                    if (values == null || values.length() == 0) {
+                        entries.add(new ValueEntry(null, label, symbol));
+                        continue;
+                    }
+                    // One class can cover SEVERAL values sharing a symbol; each becomes its own
+                    // entry so per-value resolution matches any of them.
+                    for (int v = 0; v < values.length(); v++) {
+                        entries.add(new ValueEntry(composeValue(values, v, delimiter), label, symbol));
+                    }
+                }
+            }
+        }
+
+        return entries;
+    }
+
+    /** One {@code values[]} element: normally the field1/field2/field3 key parts of a single
+     * category, which are joined by the renderer's delimiter. Tolerates a bare scalar because
+     * hand-authored renderer JSON is not guaranteed to nest. */
+    private static String composeValue(JSONArray values, int index, String delimiter) {
+        JSONArray parts = values.optJSONArray(index);
+        if (parts == null) return values.isNull(index) ? "" : values.optString(index, "");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < parts.length(); i++) {
+            if (i > 0) sb.append(delimiter);
+            // optString stringifies JSON numbers, matching how the classic path has always
+            // keyed numeric renderer values — the two layouts must produce the same key.
+            if (!parts.isNull(i)) sb.append(parts.optString(i, ""));
+        }
+        return sb.toString();
+    }
+
+    /** Distinguishes "declared as empty" from "not declared": an empty string is a legitimate
+     * uniqueValue key in ArcGIS ("unclassified"), so it must not be collapsed into absent. */
+    private static String optStringOrNull(JSONObject o, String key) {
+        if (o == null || !o.has(key) || o.isNull(key)) return null;
+        return o.optString(key, "");
+    }
+
     /**
      * Extracts esriSMS/esriSLS/esriSFS styling from a renderer, mirroring the same
      * simple/uniqueValue/classBreaks/defaultSymbol traversal {@link AutoIconset#generate} uses.
@@ -120,24 +239,21 @@ public final class AutoSymbology {
 
             if ("uniqueValue".equals(type) || "uniqueValueRenderer".equals(type)) {
                 field = renderer.optString("field1", renderer.optString("field", ""));
-                JSONArray infos = renderer.optJSONArray("uniqueValueInfos");
-                if (infos != null) {
-                    for (int i = 0; i < infos.length(); i++) {
-                        JSONObject info = infos.optJSONObject(i);
-                        if (info == null) continue;
-                        // An empty string is a legitimate uniqueValue key in ArcGIS
-                        // ("unclassified"); only an *absent* value entry is skipped.
-                        if (!info.has("value") || info.isNull("value")) continue;
-                        String value = info.optString("value", "");
-                        JSONObject symbol = info.optJSONObject("symbol");
-                        if (symbol == null) continue;
-                        StrokeStyle s = strokeFrom(symbol);
-                        FillStyle f = fillFrom(symbol);
-                        MarkerStyle m = markerFrom(symbol);
-                        if (s != null) strokeByValue.put(value, s);
-                        if (f != null) fillByValue.put(value, f);
-                        if (m != null) markerByValue.put(value, m);
-                    }
+                // Covers BOTH uniqueValueInfos and uniqueValueGroups/classes — see
+                // enumerateValueEntries. Reading only the former made a modern ArcGIS Online
+                // renderer look as if it declared no categories at all.
+                for (ValueEntry entry : enumerateValueEntries(renderer)) {
+                    // An empty string is a legitimate uniqueValue key in ArcGIS
+                    // ("unclassified"); only an *absent* value entry is skipped.
+                    if (entry.value == null) continue;
+                    String value = entry.value;
+                    JSONObject symbol = entry.symbol;
+                    StrokeStyle s = strokeFrom(symbol);
+                    FillStyle f = fillFrom(symbol);
+                    MarkerStyle m = markerFrom(symbol);
+                    if (s != null) strokeByValue.put(value, s);
+                    if (f != null) fillByValue.put(value, f);
+                    if (m != null) markerByValue.put(value, m);
                 }
                 JSONObject defSymbol = renderer.optJSONObject("defaultSymbol");
                 if (defSymbol != null) {
