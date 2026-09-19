@@ -1614,6 +1614,32 @@ namespace FeatureLink.ViewModels
             }
         }
 
+        /// <summary>Layers already asked about in this session, by URL. A large layer is large on
+        /// every single sync, so without this the dialog would reappear on every recurrence tick —
+        /// the exact behaviour reported from the field. A "yes" is persisted on the layer and
+        /// outlives the session; a "no" lives only here, so restarting WinTAK offers again rather
+        /// than permanently hiding a layer behind a decision made once in a hurry.</summary>
+        private readonly HashSet<string> _largeLayerAsked = new HashSet<string>(StringComparer.Ordinal);
+        private readonly object _largeLayerAskedLock = new object();
+
+        /// <summary>
+        /// True when the size dialog should be raised for this layer now.
+        ///
+        /// <para>An OPERATOR-INITIATED sync always asks, every time: they just pressed the button,
+        /// so the dialog is the answer to a question they actually posed, and suppressing it would
+        /// make Sync look broken for any layer they had previously declined. Only the TIMER-driven
+        /// path is rate-limited, to once per layer per session.</para>
+        /// </summary>
+        private bool ShouldRaiseLargeLayerDialog(ArcGisLayer layer, bool interactive)
+        {
+            if (layer == null || string.IsNullOrEmpty(layer.Url)) return false;
+            lock (_largeLayerAskedLock)
+            {
+                bool first = _largeLayerAsked.Add(layer.Url);
+                return interactive || first;
+            }
+        }
+
         /// <summary>
         /// Pre-flight size guard for a layer download.
         ///
@@ -1650,6 +1676,10 @@ namespace FeatureLink.ViewModels
 
             if (count > MaxDownloadableFeatures)
             {
+                // Once per layer per session — an over-cap layer is over the cap on EVERY
+                // recurrence tick, so an ungated notice here would pop every 15 seconds forever.
+                if (!ShouldRaiseLargeLayerDialog(layer, interactive)) return false;
+
                 string refusal =
                     $"\"{layer.Name}\" contains {count:N0} features, over this plugin's limit of "
                     + $"{MaxDownloadableFeatures:N0}.\n\nPlotting that many markers would make the map "
@@ -1664,20 +1694,19 @@ namespace FeatureLink.ViewModels
 
             if (count > LargeDownloadPromptThreshold)
             {
-                // Asked once per layer, ever. A layer over the threshold is over it on every sync,
-                // so prompting per download turned one reasonable question into a modal that
-                // reappeared on every recurrence tick.
+                // Already approved on a previous run — the answer is persisted per layer.
                 if (layer.LargeDownloadAccepted) return true;
 
-                // A background refresh must never raise a modal dialog. The operator did not ask
-                // for anything, is probably looking at something else, and a timer-driven prompt
-                // steals focus from the map during an incident. Skip the sync instead and say so
-                // in the status line, where it can be acted on when convenient.
-                if (!interactive)
+                // The operator IS asked, even when the sync was started by the recurrence timer
+                // rather than by a click. An earlier version only wrote to the status strip here,
+                // on the reasoning that a background task should not steal focus — but a status
+                // line nobody is looking at is indistinguishable from the layer silently never
+                // syncing, which is the worse failure on a tactical display. Asking is right; the
+                // defect was asking REPEATEDLY, which is what the once-per-session gate fixes.
+                if (!ShouldRaiseLargeLayerDialog(layer, interactive))
                 {
-                    Log.Info($"Skipping the scheduled refresh of \"{layer.Name}\" ({count} features): "
-                             + "over the large-layer threshold and not yet approved by the operator.");
-                    SetStatus($"\"{layer.Name}\" ({count:N0} features) needs approval — press sync to download it.");
+                    // Already asked and declined this session. Say nothing — no dialog, no status
+                    // churn, no log line every tick.
                     return false;
                 }
 
@@ -1685,11 +1714,18 @@ namespace FeatureLink.ViewModels
                     $"\"{layer.Name}\" contains {count:N0} features.\n\n"
                     + "Each one is plotted as a separate marker, so a layer this size will take a "
                     + "while to sync and may slow the map down.\n\n"
-                    + "Download it anyway? This is remembered for this layer.";
-                bool proceed = await RunOnUiAsync(() => DialogService.Confirm(question, "Large layer")).ConfigureAwait(false);
+                    + (interactive
+                        ? "Download it anyway?"
+                        : "This layer is due for its scheduled refresh. Download it now?")
+                    + "\n\nYes is remembered for this layer. No will not be asked again until "
+                    + "WinTAK restarts.";
+
+                bool proceed = await RunOnUiAsync(() => DialogService.Confirm(question, "Large layer"))
+                    .ConfigureAwait(false);
                 if (!proceed)
                 {
-                    Log.Info($"Operator declined the {count}-feature download of \"{layer.Name}\".");
+                    Log.Info($"Operator declined the {count}-feature download of \"{layer.Name}\"; "
+                             + "not asking again this session.");
                     SetStatus($"Sync of \"{layer.Name}\" ({count:N0} features) was cancelled.");
                     return false;
                 }
