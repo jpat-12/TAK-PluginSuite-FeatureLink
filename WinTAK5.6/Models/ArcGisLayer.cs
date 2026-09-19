@@ -70,6 +70,25 @@ namespace FeatureLink.Models
         /// since there's no portal item to ask.</summary>
         public string Access { get => _access; set { _access = value; RaisePropertyChanged(); } }
 
+        private string _itemId;
+        /// <summary>The ArcGIS portal item this layer came from, when known.
+        ///
+        /// <para>Needed because an operator who styles a hosted layer on the item's
+        /// <b>Visualization</b> tab does NOT modify the feature service. ArcGIS saves that
+        /// renderer as an item-level override at
+        /// <c>/sharing/rest/content/items/{itemId}/data</c>, so the service keeps reporting its
+        /// original — often <c>simple</c> — renderer, and the layer renders as one repeated
+        /// marker. Without the item id there is no way to find the symbology the operator can
+        /// actually see.</para>
+        ///
+        /// <para>Empty for a layer added by URL, where no portal item is known; the service
+        /// renderer is then all there is.</para></summary>
+        public string ItemId
+        {
+            get => _itemId;
+            set { _itemId = value; RaisePropertyChanged(); }
+        }
+
         private bool _largeDownloadAccepted;
         /// <summary>The operator has already agreed to sync this layer despite its size, so the
         /// "large layer" prompt must not appear again for it.
@@ -251,6 +270,7 @@ namespace FeatureLink.Models
                 new XElement("OwnerAccountKey", OwnerAccountKey ?? string.Empty),
                 new XElement("HasDisplayConfig", HasDisplayConfig),
                 new XElement("LargeDownloadAccepted", LargeDownloadAccepted),
+                new XElement("ItemId", ItemId ?? string.Empty),
                 new XElement("SymJson", SymJson ?? string.Empty),
                 new XElement("LblJson", LblJson ?? string.Empty),
                 new XElement("PopupJson", PopupJson ?? string.Empty),
@@ -283,6 +303,7 @@ namespace FeatureLink.Models
                 OwnerAccountKey = NullIfEmpty(Text(el, "OwnerAccountKey")),
                 HasDisplayConfig = Bool(el, "HasDisplayConfig", false),
                 LargeDownloadAccepted = Bool(el, "LargeDownloadAccepted", false),
+                ItemId = NullIfEmpty(Text(el, "ItemId")),
                 SymJson = NullIfEmpty(Text(el, "SymJson")),
                 LblJson = NullIfEmpty(Text(el, "LblJson")),
                 PopupJson = NullIfEmpty(Text(el, "PopupJson")),

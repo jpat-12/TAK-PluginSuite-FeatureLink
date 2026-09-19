@@ -134,6 +134,9 @@ namespace FeatureLink.Services
                     {
                         // Portal item "access": "public" (shared to Everyone), "org", or "private".
                         Access = (string)obj["access"] ?? "private",
+                        // Kept so symbology saved on the item's Visualization tab can be found —
+                        // that styling never reaches the feature service. See FetchItemRendererAsync.
+                        ItemId = (string)obj["id"],
                     });
                 }
 
@@ -171,6 +174,75 @@ namespace FeatureLink.Services
                 throw new ArcGisServiceException(
                     "The service did not return a feature count — the URL may not be a queryable layer.");
             return count.Value;
+        }
+
+        /// <summary>
+        /// Fetches the renderer an operator configured on the portal item's <b>Visualization</b>
+        /// tab, which is NOT the same document as the service's own renderer.
+        ///
+        /// <para>ArcGIS stores item-level styling at
+        /// <c>/sharing/rest/content/items/{itemId}/data</c> under
+        /// <c>layers[].layerDefinition.drawingInfo.renderer</c>, and saving it does not modify the
+        /// feature service at all. A layer published with one default symbol and then styled by
+        /// unique value in the web UI therefore still reports a <c>simple</c> renderer at
+        /// <c>{serviceUrl}/{layerId}?f=json</c> — which is exactly why such a layer rendered as one
+        /// repeated marker here while ArcGIS showed a dozen distinct symbols.</para>
+        ///
+        /// <para>Returns null when the item has no data, no layer override, or cannot be read —
+        /// all of which are entirely normal. The caller falls back to the service renderer, so
+        /// this is logged at info, never as a failure.</para>
+        /// </summary>
+        /// <param name="layerId">Sublayer index to match within <c>layers[]</c>; -1 accepts the
+        /// first override found.</param>
+        public async Task<JObject> FetchItemRendererAsync(string portalUrl, string itemId, int layerId,
+            string token, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (string.IsNullOrEmpty(itemId)) return null;
+
+            string url = NormalizePortal(portalUrl) + "/sharing/rest/content/items/"
+                       + Uri.EscapeDataString(itemId) + "/data?f=json";
+            try
+            {
+                var data = await ArcGisHttp.GetJsonAsync(_http, url, token, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!(data?["layers"] is JArray layers)) return null;
+
+                foreach (var entry in layers.OfType<JObject>())
+                {
+                    if (layerId >= 0)
+                    {
+                        int? id = (int?)entry["id"];
+                        if (id.HasValue && id.Value != layerId) continue;
+                    }
+
+                    var renderer = (entry["layerDefinition"] as JObject)?["drawingInfo"] as JObject;
+                    var resolved = renderer?["renderer"] as JObject;
+                    if (resolved != null) return resolved;
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                // An item with no /data, or no read access to it, is normal — not a failure.
+                Log.Info($"No item-level renderer for item {itemId}: {ex.Message}");
+            }
+            return null;
+        }
+
+        /// <summary>The sublayer index a canonical layer URL addresses, or -1 when it has none.
+        /// Used to pick the right entry out of an item's <c>layers[]</c> override list.</summary>
+        public static int LayerIndexOf(string layerUrl)
+        {
+            if (string.IsNullOrEmpty(layerUrl)) return -1;
+            string trimmed = layerUrl.TrimEnd('/');
+            int slash = trimmed.LastIndexOf('/');
+            if (slash < 0 || slash == trimmed.Length - 1) return -1;
+
+            string tail = trimmed.Substring(slash + 1);
+            int parsed;
+            return int.TryParse(tail, System.Globalization.NumberStyles.None,
+                CultureInfo.InvariantCulture, out parsed) ? parsed : -1;
         }
 
         // -------------------------------------------------------------------------

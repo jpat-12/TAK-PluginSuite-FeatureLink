@@ -1509,6 +1509,27 @@ namespace FeatureLink.ViewModels
             try
             {
                 var meta = await _restClient.FetchLayerMetadataAsync(layer.Url, token, ct).ConfigureAwait(false);
+
+                // An item-level override is what the operator actually SEES in ArcGIS Online, so
+                // it wins over the service's published renderer. Styling saved on the item's
+                // Visualization tab never touches the feature service, so without this a layer
+                // styled by unique value still reports a single-symbol 'simple' renderer here and
+                // renders as one repeated marker — the exact field symptom this closes.
+                if (!string.IsNullOrEmpty(layer.ItemId))
+                {
+                    var overrideRenderer = await _restClient.FetchItemRendererAsync(
+                        _authService.PortalUrl, layer.ItemId,
+                        ArcGisFeatureService.LayerIndexOf(layer.Url), token, ct).ConfigureAwait(false);
+
+                    if (overrideRenderer != null)
+                    {
+                        Log.Info($"Layer \"{layer.Name}\": using the item-level renderer from item "
+                                 + $"{layer.ItemId} (the service renderer was "
+                                 + $"'{(string)meta.Renderer?["type"] ?? "absent"}').");
+                        meta.Renderer = overrideRenderer;
+                    }
+                }
+
                 if (meta.Renderer == null)
                 {
                     Log.Info($"Layer \"{layer.Name}\" publishes no renderer — features keep WinTAK's default styling.");
