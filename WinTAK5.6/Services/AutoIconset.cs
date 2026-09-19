@@ -459,6 +459,108 @@ namespace FeatureLink.Services
         /// Mirrors ATAK's <c>DisplayConfig.forAutoIcons</c>, so producer and consumer stay one
         /// format rather than two.
         /// </summary>
+        /// <summary>
+        /// Merges picture-marker icons and simple-marker colours into ONE <c>adv</c> config, so a
+        /// renderer that mixes both — which is the normal case — renders both.
+        ///
+        /// <para><b>Why this exists.</b> The first cut treated the two as alternatives: if any
+        /// picture symbol was found, icons "won" and the colour config was never built. On a real
+        /// layer whose renderer had a handful of badge icons and a dozen coloured circles, that
+        /// produced the worst of both — a single icon stamped on every feature and no colours at
+        /// all, while ArcGIS showed twelve distinct symbols. The precedence has to be per VALUE,
+        /// not per layer.</para>
+        ///
+        /// <para>The schema supports this directly and always did:
+        /// <see cref="DisplayStyleResolver.ResolveColor"/> reads <c>c</c> from any <c>vs</c> entry,
+        /// while <see cref="DisplayStyleResolver.ResolveIconsetPath"/> returns a path only for an
+        /// entry marked <c>m:"icon"</c>. So one entry can carry a colour, an icon, or both, and
+        /// each resolver takes what it understands.</para>
+        /// </summary>
+        /// <param name="colorConfig">Output of
+        /// <see cref="DisplayStyleResolver.BuildMarkerSymConfigJson"/>, or null.</param>
+        public static JObject MergeIconAndColorConfig(string uid, string group, Extraction icons,
+            JObject colorConfig)
+        {
+            bool hasIcons = icons != null && !icons.IsEmpty;
+            if (!hasIcons) return colorConfig;
+
+            var iconByValue = new Dictionary<string, string>(StringComparer.Ordinal);
+            string defaultIconPath = null;
+            foreach (var symbol in icons.Symbols)
+            {
+                string path = IconsetPath(uid, group, symbol.FileName);
+                if (symbol.IsDefault || symbol.Value == null) defaultIconPath = path;
+                else iconByValue[symbol.Value] = path;
+            }
+
+            // The colour config's driving field wins when present: it comes from the same renderer
+            // and is what the colour entries are keyed on.
+            string field = icons.Field ?? string.Empty;
+            if (colorConfig != null)
+            {
+                string colorField = (string)colorConfig["f"];
+                if (!string.IsNullOrEmpty(colorField)) field = colorField;
+            }
+
+            var entries = new JArray();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            // Start from the colour entries so every value the renderer classified keeps its
+            // colour, then attach an icon to the ones that have a picture symbol.
+            var colorValues = colorConfig?["uv"] as JArray ?? colorConfig?["vs"] as JArray;
+            if (colorValues != null)
+            {
+                foreach (var e in colorValues.OfType<JObject>())
+                {
+                    string value = (string)e["v"];
+                    if (value == null || !seen.Add(value)) continue;
+
+                    var entry = new JObject { ["v"] = value };
+                    string color = (string)e["c"];
+                    if (!string.IsNullOrEmpty(color)) entry["c"] = color;
+
+                    string iconPath;
+                    if (iconByValue.TryGetValue(value, out iconPath))
+                    {
+                        entry["m"] = "icon";
+                        entry["up"] = iconPath;
+                    }
+                    entries.Add(entry);
+                }
+            }
+
+            // Values that have an icon but no colour entry (a renderer category whose symbol is a
+            // picture and therefore produced no simple-marker colour).
+            foreach (var kv in iconByValue)
+            {
+                if (!seen.Add(kv.Key)) continue;
+                entries.Add(new JObject { ["v"] = kv.Key, ["m"] = "icon", ["up"] = kv.Value });
+            }
+
+            if (entries.Count == 0)
+            {
+                // No per-value classification anywhere — a single picture symbol for the layer.
+                return defaultIconPath == null
+                    ? colorConfig
+                    : new JObject { ["t"] = "ic", ["up"] = defaultIconPath };
+            }
+
+            var merged = new JObject
+            {
+                ["t"] = "adv",
+                ["f"] = field,
+                ["vs"] = entries,
+            };
+
+            // Layer-wide fallbacks, used for a feature whose value matches no entry.
+            string fallbackColor = (string)colorConfig?["c"];
+            if (!string.IsNullOrEmpty(fallbackColor)) merged["c"] = fallbackColor;
+            if (defaultIconPath != null) merged["up"] = defaultIconPath;
+            merged["op"] = colorConfig?["op"] ?? 1.0;
+
+            return merged;
+        }
+
         public static JObject BuildIconSymConfig(string uid, string group, Extraction extraction)
         {
             if (extraction == null || extraction.IsEmpty) return null;

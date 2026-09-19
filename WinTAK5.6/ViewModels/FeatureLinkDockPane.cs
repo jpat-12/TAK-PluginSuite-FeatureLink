@@ -1520,21 +1520,35 @@ namespace FeatureLink.ViewModels
                 // with "this build cannot translate" — the renderer was understood perfectly well,
                 // there was simply nothing on WinTAK that could create the icons. Try that first,
                 // because an icon beats a coloured dot whenever the layer publishes one.
-                bool iconsResolved = TryResolveIconset(layer, meta);
-
+                // The two extractors are COMPLEMENTS over the same renderer, not alternatives:
+                // AutoIconset takes the esriPMS picture symbols, AutoSymbology takes the
+                // esriSMS/SLS/SFS colour and shape symbols. A normal ArcGIS renderer mixes both —
+                // a few badge icons among a dozen coloured circles — so treating them as
+                // either/or produced a single icon stamped on every feature and no colours at all
+                // while the source map showed twelve distinct symbols. Both are resolved, then
+                // merged per value.
+                IconsetResult icons = TryResolveIconset(layer, meta);
                 var extracted = AutoSymbology.Extract(meta.Renderer);
-                if (extracted.IsEmpty)
+
+                if (icons == null && extracted.IsEmpty)
                 {
-                    if (!iconsResolved)
-                        Log.Info($"Layer \"{layer.Name}\" publishes a renderer this build cannot "
-                                 + "translate into either icons or colours — default styling applies.");
+                    Log.Info($"Layer \"{layer.Name}\" publishes a renderer this build cannot "
+                             + "translate into either icons or colours — default styling applies.");
                     return;
                 }
 
-                // Icons win over the colour/shape fallback, matching ATAK's precedence.
-                if (string.IsNullOrEmpty(layer.SymJson) && !iconsResolved)
-                    layer.AutoSymJson = DisplayStyleResolver.BuildMarkerSymConfigJson(extracted)
-                        ?.ToString(Newtonsoft.Json.Formatting.None);
+                if (string.IsNullOrEmpty(layer.SymJson))
+                {
+                    JObject colors = extracted.IsEmpty
+                        ? null
+                        : DisplayStyleResolver.BuildMarkerSymConfigJson(extracted);
+
+                    JObject sym = icons == null
+                        ? colors
+                        : AutoIconset.MergeIconAndColorConfig(icons.Uid, icons.Group, icons.Extraction, colors);
+
+                    layer.AutoSymJson = sym?.ToString(Newtonsoft.Json.Formatting.None);
+                }
 
                 // The Config/No Config badge binds to HasDisplayConfig, which was only ever set on
                 // the share-import path — so a layer whose styling we derived from its OWN
@@ -1573,7 +1587,16 @@ namespace FeatureLink.ViewModels
         /// <para>Never throws and never fails a download — symbology is an enhancement. A failure
         /// leaves <c>AutoSymJson</c> alone so the colour/shape path can still apply.</para>
         /// </summary>
-        private bool TryResolveIconset(ArcGisLayer layer, LayerInfo meta)
+        /// <summary>An installed iconset plus the extraction it came from, so the caller can merge
+        /// the icons with the renderer's colour symbols rather than choosing between them.</summary>
+        private sealed class IconsetResult
+        {
+            public string Uid;
+            public string Group;
+            public AutoIconset.Extraction Extraction;
+        }
+
+        private IconsetResult TryResolveIconset(ArcGisLayer layer, LayerInfo meta)
         {
             try
             {
@@ -1585,7 +1608,7 @@ namespace FeatureLink.ViewModels
                     if (icons.UnsupportedSymbols > 0)
                         Log.Info($"Layer \"{layer.Name}\" uses {icons.UnsupportedSymbols} CIM symbol(s), "
                                  + "which no TAK platform can render; falling back to colour styling.");
-                    return false;
+                    return null;
                 }
 
                 // The naming source is the FeatureServer layer's own name, never the operator's
@@ -1596,21 +1619,15 @@ namespace FeatureLink.ViewModels
                 byte[] zip = AutoIconset.BuildZipBytes(uid, group, icons.Symbols);
 
                 string zipPath;
-                if (!IconsetInstaller.Install(uid, group, zip, out zipPath)) return false;
-
-                var sym = AutoIconset.BuildIconSymConfig(uid, group, icons);
-                if (sym == null) return false;
-
-                layer.AutoSymJson = sym.ToString(Newtonsoft.Json.Formatting.None);
-                RunOnUi(() => layer.HasDisplayConfig = true);
+                if (!IconsetInstaller.Install(uid, group, zip, out zipPath)) return null;
 
                 SetStatus($"Icons ready for \"{layer.Name}\" — {icons.Symbols.Count} symbol(s).");
-                return true;
+                return new IconsetResult { Uid = uid, Group = group, Extraction = icons };
             }
             catch (Exception ex)
             {
                 Log.Warn($"Could not build an iconset for \"{layer.Name}\": {ErrorText.ForOperator(ex)}");
-                return false;
+                return null;
             }
         }
 
