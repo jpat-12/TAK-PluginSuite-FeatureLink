@@ -7,7 +7,7 @@ records the discovered contract for the follow-up *in-app send to a TAK contact*
 recipient over the TAK network, the way ATAK's Mission Package share does).
 
 Everything below was verified against CloudTAK `main` + `@tak-ps/node-cot` source
-and probed live against the prod server (`map.prod.ilwg.us`, CloudTAK 13.31.0) in
+and probed live against a production CloudTAK server in
 July 2026. All of it reaches past PluginAPI's documented surface, so it is
 inherently fragile against CloudTAK changes — same caveat as `cloudtakInternals.ts`
 and `importIngest.ts`.

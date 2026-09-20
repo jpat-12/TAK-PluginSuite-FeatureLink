@@ -1,6 +1,6 @@
 // CloudTAK's POST /api/iconset contract, and what happens when it says no.
 //
-// Field-found on map.prod.ilwg.us: every icon registration was answered with a bare HTTP 400 and
+// Field-found on a production CloudTAK server: every icon registration was answered with a bare HTTP 400 and
 // the operator saw a layer with NO styling at all — no icons, but also no colours, shapes, labels
 // or popups. Two separate defects:
 //

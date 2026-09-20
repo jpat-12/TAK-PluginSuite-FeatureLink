@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "express": "^4.22.2",
-    "multer": "^2.2.0",
+    "multer": "^2.4.0",
     "unzipper": "^0.12.3"
   }
 }
