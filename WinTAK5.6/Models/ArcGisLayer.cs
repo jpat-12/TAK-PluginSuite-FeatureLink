@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Xml.Linq;
@@ -196,6 +196,34 @@ namespace FeatureLink.Models
         /// <see cref="ShpJson"/>. Not persisted, for the same reason.</summary>
         public string AutoShpJson { get; set; }
 
+        /// <summary>
+        /// Iconset UIDs this device has generated and installed for this layer, semicolon-separated.
+        ///
+        /// <para>Persisted, unlike <see cref="AutoSymJson"/>, and for the opposite reason. The
+        /// symbology config must go stale-proof by being re-derived every download; this is a record
+        /// of what is on <b>disk</b>, and the zips outlive the session. Without it a data package
+        /// built after a restart could only bundle icons for layers already re-synced in that
+        /// session, which is precisely when an operator packaging data for an offline peer is least
+        /// likely to have re-synced anything.</para>
+        /// </summary>
+        public string IconsetUids { get => _iconsetUids; set { _iconsetUids = value; RaisePropertyChanged(); } }
+        private string _iconsetUids;
+
+        /// <summary>Records an iconset UID against this layer, keeping the list unique and ordered.
+        /// Returns true when the record changed and settings should be saved.</summary>
+        public bool RecordIconsetUid(string uid)
+        {
+            if (string.IsNullOrWhiteSpace(uid)) return false;
+
+            var current = new System.Collections.Generic.SortedSet<string>(
+                (IconsetUids ?? string.Empty).Split(new[] { ';' },
+                    StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+
+            if (!current.Add(uid.Trim())) return false;
+            IconsetUids = string.Join(";", current);
+            return true;
+        }
+
         private long _featureCount;
         /// <summary>Features in the source layer. Assigning also marks the count KNOWN — see
         /// <see cref="FeatureCountText"/> for why the distinction matters.</summary>
@@ -372,6 +400,7 @@ namespace FeatureLink.Models
                 new XElement("HasDisplayConfig", HasDisplayConfig),
                 new XElement("LargeDownloadAccepted", LargeDownloadAccepted),
                 new XElement("ItemId", ItemId ?? string.Empty),
+                new XElement("IconsetUids", IconsetUids ?? string.Empty),
                 Extent?.ToXElement(),
                 new XElement("SymJson", SymJson ?? string.Empty),
                 new XElement("LblJson", LblJson ?? string.Empty),
@@ -407,6 +436,7 @@ namespace FeatureLink.Models
                 HasDisplayConfig = Bool(el, "HasDisplayConfig", false),
                 LargeDownloadAccepted = Bool(el, "LargeDownloadAccepted", false),
                 ItemId = NullIfEmpty(Text(el, "ItemId")),
+                IconsetUids = NullIfEmpty(Text(el, "IconsetUids")),
                 Extent = LayerExtent.FromXElement(el.Element("Extent")),
                 SymJson = NullIfEmpty(Text(el, "SymJson")),
                 LblJson = NullIfEmpty(Text(el, "LblJson")),

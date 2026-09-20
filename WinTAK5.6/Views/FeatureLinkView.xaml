@@ -1,4 +1,4 @@
-<UserControl x:Class="FeatureLink.Views.FeatureLinkView"
+﻿<UserControl x:Class="FeatureLink.Views.FeatureLinkView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -860,6 +860,19 @@
                         <!-- Private Layers card — on-device layers not shared to Everyone (received
                              via a share, or moved here from "My ArcGIS Layers"); hidden entirely
                              when empty. -->
+                        <!-- Data package: bundles the selected layers' configs and the iconsets
+                             this machine generated for them, then sends to contacts. Sits above
+                             the layer lists because it acts on all of them, not on one row. -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="Share a set of layers as a data package, with their icons included."
+                                           Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <Button Content="Create Data Package" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding CreateDataPackageCommand}" MinHeight="40"
+                                        ToolTip="Pick layers and contacts, then send a TAK data package"/>
+                            </StackPanel>
+                        </Border>
+
                         <Border Style="{StaticResource Card}" Margin="0,0,0,12"
                                 Visibility="{Binding ShowSharedPrivateLayersCard, Converter={StaticResource BoolToVis}}">
                             <StackPanel>

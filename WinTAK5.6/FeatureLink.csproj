@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
           Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
@@ -141,6 +141,8 @@
     <Compile Include="Services\ArcGisHttp.cs" />
     <Compile Include="Services\AutoIconset.cs" />
     <Compile Include="Services\AutoSymbology.cs" />
+    <Compile Include="Services\DataPackageBuilder.cs" />
+    <Compile Include="Services\DataPackageWriter.cs" />
     <Compile Include="Services\DialogService.cs" />
     <Compile Include="Services\DisplayStyleResolver.cs" />
     <Compile Include="Services\ErrorText.cs" />
@@ -158,6 +160,9 @@
     <Compile Include="Views\ContactPickerWindow.xaml.cs">
       <DependentUpon>ContactPickerWindow.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Views\DataPackageWindow.xaml.cs">
+      <DependentUpon>DataPackageWindow.xaml</DependentUpon>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup>
@@ -166,6 +171,10 @@
       <SubType>Designer</SubType>
     </Page>
     <Page Include="Views\ContactPickerWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\DataPackageWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
@@ -234,7 +243,11 @@
     <!-- Single source of the SDK target string; it used to be a literal repeated in WpkName and
          in the Exec command line, so a release needed four separate edits to stay consistent. -->
     <TakSdkVersion>5.6.0.151</TakSdkVersion>
-    <WpkVersion>2.9.4</WpkVersion>
+    <!-- Read from the repo-root VERSION file rather than declared here. This was a tenth
+         version declaration that check_versions.py does not police, so the .wpk filename could
+         silently disagree with VERSION and every other component: the artifact an operator
+         installs would announce a version the build was not. Deriving it removes the class. -->
+    <WpkVersion>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\VERSION').Trim())</WpkVersion>
     <WpkName>FeatureLink-$(WpkVersion)-$(TakSdkVersion)</WpkName>
     <WpkOut>$(OutputPath)$(WpkName).wpk</WpkOut>
     <!-- Prefer the py launcher: bare `python` may be the Windows Store stub, or Python 2. -->

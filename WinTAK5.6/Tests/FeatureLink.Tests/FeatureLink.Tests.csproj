@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!--
     FeatureLink.Tests — C-14.
@@ -75,6 +75,8 @@
     <Compile Include="..\..\Services\ArcGisHttp.cs"         Link="Production\Services\ArcGisHttp.cs" />
     <Compile Include="..\..\Services\AutoIconset.cs"        Link="Production\Services\AutoIconset.cs" />
     <Compile Include="..\..\Services\AutoSymbology.cs"      Link="Production\Services\AutoSymbology.cs" />
+    <Compile Include="..\..\Services\DataPackageBuilder.cs" Link="Production\Services\DataPackageBuilder.cs" />
+    <Compile Include="..\..\Services\DataPackageWriter.cs" Link="Production\Services\DataPackageWriter.cs" />
     <Compile Include="..\..\Services\DisplayStyleResolver.cs" Link="Production\Services\DisplayStyleResolver.cs" />
     <Compile Include="..\..\Services\ErrorText.cs"          Link="Production\Services\ErrorText.cs" />
     <Compile Include="..\..\Services\Log.cs"                Link="Production\Services\Log.cs" />

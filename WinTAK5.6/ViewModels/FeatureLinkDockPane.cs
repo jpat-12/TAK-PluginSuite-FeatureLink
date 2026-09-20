@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -441,6 +441,9 @@ namespace FeatureLink.ViewModels
         public ICommand DownloadLayerCommand { get; }
         public ICommand RemoveLayerCommand { get; }
         public ICommand ShareLayerCommand { get; }
+
+        /// <summary>Opens the data-package dialog: pick layers, pick contacts, send.</summary>
+        public ICommand CreateDataPackageCommand { get; }
         public ICommand ToggleLayerVisibilityCommand { get; }
         public ICommand PliActionCommand { get; }
 
@@ -513,6 +516,8 @@ namespace FeatureLink.ViewModels
                 layer => Guard(() => OnRemoveLayer(layer), "remove layer"));
             ShareLayerCommand = new DelegateCommand<ArcGisLayer>(
                 layer => Guard(() => OnShareLayer(layer), "share layer"));
+            CreateDataPackageCommand = new DelegateCommand(
+                () => Guard(OnCreateDataPackage, "create data package"));
             ToggleLayerVisibilityCommand = new DelegateCommand<ArcGisLayer>(
                 layer => Guard(() => OnToggleLayerVisibility(layer), "toggle layer visibility"));
             PliActionCommand = new DelegateCommand(() =>
@@ -1165,6 +1170,172 @@ namespace FeatureLink.ViewModels
             }
         }
 
+        // -------------------------------------------------------------------------
+        // Data package (multi-layer, multi-contact)
+        // -------------------------------------------------------------------------
+
+        /// <summary>Every layer the operator could put in a package, in the order the panel shows
+        /// them. Browse-list entries are excluded: a layer that has never been downloaded has no
+        /// symbology derived and no icons generated, so packaging it would ship a bare URL and a
+        /// recipient who cannot reach ArcGIS would get nothing at all.</summary>
+        private List<ArcGisLayer> PackageableLayers()
+        {
+            return SharedPrivateLayers.Concat(PublicLayers)
+                .Where(l => l != null && !string.IsNullOrEmpty(l.Url) && l.LastSyncTicks > 0)
+                .ToList();
+        }
+
+        /// <summary>Turns a layer into the planner's view of it.</summary>
+        private DataPackageBuilder.LayerPlanInput ToPlanInput(ArcGisLayer layer)
+        {
+            // Both the explicit and the auto-derived configs can carry icon references, and a layer
+            // can have either. They are wrapped in an array so one parse covers both.
+            var configs = new JArray();
+            foreach (string json in new[] { layer.SymJson, layer.AutoSymJson })
+            {
+                if (string.IsNullOrWhiteSpace(json)) continue;
+                try { configs.Add(JToken.Parse(json)); }
+                catch (Exception ex)
+                {
+                    Log.Warn($"Ignoring unparseable display config on \"{layer.Name}\": {ex.Message}");
+                }
+            }
+
+            return new DataPackageBuilder.LayerPlanInput
+            {
+                Name = layer.Name,
+                Url = layer.Url,
+                ConfigJson = BuildShareConfigJson(layer),
+                DisplayConfigJson = configs.Count > 0
+                    ? configs.ToString(Newtonsoft.Json.Formatting.None) : null,
+                IconsetUids = (layer.IconsetUids ?? string.Empty)
+                    .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries),
+            };
+        }
+
+        private DataPackageBuilder.PackagePlan PlanFor(IEnumerable<string> layerUrls)
+        {
+            var byUrl = new Dictionary<string, ArcGisLayer>(StringComparer.Ordinal);
+            foreach (var layer in PackageableLayers()) byUrl[layer.Url] = layer;
+
+            var inputs = new List<DataPackageBuilder.LayerPlanInput>();
+            foreach (string url in layerUrls ?? Enumerable.Empty<string>())
+            {
+                ArcGisLayer layer;
+                if (byUrl.TryGetValue(url, out layer)) inputs.Add(ToPlanInput(layer));
+            }
+            return DataPackageBuilder.Plan(inputs, null);
+        }
+
+        private void OnCreateDataPackage()
+        {
+            var layers = PackageableLayers();
+            if (layers.Count == 0)
+            {
+                SetStatus("No downloaded layers to package — sync a layer first.");
+                return;
+            }
+
+            var layerRows = layers
+                .Select(l => new DataPackageWindow.SelectableRow(l.Url, l.Name, l.FeatureCountText))
+                .ToList();
+
+            var contactRows = new List<DataPackageWindow.SelectableRow>();
+            foreach (var c in _contactService?.AllContacts ?? Enumerable.Empty<Contact>())
+            {
+                if (c == null || string.IsNullOrEmpty(c.Uid)) continue;
+                contactRows.Add(new DataPackageWindow.SelectableRow(c.Uid, c.Name ?? c.Uid));
+            }
+
+            var dialog = new DataPackageWindow(layerRows, contactRows,
+                urls => DataPackageBuilder.Describe(PlanFor(urls)));
+            var owner = Application.Current?.MainWindow;
+            if (owner != null) dialog.Owner = owner;
+
+            if (dialog.ShowDialog() != true) return;
+
+            var plan = PlanFor(dialog.SelectedLayerKeys);
+            if (plan.Entries.Count == 0)
+            {
+                SetStatus("Nothing could be packaged from that selection.");
+                return;
+            }
+
+            string destination = dialog.SaveToFileRequested
+                ? AskWhereToSave(dialog.PackageName)
+                : DataPackageWriter.StagedPath(dialog.PackageName);
+            if (string.IsNullOrEmpty(destination)) return;   // the save dialog was cancelled
+
+            DataPackageWriter.WriteResult written;
+            try
+            {
+                written = DataPackageWriter.Write(plan, dialog.PackageName, destination);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not build the data package.", ex);
+                SetStatus("Could not build the data package: " + Describe(ex));
+                return;
+            }
+
+            string detail = DataPackageBuilder.Describe(plan);
+            if (written.Skipped.Count > 0)
+                detail += $"; {written.Skipped.Count} file(s) could not be read and were left out";
+
+            if (dialog.SaveToFileRequested)
+            {
+                SetStatus($"Saved \"{dialog.PackageName}\" ({detail}) to {written.Path}.");
+                return;
+            }
+
+            var recipients = dialog.SelectedContactUids.ToList();
+            bool sent = false;
+            try
+            {
+                _communicationService.SendMissionPackage(
+                    recipients, new FileInfo(written.Path), dialog.PackageName, false);
+                sent = true;
+
+                string who = recipients.Count == 1 ? "1 contact" : recipients.Count + " contacts";
+                SetStatus($"Sent \"{dialog.PackageName}\" ({detail}) to {who}.");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not send the data package.", ex);
+                SetStatus("Could not send the data package: " + Describe(ex));
+            }
+            finally
+            {
+                // The package holds every selected layer's URL and display config, so it does not
+                // stay in %TEMP% — the same policy the single-layer share already follows. The
+                // delay is there because the send reads the file asynchronously.
+                if (sent) TryDeleteLater(written.Path);
+                else TryDelete(written.Path);
+            }
+        }
+
+        /// <summary>Deletes a staged package immediately, for the path where no send was started.</summary>
+        private static void TryDelete(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            try { if (File.Exists(path)) File.Delete(path); }
+            catch (Exception ex) { Log.Warn("Could not delete the unsent package file: " + ex.Message); }
+        }
+
+        /// <summary>Asks where to save a package. Returns null when the operator cancels.</summary>
+        private static string AskWhereToSave(string packageName)
+        {
+            var save = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save data package",
+                FileName = DataPackageBuilder.Sanitize(packageName, 96) + ".zip",
+                DefaultExt = ".zip",
+                Filter = "TAK data package (*.zip)|*.zip|All files (*.*)|*.*",
+                OverwritePrompt = true,
+            };
+            return save.ShowDialog() == true ? save.FileName : null;
+        }
+
         private static void TryDeleteLater(string path)
         {
             if (string.IsNullOrEmpty(path)) return;
@@ -1675,6 +1846,10 @@ namespace FeatureLink.ViewModels
                 // merged per value.
                 IconsetResult icons = TryResolveIconset(layer, meta);
                 IconsetWasReplaced = icons != null && icons.ReplacedExisting;
+
+                // Remember which iconsets exist on disk for this layer, so a data package built in
+                // a later session can still bundle them (AutoSymJson is deliberately not persisted).
+                if (icons != null && layer.RecordIconsetUid(icons.Uid)) RunOnUi(SaveSettings);
                 var extracted = AutoSymbology.Extract(meta.Renderer);
 
                 if (icons == null && extracted.IsEmpty)
