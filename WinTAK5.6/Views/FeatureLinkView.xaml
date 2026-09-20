@@ -187,6 +187,29 @@
 
         <!-- Round icon-glyph buttons standing in for ImageButton + drawable icons
              (no icon asset set bundled in this port — see divergence note above). -->
+        <!-- A button with NO chrome at all. A bare <Button> falls back to the system theme,
+             which brings a border, padding and a minimum size with it — enough to knock a 10px
+             chevron several pixels away from the badge it belongs to. -->
+        <Style x:Key="BareIconButton" TargetType="Button">
+            <Setter Property="Background"        Value="Transparent"/>
+            <Setter Property="BorderThickness"   Value="0"/>
+            <Setter Property="Padding"           Value="0"/>
+            <Setter Property="MinWidth"          Value="0"/>
+            <Setter Property="MinHeight"         Value="0"/>
+            <Setter Property="Cursor"            Value="Hand"/>
+            <Setter Property="Focusable"         Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="IconGlyphButton" TargetType="Button">
             <Setter Property="Width"      Value="30"/>
             <Setter Property="Height"     Value="30"/>
@@ -265,16 +288,24 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
-                        <Button Grid.Column="0"
+                        <!-- Hidden until the layer has plotted something. A browse-list row has
+                             no markers on the map, so an eye there would be a control that does
+                             nothing; the Auto-width column collapses with it. -->
+                        <Button Grid.Column="0" VerticalAlignment="Top"
                                 Command="{Binding DataContext.ToggleLayerVisibilityCommand,
                                           RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                 CommandParameter="{Binding}"
+                                Visibility="{Binding CanToggleVisibility, Converter={StaticResource BoolToVis}}"
                                 Style="{StaticResource IconGlyphButton}" Width="28" Height="28"
                                 ToolTip="Toggle layer visibility">
                             <Image Source="{Binding EyeIconSource}" Width="16" Height="16"/>
                         </Button>
 
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
+                        <!-- Top-aligned, with the title pushed down half the difference between
+                             the 28px icon button and the ~18px title line so the two share a
+                             centre line. Centring the whole block instead put the icon between
+                             the title and the badges, aligned to neither. -->
+                        <StackPanel Grid.Column="1" VerticalAlignment="Top" Margin="8,5,0,0">
                             <StackPanel Orientation="Horizontal">
                                 <!-- The title zooms the map to this layer's plotted features.
                                      Rendered as a bare text button so the row keeps its existing
@@ -381,9 +412,8 @@
                                 <!-- Disclosure for the feature list. Hidden entirely until the
                                      layer has plotted something, so a row that cannot expand does
                                      not offer a control that would do nothing. -->
-                                <Button Margin="6,0,0,0" Padding="2,0" Cursor="Hand"
-                                        Background="Transparent" BorderThickness="0"
-                                        VerticalAlignment="Center"
+                                <Button Style="{StaticResource BareIconButton}"
+                                        Margin="5,0,0,0" Padding="2,1"
                                         ToolTip="Show this layer's features"
                                         Command="{Binding DataContext.ToggleFeaturesCommand,
                                                   RelativeSource={RelativeSource AncestorType=UserControl}}"
@@ -409,7 +439,8 @@
 
                         <!-- Share (contact send) — sends this layer's config as a Mission
                              Package, mirroring ATAK's sendLayerShare()/LayerShareHelper. -->
-                        <Button Grid.Column="2" Style="{StaticResource IconGlyphButton}"
+                        <Button Grid.Column="2" VerticalAlignment="Top"
+                                Style="{StaticResource IconGlyphButton}"
                                 Command="{Binding DataContext.ShareLayerCommand,
                                           RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                 CommandParameter="{Binding}" ToolTip="Share layer with a contact">

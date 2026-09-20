@@ -240,8 +240,23 @@ namespace FeatureLink.Models
         public long LastSyncTicks
         {
             get => _lastSyncTicks;
-            set { _lastSyncTicks = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(ActionGlyph)); }
+            set
+            {
+                _lastSyncTicks = value;
+                RaisePropertyChanged();
+                RaisePropertyChanged(nameof(ActionGlyph));
+                RaisePropertyChanged(nameof(CanToggleVisibility));
+            }
         }
+
+        /// <summary>Whether this row's visibility toggle does anything.
+        ///
+        /// <para>False until the layer has actually plotted markers. A "My ArcGIS Layers" browse
+        /// row is a catalogue entry, not a synced layer — there is nothing on the map to show or
+        /// hide, so offering an eye there is a control that silently does nothing. The same is
+        /// true of any layer that has not completed a sync yet, which is why this keys on
+        /// <see cref="LastSyncTicks"/> rather than on which list the row happens to sit in.</para></summary>
+        public bool CanToggleVisibility => LastSyncTicks > 0;
 
         /// <summary>Text-glyph stand-in for item_layer.xml's ic_download / ic_refresh_circle
         /// drawable (down-arrow until first sync, then a refresh glyph) — private ("My ArcGIS

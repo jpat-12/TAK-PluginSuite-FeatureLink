@@ -1241,16 +1241,57 @@ namespace FeatureLink.ViewModels
 
             bool isMyArcGis = PrivateLayers.Contains(layer);
             bool isSharedPrivate = SharedPrivateLayers.Contains(layer);
+
+            // A layer that CAME from the operator's own ArcGIS account still exists there after
+            // it is removed from the map, so deleting the row outright loses the one thing that
+            // made it easy to get back. Those return to "My ArcGIS Layers" instead, where they can
+            // be re-downloaded. The portal item id is what proves the layer came from the browse
+            // list; a layer added by URL never appeared there and has nowhere to return to.
+            bool returnsToBrowseList = !isMyArcGis && !string.IsNullOrEmpty(layer.ItemId);
+
             string displayName = UrlGuard.SanitizeDisplayName(layer.Name, 80);
-            string message = (isMyArcGis || isSharedPrivate)
-                ? $"Remove \"{displayName}\" from your layer list here? It stays in your ArcGIS account — this only hides it on this device. Any markers it added to the map will also be removed."
-                : $"Remove \"{displayName}\" from your layer list? Any markers it added to the map will also be removed.";
+            string message;
+            if (returnsToBrowseList)
+                message = $"Remove \"{displayName}\" from the map? Its markers will be removed and it "
+                        + "will move back to My ArcGIS Layers, so you can download it again later.";
+            else if (isMyArcGis || isSharedPrivate)
+                message = $"Remove \"{displayName}\" from your layer list here? It stays in your ArcGIS "
+                        + "account — this only hides it on this device. Any markers it added to the map "
+                        + "will also be removed.";
+            else
+                message = $"Remove \"{displayName}\" from your layer list? Any markers it added to the "
+                        + "map will also be removed.";
+
             if (!DialogService.Confirm(message, "Remove Layer?")) return;
 
             if (isMyArcGis)
             {
                 PrivateLayers.Remove(layer);
                 _excludedPrivateLayerUrls.Add(layer.Url);
+            }
+            else if (returnsToBrowseList)
+            {
+                if (isSharedPrivate) SharedPrivateLayers.Remove(layer);
+                else PublicLayers.Remove(layer);
+
+                // Back to the state a never-downloaded browse row is in, so the list is honest
+                // about what is on the map: no extent to zoom to, no feature list, no sync time,
+                // and the row's action glyph returns to the download arrow. The feature COUNT is
+                // kept — it is still true of the source layer and is useful before re-downloading.
+                layer.Type = "private";
+                layer.LastSyncTicks = 0;
+                layer.Extent = null;
+                layer.Features.Clear();
+                layer.RaiseFeaturesChanged();
+                layer.Visible = true;
+
+                // It is deliberately NOT added to the exclusion list — that list exists to keep a
+                // layer OUT of the browse list on the next sign-in, which is the opposite of what
+                // is wanted here.
+                _excludedPrivateLayerUrls.Remove(layer.Url);
+                PrivateLayers.Add(layer);
+
+                SetStatus($"\"{layer.Name}\" moved back to My ArcGIS Layers.");
             }
             else if (isSharedPrivate)
             {
@@ -1260,6 +1301,7 @@ namespace FeatureLink.ViewModels
             {
                 PublicLayers.Remove(layer);
             }
+
             RemoveLayerMarkers(layer.Url);
             RaisePropertyChanged(nameof(StatusLayersText));
             RaisePropertyChanged(nameof(ShowSharedPrivateLayersCard));
@@ -1425,6 +1467,18 @@ namespace FeatureLink.ViewModels
                 var staleness = layer.RecurrenceTimeSpan() > TimeSpan.Zero
                     ? TimeSpan.FromTicks(layer.RecurrenceTimeSpan().Ticks * StaleIntervalMultiplier)
                     : DefaultFeatureStaleness;
+
+                // An existing marker keeps the icon it resolved when it was created: re-posting
+                // the same uid UPDATES it rather than recreating it, so a changed symbol never
+                // reaches the map until WinTAK restarts. Observed directly — a re-styled layer
+                // kept its previous icons for the whole session. Disposing them first forces the
+                // host to build each marker fresh against the newly installed iconset.
+                if (IconsetWasReplaced)
+                {
+                    Log.Info($"Icons changed for \"{layer.Name}\"; recreating its markers so the new "
+                             + "symbols are drawn.");
+                    RemoveLayerMarkers(layer.Url);
+                }
 
                 var uids = new List<string>(download.Features.Count);
                 int shapeStyled = 0;
@@ -1620,6 +1674,7 @@ namespace FeatureLink.ViewModels
                 // while the source map showed twelve distinct symbols. Both are resolved, then
                 // merged per value.
                 IconsetResult icons = TryResolveIconset(layer, meta);
+                IconsetWasReplaced = icons != null && icons.ReplacedExisting;
                 var extracted = AutoSymbology.Extract(meta.Renderer);
 
                 if (icons == null && extracted.IsEmpty)
@@ -1689,7 +1744,16 @@ namespace FeatureLink.ViewModels
             public string Uid;
             public string Group;
             public AutoIconset.Extraction Extraction;
+
+            /// <summary>True when this replaced a set the host already held — i.e. the layer's
+            /// symbols changed. The markers already on the map still hold the OLD rendering, so
+            /// they have to be recreated rather than updated in place.</summary>
+            public bool ReplacedExisting;
         }
+
+        /// <summary>Set by the most recent symbology resolve: the layer's icons changed, so its
+        /// existing markers are showing stale renderings and must be recreated.</summary>
+        private bool IconsetWasReplaced { get; set; }
 
         private IconsetResult TryResolveIconset(ArcGisLayer layer, LayerInfo meta)
         {
@@ -1714,10 +1778,17 @@ namespace FeatureLink.ViewModels
                 byte[] zip = AutoIconset.BuildZipBytes(uid, group, icons.Symbols);
 
                 string zipPath;
-                if (!IconsetInstaller.Install(uid, group, zip, out zipPath)) return null;
+                bool replaced;
+                if (!IconsetInstaller.Install(uid, group, zip, out zipPath, out replaced)) return null;
 
                 SetStatus($"Icons ready for \"{layer.Name}\" — {icons.Symbols.Count} symbol(s).");
-                return new IconsetResult { Uid = uid, Group = group, Extraction = icons };
+                return new IconsetResult
+                {
+                    Uid = uid,
+                    Group = group,
+                    Extraction = icons,
+                    ReplacedExisting = replaced,
+                };
             }
             catch (Exception ex)
             {
@@ -1998,6 +2069,7 @@ namespace FeatureLink.ViewModels
                 detail.AddChild(remarksItem);
             }
 
+            bool iconApplied = false;
             if (!string.IsNullOrEmpty(iconsetPath))
             {
                 // A peer controls this string via a received share and it is broadcast to the whole
@@ -2007,12 +2079,35 @@ namespace FeatureLink.ViewModels
                     var usericon = new CotItem("usericon");
                     usericon.SetAttribute("iconsetpath", iconsetPath);
                     detail.AddChild(usericon);
+                    iconApplied = true;
                 }
                 else
                 {
                     if (tally != null) tally.UnsafeIconset++;
                     else Log.Warn("Dropped an unsafe iconsetpath from a display config.");
                 }
+            }
+
+            // Colour travels IN the CoT, as a <color argb="…"/> detail.
+            //
+            // Setting WinTak.Graphics.MapMarker.Color after the fact does not stick: the marker is
+            // created by the host's CoT pipeline, which derives its style from the event, and a
+            // later host-side refresh re-derives it and discards anything the plugin poked in.
+            // The observed symptom was every simple-marker category rendering as the same yellow
+            // 2525 "unknown affiliation" clover — the default for the a-u-G type — while ArcGIS
+            // showed five distinct colours.
+            //
+            // When a custom ICON applies, the colour is forced to white instead. A marker colour
+            // tints the icon bitmap, so a coloured fill would wash an ACP or EOC badge in that
+            // colour; white means no tint and the icon shows its own. ATAK does exactly this and
+            // documents the same reason.
+            if (iconApplied || color.HasValue)
+            {
+                Color applied = iconApplied ? Color.White : color.Value;
+                var colorItem = new CotItem("color");
+                colorItem.SetAttribute("argb",
+                    ToArgbSigned(applied).ToString(CultureInfo.InvariantCulture));
+                detail.AddChild(colorItem);
             }
 
             var cotEvent = new CotEvent(
@@ -2059,7 +2154,12 @@ namespace FeatureLink.ViewModels
                     else if (!item.IsDisposed)
                     {
                         if (!visible) item.Visible = false;
-                        if (color.HasValue && item is WinTak.Graphics.MapMarker marker) marker.Color = color.Value;
+
+                        // Belt and braces alongside the <color> detail above — harmless if the
+                        // host already applied it, and the same white-when-icon rule applies so
+                        // the two can never disagree.
+                        if ((iconApplied || color.HasValue) && item is WinTak.Graphics.MapMarker marker)
+                            marker.Color = iconApplied ? Color.White : color.Value;
                     }
                 }
                 catch (Exception ex)
@@ -2067,6 +2167,17 @@ namespace FeatureLink.ViewModels
                     if (tally != null) tally.StyleFailed++;
                     else Log.Warn($"Could not apply visibility/colour to marker {f.Uid}: {ex.Message}");
                 }
+            }
+        }
+
+        /// <summary>Packs a colour into the signed 32-bit ARGB integer CoT's <c>color</c> detail
+        /// carries. Unchecked because a fully-opaque colour sets the high bit and overflows a
+        /// signed int, which is the representation TAK expects.</summary>
+        private static int ToArgbSigned(Color c)
+        {
+            unchecked
+            {
+                return (int)(((uint)c.A << 24) | ((uint)c.R << 16) | ((uint)c.G << 8) | c.B);
             }
         }
 
