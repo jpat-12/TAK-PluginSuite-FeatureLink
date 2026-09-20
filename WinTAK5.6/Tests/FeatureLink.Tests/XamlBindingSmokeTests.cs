@@ -131,6 +131,9 @@ namespace FeatureLink.Tests
                 // ArcGisLayer
                 "Name", "Url", "Type", "IsPrivate", "Access", "HasDisplayConfig",
                 "FeatureCount", "FeatureCountKnown", "FeatureCountText",
+                "CanZoomTo", "Features", "HasFeatures", "FeaturesExpanded", "Extent",
+                // LayerFeature (the per-layer feature list rows)
+                "PositionText",
                 "LastSyncTicks", "ActionGlyph", "DownloadEnabled",
                 "RecurrenceInterval", "RecurrenceUnit", "IsPliLayer", "Visible", "EyeIconSource",
                 // RecentCotItem

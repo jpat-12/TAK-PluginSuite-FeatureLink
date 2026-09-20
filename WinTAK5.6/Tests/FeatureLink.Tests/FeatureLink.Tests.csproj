@@ -65,6 +65,7 @@
   <ItemGroup>
     <Compile Include="..\..\Models\ArcGisLayer.cs"          Link="Production\Models\ArcGisLayer.cs" />
     <Compile Include="..\..\Models\DownloadedFeature.cs"    Link="Production\Models\DownloadedFeature.cs" />
+    <Compile Include="..\..\Models\LayerExtent.cs"          Link="Production\Models\LayerExtent.cs" />
     <Compile Include="..\..\Models\OAuthTokens.cs"          Link="Production\Models\OAuthTokens.cs" />
     <Compile Include="..\..\Models\PliSettings.cs"          Link="Production\Models\PliSettings.cs" />
     <Compile Include="..\..\Services\ArcGisAccountKey.cs" Link="Production\Services\ArcGisAccountKey.cs" />

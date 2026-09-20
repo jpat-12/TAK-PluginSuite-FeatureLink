@@ -101,6 +101,17 @@ namespace FeatureLink.ViewModels
         private readonly ICommunicationService _communicationService;
         private readonly IMapItemFinderService _mapItemFinder;
         private readonly WinTak.Net.Contacts.IContactService _contactService;
+        /// <summary>WinTAK's map camera, used by "zoom to layer".
+        ///
+        /// <para>A PROPERTY import with <c>AllowDefault</c>, deliberately, rather than a
+        /// constructor parameter: an unsatisfied constructor import fails MEF composition and the
+        /// whole dock pane silently never loads. Zooming is a convenience, and losing the entire
+        /// plugin because the host did not export this contract would be a wildly
+        /// disproportionate failure. Null simply means the affordance does nothing, and says so
+        /// in the log.</para></summary>
+        [Import(AllowDefault = true)]
+        public WinTak.Display.IMapViewController MapViewController { get; set; }
+
         private readonly ArcGisAuthService _authService = new ArcGisAuthService();
         private readonly ArcGisFeatureService _restClient = new ArcGisFeatureService();
 
@@ -413,6 +424,15 @@ namespace FeatureLink.ViewModels
 
         // ── Commands ─────────────────────────────────────────────────────────────
 
+        /// <summary>Frames a layer's plotted features on the map.</summary>
+        public ICommand ZoomToLayerCommand { get; }
+
+        /// <summary>Centres the map on one feature from a layer's list.</summary>
+        public ICommand ZoomToFeatureCommand { get; }
+
+        /// <summary>Expands or collapses a layer row's feature list.</summary>
+        public ICommand ToggleFeaturesCommand { get; }
+
         public ICommand SignInCommand { get; }
         public ICommand SignOutCommand { get; }
         public ICommand RefreshLayersCommand { get; }
@@ -468,6 +488,14 @@ namespace FeatureLink.ViewModels
                 () => RunGuarded(OnSignInAsync(), "sign-in"), () => !IsAuthenticated);
             _signOutCommand = new DelegateCommand(
                 () => Guard(OnSignOut, "sign-out"), () => IsAuthenticated);
+            ZoomToLayerCommand = new DelegateCommand<ArcGisLayer>(
+                layer => Guard(() => OnZoomToLayer(layer), "zoom to layer"));
+            ZoomToFeatureCommand = new DelegateCommand<LayerFeature>(
+                feature => Guard(() => OnZoomToFeature(feature), "zoom to feature"));
+            ToggleFeaturesCommand = new DelegateCommand<ArcGisLayer>(
+                layer => Guard(() => { if (layer != null) layer.FeaturesExpanded = !layer.FeaturesExpanded; },
+                    "toggle feature list"));
+
             SignInCommand = _signInCommand;
             SignOutCommand = _signOutCommand;
 
@@ -1464,6 +1492,36 @@ namespace FeatureLink.ViewModels
                 // plot 29 markers and still show "0 features" in its own row indefinitely.
                 RunOnUi(() => layer.FeatureCount = download.Features.Count);
 
+                // What was actually plotted, for "zoom to layer" and the row's feature list.
+                // Built from the downloaded features rather than the service's published extent:
+                // these are already WGS84 (the query asks outSR=4326) and they describe what is on
+                // the operator's map, which is what zooming to the layer should frame.
+                var plotted = download.Features
+                    .Where(f => ArcGisFeatureService.IsPlottable(f.Lat, f.Lon))
+                    .ToList();
+
+                var extent = LayerExtent.FromPoints(
+                    plotted.Select(f => Tuple.Create(f.Lat, f.Lon)));
+
+                var listed = plotted
+                    .Take(ArcGisLayer.MaxListedFeatures)
+                    .Select(f => new LayerFeature
+                    {
+                        Uid = f.Uid,
+                        Callsign = f.Callsign,
+                        Lat = f.Lat,
+                        Lon = f.Lon,
+                    })
+                    .ToList();
+
+                RunOnUi(() =>
+                {
+                    layer.Extent = extent;
+                    layer.Features.Clear();
+                    foreach (var f in listed) layer.Features.Add(f);
+                    layer.RaiseFeaturesChanged();
+                });
+
                 string summary = $"Downloaded: {layer.Name} ({download.Features.Count} features";
                 if (shapeStyled > 0) summary += $", {shapeStyled} shape-styled";
                 if (download.SkippedFeatures > 0) summary += $", {download.SkippedFeatures} skipped";
@@ -1665,6 +1723,68 @@ namespace FeatureLink.ViewModels
             {
                 Log.Warn($"Could not build an iconset for \"{layer.Name}\": {ErrorText.ForOperator(ex)}");
                 return null;
+            }
+        }
+
+        // -------------------------------------------------------------------------
+        // Zoom to data
+        // -------------------------------------------------------------------------
+
+        /// <summary>
+        /// Frames a layer's features: centre on their midpoint, zoom to fit their span.
+        ///
+        /// <para>The extent comes from what was actually plotted, so a layer whose features are a
+        /// hundred miles apart frames all of them, and a layer clustered in one town frames that
+        /// town rather than the county.</para>
+        /// </summary>
+        private void OnZoomToLayer(ArcGisLayer layer)
+        {
+            if (layer == null) return;
+
+            var extent = layer.Extent;
+            if (extent == null || !extent.IsValid)
+            {
+                SetStatus($"\"{layer.Name}\" has no plotted features to zoom to — sync it first.");
+                return;
+            }
+
+            LookAt(extent.CenterLat, extent.CenterLon, extent.ResolutionMetresPerPixel(),
+                $"\"{layer.Name}\" ({extent.LatSpan:0.###}° x {extent.LonSpan:0.###}°)");
+        }
+
+        private void OnZoomToFeature(LayerFeature feature)
+        {
+            if (feature == null) return;
+
+            // A single point has no span, so pick a resolution that shows its surroundings
+            // rather than filling the screen with one marker.
+            const double SingleFeatureMetresPerPixel = 4.0;
+            LookAt(feature.Lat, feature.Lon, SingleFeatureMetresPerPixel, feature.Callsign);
+        }
+
+        /// <summary>Moves the map camera, or explains why it could not.</summary>
+        private void LookAt(double lat, double lon, double metresPerPixel, string what)
+        {
+            var controller = MapViewController;
+            if (controller == null)
+            {
+                // See the MapViewController import: absence is tolerated by design.
+                Log.Warn("WinTAK did not provide a map controller; zoom-to-layer is unavailable.");
+                SetStatus("This WinTAK build does not expose map control to plugins — cannot zoom.");
+                return;
+            }
+
+            try
+            {
+                var point = new GeoPoint(lat, lon);
+                RunOnUi(() => controller.LookAt(point, metresPerPixel, true));
+                SetStatus($"Zoomed to {what}.");
+                Log.Info($"Zoom to {what}: {lat:0.#####}, {lon:0.#####} at {metresPerPixel:0.#} m/px.");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not move the map camera.", ex);
+                SetStatus("Could not move the map: " + ErrorText.ForOperator(ex, IsAuthenticated));
             }
         }
 

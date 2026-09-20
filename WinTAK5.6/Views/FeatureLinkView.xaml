@@ -71,6 +71,8 @@
         <SolidColorBrush x:Key="TextPrimary"   Color="#FFFFFFFF"/>
         <SolidColorBrush x:Key="TextSecondary" Color="#FFAEB4B8"/>
         <SolidColorBrush x:Key="TextMuted"     Color="#FF7A7A7A"/>
+        <!-- Hover wash for rows inside a layer's feature list. -->
+        <SolidColorBrush x:Key="RowHover"      Color="#14FFFFFF"/>
         <SolidColorBrush x:Key="TextHint"      Color="#FF666666"/>
 
         <SolidColorBrush x:Key="Accent"        Color="#FF0099CC"/>
@@ -274,8 +276,45 @@
 
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextPrimary}"
-                                           FontSize="13" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                <!-- The title zooms the map to this layer's plotted features.
+                                     Rendered as a bare text button so the row keeps its existing
+                                     look; the hand cursor and hover underline are what advertise
+                                     it as clickable. Disabled, with an explanatory tooltip, until
+                                     the layer has actually plotted something. -->
+                                <Button Command="{Binding DataContext.ZoomToLayerCommand,
+                                                  RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                        CommandParameter="{Binding}"
+                                        IsEnabled="{Binding CanZoomTo}"
+                                        Background="Transparent" BorderThickness="0" Padding="0"
+                                        Cursor="Hand" VerticalAlignment="Center"
+                                        HorizontalContentAlignment="Left">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="ToolTip" Value="Zoom the map to this layer"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter Property="ToolTip"
+                                                            Value="Sync this layer to enable zoom"/>
+                                                    <Setter Property="Cursor" Value="Arrow"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <TextBlock x:Name="TitleText" Text="{Binding Name}"
+                                                       Foreground="{StaticResource TextPrimary}"
+                                                       FontSize="13" TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center"/>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="TitleText" Property="TextDecorations"
+                                                            Value="Underline"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
                                 <Border VerticalAlignment="Center" Margin="6,0,0,0">
                                     <Border.Style>
                                         <Style TargetType="Border" BasedOn="{StaticResource TypeBadgePublic}">
@@ -338,6 +377,33 @@
                                                FontSize="9" FontWeight="Bold"
                                                Foreground="{StaticResource BadgeCountText}"/>
                                 </Border>
+
+                                <!-- Disclosure for the feature list. Hidden entirely until the
+                                     layer has plotted something, so a row that cannot expand does
+                                     not offer a control that would do nothing. -->
+                                <Button Margin="6,0,0,0" Padding="2,0" Cursor="Hand"
+                                        Background="Transparent" BorderThickness="0"
+                                        VerticalAlignment="Center"
+                                        ToolTip="Show this layer's features"
+                                        Command="{Binding DataContext.ToggleFeaturesCommand,
+                                                  RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                        CommandParameter="{Binding}"
+                                        Visibility="{Binding HasFeatures, Converter={StaticResource BoolToVis}}">
+                                    <Image Width="10" Height="10">
+                                        <Image.Style>
+                                            <Style TargetType="Image">
+                                                <Setter Property="Source"
+                                                        Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_down.png"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding FeaturesExpanded}" Value="True">
+                                                        <Setter Property="Source"
+                                                                Value="pack://application:,,,/FeatureLink;component/Assets/ic_chevron_up.png"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Image.Style>
+                                    </Image>
+                                </Button>
                             </StackPanel>
                         </StackPanel>
 
@@ -385,6 +451,64 @@
                                    Width="15" Height="15"/>
                         </Button>
                     </Grid>
+
+                    <!-- Feature list. Virtualized and height-capped: it is a convenience for
+                         finding one feature, not a data browser, and the underlying collection is
+                         capped at ArcGisLayer.MaxListedFeatures. Clicking a row centres the map
+                         on that feature. -->
+                    <Border Visibility="{Binding FeaturesExpanded, Converter={StaticResource BoolToVis}}"
+                            Background="{StaticResource BgRoot}" CornerRadius="4"
+                            Margin="34,6,0,0" Padding="4">
+                        <ScrollViewer MaxHeight="180" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Features}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <VirtualizingStackPanel VirtualizingPanel.IsVirtualizing="True"
+                                                                VirtualizingPanel.VirtualizationMode="Recycling"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button HorizontalContentAlignment="Stretch" Cursor="Hand"
+                                                Background="Transparent" BorderThickness="0"
+                                                Padding="4,2" Margin="0,1"
+                                                ToolTip="Centre the map on this feature"
+                                                Command="{Binding DataContext.ZoomToFeatureCommand,
+                                                          RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="RowBg" Background="Transparent"
+                                                            CornerRadius="3" Padding="4,2">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Grid.Column="0" Text="{Binding Callsign}"
+                                                                       Foreground="{StaticResource TextPrimary}"
+                                                                       FontSize="11"
+                                                                       TextTrimming="CharacterEllipsis"/>
+                                                            <TextBlock Grid.Column="1" Text="{Binding PositionText}"
+                                                                       Foreground="{StaticResource TextMuted}"
+                                                                       FontSize="10" Margin="8,0,0,0"
+                                                                       VerticalAlignment="Center"/>
+                                                        </Grid>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="RowBg" Property="Background"
+                                                                    Value="{StaticResource RowHover}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
 
                 </StackPanel>
             </Border>

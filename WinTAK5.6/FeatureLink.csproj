@@ -90,6 +90,13 @@
       <HintPath>libs\WinTak.Net.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!-- IMapViewController (zoom-to-layer) lives here. Not one of the six assemblies the
+         original port referenced, but a public interface in the shipped product, obtained the
+         same way as the rest: copied from the WinTAK install into the git-ignored libs\. -->
+    <Reference Include="WinTak.Display">
+      <HintPath>libs\WinTak.Display.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <!-- MapItem (RemoveLayerMarkers' Dispose() call) lives here -->
     <Reference Include="WinTak.Graphics">
       <HintPath>libs\WinTak.Graphics.dll</HintPath>
@@ -123,6 +130,7 @@
     <Compile Include="FeatureLinkModule.cs" />
     <Compile Include="Models\ArcGisLayer.cs" />
     <Compile Include="Models\DownloadedFeature.cs" />
+    <Compile Include="Models\LayerExtent.cs" />
     <Compile Include="Models\OAuthTokens.cs" />
     <Compile Include="Models\PliSettings.cs" />
     <Compile Include="Models\RecentCotItem.cs" />
@@ -226,7 +234,7 @@
     <!-- Single source of the SDK target string; it used to be a literal repeated in WpkName and
          in the Exec command line, so a release needed four separate edits to stay consistent. -->
     <TakSdkVersion>5.6.0.151</TakSdkVersion>
-    <WpkVersion>2.8.8</WpkVersion>
+    <WpkVersion>2.9.0</WpkVersion>
     <WpkName>FeatureLink-$(WpkVersion)-$(TakSdkVersion)</WpkName>
     <WpkOut>$(OutputPath)$(WpkName).wpk</WpkOut>
     <!-- Prefer the py launcher: bare `python` may be the Windows Store stub, or Python 2. -->

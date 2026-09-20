@@ -70,6 +70,56 @@ namespace FeatureLink.Models
         /// since there's no portal item to ask.</summary>
         public string Access { get => _access; set { _access = value; RaisePropertyChanged(); } }
 
+        private LayerExtent _extent;
+        /// <summary>Bounds of this layer's plotted features, for "zoom to layer". Persisted so the
+        /// affordance works immediately after a restart, before any re-sync.</summary>
+        public LayerExtent Extent
+        {
+            get => _extent;
+            set { _extent = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(CanZoomTo)); }
+        }
+
+        /// <summary>Whether "zoom to layer" can do anything — drives the title's hit-testing so a
+        /// click that could not move the map is not offered.</summary>
+        public bool CanZoomTo => _extent != null && _extent.IsValid;
+
+        private System.Collections.ObjectModel.ObservableCollection<LayerFeature> _features
+            = new System.Collections.ObjectModel.ObservableCollection<LayerFeature>();
+        /// <summary>The features this layer last plotted, for the row's expandable list.
+        ///
+        /// <para>Deliberately NOT persisted: it is a view of what is currently on the map, it is
+        /// rebuilt by every download, and a layer of 8,000 features would bloat settings.xml for
+        /// no benefit. Capped — see <see cref="MaxListedFeatures"/>.</para></summary>
+        public System.Collections.ObjectModel.ObservableCollection<LayerFeature> Features
+        {
+            get => _features;
+            set { _features = value; RaisePropertyChanged(); RaisePropertyChanged(nameof(HasFeatures)); }
+        }
+
+        /// <summary>Ceiling on the row's feature list. The list is a convenience for finding one
+        /// feature, not a data browser, and realizing thousands of rows inside a scrolling panel
+        /// would cost more than it gives.</summary>
+        public const int MaxListedFeatures = 500;
+
+        public bool HasFeatures => _features != null && _features.Count > 0;
+
+        /// <summary>Call after rebuilding <see cref="Features"/> in place. The collection instance
+        /// does not change, so nothing would otherwise re-evaluate the computed members that gate
+        /// the row's disclosure control.</summary>
+        public void RaiseFeaturesChanged()
+        {
+            RaisePropertyChanged(nameof(HasFeatures));
+            RaisePropertyChanged(nameof(Features));
+        }
+
+        private bool _featuresExpanded;
+        /// <summary>Per-row disclosure state for the feature list.</summary>
+        public bool FeaturesExpanded
+        {
+            get => _featuresExpanded;
+            set { _featuresExpanded = value; RaisePropertyChanged(); }
+        }
+
         private string _itemId;
         /// <summary>The ArcGIS portal item this layer came from, when known.
         ///
@@ -307,6 +357,7 @@ namespace FeatureLink.Models
                 new XElement("HasDisplayConfig", HasDisplayConfig),
                 new XElement("LargeDownloadAccepted", LargeDownloadAccepted),
                 new XElement("ItemId", ItemId ?? string.Empty),
+                Extent?.ToXElement(),
                 new XElement("SymJson", SymJson ?? string.Empty),
                 new XElement("LblJson", LblJson ?? string.Empty),
                 new XElement("PopupJson", PopupJson ?? string.Empty),
@@ -341,6 +392,7 @@ namespace FeatureLink.Models
                 HasDisplayConfig = Bool(el, "HasDisplayConfig", false),
                 LargeDownloadAccepted = Bool(el, "LargeDownloadAccepted", false),
                 ItemId = NullIfEmpty(Text(el, "ItemId")),
+                Extent = LayerExtent.FromXElement(el.Element("Extent")),
                 SymJson = NullIfEmpty(Text(el, "SymJson")),
                 LblJson = NullIfEmpty(Text(el, "LblJson")),
                 PopupJson = NullIfEmpty(Text(el, "PopupJson")),
