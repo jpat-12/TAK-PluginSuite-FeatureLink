@@ -1,6 +1,6 @@
 # FeatureLink Data Packages
 
-**Status:** implemented in WinTAK 5.6 as of 2.12.0. Not yet implemented in ATAK, CloudTAK or
+**Status:** implemented in WinTAK 5.6 as of 2.12.1. Not yet implemented in ATAK, CloudTAK or
 TAK Portal — this document is the contract those ports should follow.
 
 ---
@@ -58,6 +58,46 @@ FeatureLink-Ground_Teams-20260920-1234.zip
 - **`iconsets/`** — the generated zips, named by their UID, exactly as
   `IconsetInstaller` wrote them to `%AppData%\WinTAK\FeatureLink\iconsets\`. An iconset referenced
   by two selected layers is included once.
+
+## Marker identity, and why a package keeps working after a refresh
+
+A packaged `.cot` names each feature by its marker uid. If that uid changed when the layer was
+refreshed, the package would be describing features that no longer exist, and it would have to be
+rebuilt every sync. It does not, because uids are derived deterministically, in this order:
+
+| Source layer has | Uid | Survives a refresh? | Survives an edit? | Survives a move? |
+|---|---|---|---|---|
+| a `uid` column | that value | yes | yes | yes |
+| an object id (`OBJECTID`/`FID`/`OID`…) | `FL-<layerHash>-<objectid>` | yes | yes | yes |
+| neither | `FL-<layerHash>-p<hash(position)>` | yes | yes | **no** |
+
+The bottom row used to hash the **attributes and the geometry together**, so it was stable only
+for a feature nobody had touched. Editing any attribute — including the symbology field an
+operator edits precisely to change how a marker looks — produced a new uid, which disposed and
+recreated the marker and left every package naming the old uid out of date. It is now anchored to
+the feature's position alone, rounded to seven decimal places (~11 mm: fine enough not to merge
+distinct features, coarse enough that float noise in the service's own output does not invent a
+new identity for a stationary one).
+
+Two honest limits on the bottom row:
+
+- **Moving a feature still renames it.** Position *is* the identity when nothing better exists, so
+  this is inherent rather than an oversight. The fix for a layer you control is to add a `uid`
+  column, which is the top row.
+- **Two features at the same position** are separated with a `_2`, `_3` suffix rather than sharing
+  a uid, since sharing would mean the second silently replacing the first on the map and in any
+  package.
+
+Re-publishing a layer reassigns object ids, which changes every uid even on the middle row. That
+is inherent to keying on an object id and has no general fix.
+
+Each download logs which rule it used, naming the consequence rather than the tier — the weaker
+rows are otherwise invisible until someone notices markers flashing on every refresh.
+
+**One-time effect of this change:** layers on the bottom row get new uids the first time they sync
+on 2.12.1, so their markers are recreated once and packages built before the upgrade are stale for
+those layers. Layers with a `uid` or object id column — which is nearly all hosted ArcGIS content
+— are unaffected.
 
 ## Where packages are saved
 

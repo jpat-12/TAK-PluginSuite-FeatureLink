@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -327,6 +327,12 @@ namespace FeatureLink.Services
             }
 
             string uidSalt = LayerUidSalt(layerUrl);
+
+            // Shared across every page of the download, so two features on different pages cannot
+            // be issued the same uid, and so the tier tally covers the whole layer.
+            var takenUids = new HashSet<string>(StringComparer.Ordinal);
+            var uidTally = new Dictionary<UidSource, int>();
+
             int offset = 0;
             int page = 0;
 
@@ -360,7 +366,8 @@ namespace FeatureLink.Services
 
                 foreach (var feat in features)
                 {
-                    var parsed = ParseFeature(feat as JObject, uidSalt, result.Features.Count, displayField);
+                    var parsed = ParseFeature(feat as JObject, uidSalt, result.Features.Count,
+                                              displayField, takenUids, uidTally);
                     if (parsed == null) { result.SkippedFeatures++; continue; }
                     if (!IsPlottable(parsed.Lat, parsed.Lon)) { result.OutOfRangeCoordinates++; continue; }
                     result.Features.Add(parsed);
@@ -384,6 +391,8 @@ namespace FeatureLink.Services
                 Log.Warn($"Layer download skipped {result.SkippedFeatures} malformed and "
                          + $"{result.OutOfRangeCoordinates} out-of-range features.");
 
+            LogUidTiers(layerUrl, uidTally);
+
             return result;
         }
 
@@ -399,7 +408,7 @@ namespace FeatureLink.Services
             && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 
         private static DownloadedFeature ParseFeature(JObject feat, string uidSalt, int index,
-            string displayField)
+            string displayField, ISet<string> takenUids, IDictionary<UidSource, int> uidTally)
         {
             if (feat == null) return null;
             try
@@ -431,8 +440,22 @@ namespace FeatureLink.Services
                     hae = TryDouble(attrs["hae"]);
                 }
 
+                UidSource uidSource = UidSource.Declared;
                 if (string.IsNullOrEmpty(uid))
-                    uid = DeriveStableUid(uidSalt, attrs, geom, index);
+                {
+                    uid = DeriveStableUid(uidSalt, attrs, geom, index, lat, lon,
+                                          takenUids, out uidSource);
+                }
+                else if (takenUids != null)
+                {
+                    takenUids.Add(uid);
+                }
+
+                if (uidTally != null)
+                {
+                    int seen;
+                    uidTally[uidSource] = uidTally.TryGetValue(uidSource, out seen) ? seen + 1 : 1;
+                }
                 if (string.IsNullOrEmpty(cotType))
                     cotType = string.Empty; // the caller applies the "unknown" fallback + validation
                 if (string.IsNullOrEmpty(callsign))
@@ -601,17 +624,54 @@ namespace FeatureLink.Services
             return t == null || t.Type == JTokenType.Null ? string.Empty : StringifyInvariant(t);
         }
 
+        /// <summary>Which rule produced a feature's uid. Logged once per download so a layer
+        /// sitting on a weaker tier is visible rather than only showing up as markers that flash
+        /// on every refresh.</summary>
+        internal enum UidSource
+        {
+            /// <summary>The layer carries its own <c>uid</c> column. Fully stable.</summary>
+            Declared,
+
+            /// <summary>Derived from the object id. Stable across refreshes AND across edits.</summary>
+            ObjectId,
+
+            /// <summary>Derived from the feature's position. Stable across attribute edits; changes
+            /// only if the feature moves.</summary>
+            Position,
+
+            /// <summary>Derived from the whole feature. Changes whenever anything changes.</summary>
+            Content,
+
+            /// <summary>Position in the result set. Last resort.</summary>
+            Index,
+        }
+
         /// <summary>
         /// Deterministic uid for a feature whose source layer has no <c>uid</c> attribute.
-        /// The old synthesis was <c>$"FL-{i}-{UtcNow}"</c>, which produced a <b>different</b> uid on
-        /// every re-sync — so every refresh disposed and recreated every marker (full flash) and,
-        /// on 5.7 where the diff sweep was missing entirely, they accumulated without bound.
         ///
-        /// C-39: the layer URL is folded with <see cref="string.ToLowerInvariant"/>, not
+        /// <para>The original synthesis was <c>$"FL-{i}-{UtcNow}"</c>, which produced a
+        /// <b>different</b> uid on every re-sync — so every refresh disposed and recreated every
+        /// marker (full flash) and, on 5.7 where the diff sweep was missing entirely, they
+        /// accumulated without bound.</para>
+        ///
+        /// <para><b>Why position comes before content.</b> The fallback used to hash the
+        /// attributes and the geometry together, which is stable only for a feature nobody has
+        /// touched: editing ANY attribute — including the symbology field an operator edits
+        /// precisely to change how a marker looks — produced a new uid, so the marker was disposed
+        /// and recreated and every data package naming the old uid went stale. Position is the
+        /// closest thing to an identity such a feature has: it survives every attribute edit, and
+        /// only changes if the feature actually moves. Content hashing remains below it for the
+        /// case where a position cannot be read at all.</para>
+        ///
+        /// <para>C-39: the layer URL is folded with <see cref="string.ToLowerInvariant"/>, not
         /// <c>ToLower()</c>. C#'s culture-sensitive <c>ToLower()</c> maps 'I' to 'ı' under tr-TR
-        /// and would derive a different uid on a Turkish-locale machine for the same layer.
+        /// and would derive a different uid on a Turkish-locale machine for the same layer.</para>
         /// </summary>
-        internal static string DeriveStableUid(string uidSalt, JObject attrs, JObject geom, int index)
+        /// <param name="taken">Uids already issued in this download, so two features that would
+        /// collide are separated deterministically instead of one silently replacing the other.
+        /// May be null.</param>
+        internal static string DeriveStableUid(string uidSalt, JObject attrs, JObject geom,
+            int index, double lat, double lon, ISet<string> taken, out UidSource source)
         {
             string objectId = null;
             if (attrs != null)
@@ -628,15 +688,110 @@ namespace FeatureLink.Services
             }
 
             if (!string.IsNullOrEmpty(objectId))
+            {
+                source = UidSource.ObjectId;
+                // An object id is unique within its layer by definition, so it is not de-duplicated
+                // — a clash here would mean the service contradicted itself, and quietly renaming
+                // one of them would hide that.
                 return "FL-" + uidSalt + "-" + objectId;
+            }
 
-            // No object id either — hash the feature's own content so the uid is at least stable
-            // for an unchanged feature. Falls back to the index only for a completely empty one.
+            if (IsPlottable(lat, lon))
+            {
+                source = UidSource.Position;
+                // Seven decimal places is ~11 mm: fine enough that two distinct features are not
+                // merged, coarse enough that float noise in the service's own output does not
+                // invent a new identity for a stationary feature.
+                string position = lat.ToString("F7", CultureInfo.InvariantCulture)
+                    + "," + lon.ToString("F7", CultureInfo.InvariantCulture);
+                return Unique("FL-" + uidSalt + "-p" + ShortHash(position), taken);
+            }
+
             string content = (attrs?.ToString(Formatting.None) ?? string.Empty)
                 + "|" + (geom?.ToString(Formatting.None) ?? string.Empty);
             if (content.Length <= 1)
-                return "FL-" + uidSalt + "-i" + index.ToString(CultureInfo.InvariantCulture);
-            return "FL-" + uidSalt + "-h" + ShortHash(content);
+            {
+                source = UidSource.Index;
+                return Unique("FL-" + uidSalt + "-i"
+                    + index.ToString(CultureInfo.InvariantCulture), taken);
+            }
+
+            source = UidSource.Content;
+            return Unique("FL-" + uidSalt + "-h" + ShortHash(content), taken);
+        }
+
+        /// <summary>Returns <paramref name="candidate"/>, or the first free <c>_2</c>, <c>_3</c>…
+        /// variant when it is already taken. Two features at the same position are rare but real
+        /// (a stacked pair of observations); letting them share a uid would mean the second
+        /// silently replacing the first on the map and in any package.</summary>
+        private static string Unique(string candidate, ISet<string> taken)
+        {
+            if (taken == null) return candidate;
+            if (taken.Add(candidate)) return candidate;
+
+            for (int n = 2; n < int.MaxValue; n++)
+            {
+                string next = candidate + "_" + n.ToString(CultureInfo.InvariantCulture);
+                if (taken.Add(next)) return next;
+            }
+            return candidate;
+        }
+
+
+        /// <summary>
+        /// Says which rule produced this layer's marker uids.
+        ///
+        /// <para>Worth a line in the log because the weaker tiers are otherwise invisible until
+        /// the operator notices markers flashing on every refresh, or a data package they built
+        /// last week no longer matches the layer. The message names the consequence rather than
+        /// the tier, because the tier means nothing to the person reading it.</para>
+        /// </summary>
+        private static void LogUidTiers(string layerUrl, IDictionary<UidSource, int> tally)
+        {
+            if (tally == null || tally.Count == 0) return;
+
+            int declared = Count(tally, UidSource.Declared);
+            int objectId = Count(tally, UidSource.ObjectId);
+            int position = Count(tally, UidSource.Position);
+            int content = Count(tally, UidSource.Content);
+            int index = Count(tally, UidSource.Index);
+
+            if (declared > 0 && position + content + index == 0)
+            {
+                Log.Info($"Marker ids for \"{layerUrl}\" come from the layer's own uid column; "
+                         + "they are stable across refreshes and edits.");
+                return;
+            }
+
+            if (objectId > 0 && position + content + index == 0)
+            {
+                Log.Info($"Marker ids for \"{layerUrl}\" come from its object id; they are stable "
+                         + "across refreshes and edits.");
+                return;
+            }
+
+            if (position > 0 && content + index == 0)
+            {
+                Log.Info($"\"{layerUrl}\" has no uid or object id column, so marker ids come from "
+                         + $"each feature's POSITION ({position} features). They survive attribute "
+                         + "edits, but MOVING a feature gives it a new id — which recreates its "
+                         + "marker and leaves any data package naming the old id out of date. Add "
+                         + "a uid column to the layer to make ids fully stable.");
+                return;
+            }
+
+            Log.Warn($"\"{layerUrl}\" produced marker ids from mixed sources "
+                     + $"(uid column {declared}, object id {objectId}, position {position}, "
+                     + $"content {content}, list order {index}). The content and list-order ones "
+                     + "change whenever the feature or the query does, so their markers are "
+                     + "recreated on every refresh and data packages naming them go out of date. "
+                     + "Add a uid or object id column to the layer.");
+        }
+
+        private static int Count(IDictionary<UidSource, int> tally, UidSource source)
+        {
+            int n;
+            return tally.TryGetValue(source, out n) ? n : 0;
         }
 
         internal static string LayerUidSalt(string layerUrl) =>
