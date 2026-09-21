@@ -1451,19 +1451,26 @@ namespace FeatureLink.ViewModels
         }
 
         /// <summary>
-        /// Writes the planned package and either sends it or saves it.
+        /// Writes the planned package and, when asked, sends it.
         /// </summary>
-        /// <returns>A status line for the operator. A send that succeeded starts with "Sent",
-        /// which is what tells the workflow it may close.</returns>
-        private string DeliverPackage(DataPackageBuilder.PackagePlan plan, string packageName,
+        /// <param name="send">False to only write the package to a location the operator picks.
+        /// This is a first-class outcome, not a fallback: on a disconnected network, handing over
+        /// a file is often the only way to move data at all.</param>
+        private DataPackageWorkflow.DeliveryResult DeliverPackage(
+            DataPackageBuilder.PackagePlan plan, string packageName,
             IReadOnlyList<string> recipients, bool send)
         {
-            if (plan == null || plan.Entries.Count == 0) return "Nothing to package.";
+            if (plan == null || plan.Entries.Count == 0)
+                return DataPackageWorkflow.DeliveryResult.Failed("Nothing to package.");
 
             string destination = send
                 ? DataPackageWriter.StagedPath(packageName)
                 : AskWhereToSave(packageName);
-            if (string.IsNullOrEmpty(destination)) return null;   // the save dialog was cancelled
+
+            // Backing out of the file dialog is not a failure — say nothing and change nothing,
+            // so the selection is still there when they try again.
+            if (string.IsNullOrEmpty(destination))
+                return DataPackageWorkflow.DeliveryResult.Cancelled();
 
             DataPackageWriter.WriteResult written;
             try
@@ -1473,14 +1480,19 @@ namespace FeatureLink.ViewModels
             catch (Exception ex)
             {
                 Log.Error("Could not build the data package.", ex);
-                return "Could not build the data package: " + Describe(ex);
+                return DataPackageWorkflow.DeliveryResult.Failed(
+                    "Could not build the data package: " + Describe(ex));
             }
 
             string detail = DataPackageBuilder.Describe(plan);
             if (written.Skipped.Count > 0)
                 detail += $"; {written.Skipped.Count} file(s) could not be read and were left out";
 
-            if (!send) return $"Saved \"{packageName}\" ({detail}) to {written.Path}.";
+            if (!send)
+            {
+                return DataPackageWorkflow.DeliveryResult.Ok(
+                    $"Saved \"{packageName}\" ({detail}) to {written.Path}.");
+            }
 
             try
             {
@@ -1489,13 +1501,15 @@ namespace FeatureLink.ViewModels
 
                 TryDeleteLater(written.Path);
                 string who = recipients.Count == 1 ? "1 contact" : recipients.Count + " contacts";
-                return $"Sent \"{packageName}\" ({detail}) to {who}.";
+                return DataPackageWorkflow.DeliveryResult.Ok(
+                    $"Sent \"{packageName}\" ({detail}) to {who}.");
             }
             catch (Exception ex)
             {
                 Log.Error("Could not send the data package.", ex);
                 TryDelete(written.Path);
-                return "Could not send the data package: " + Describe(ex);
+                return DataPackageWorkflow.DeliveryResult.Failed(
+                    "Could not send the data package: " + Describe(ex));
             }
         }
 

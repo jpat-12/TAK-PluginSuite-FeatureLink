@@ -138,7 +138,23 @@ beside the account icon in the header.
    returns to step 2 with everything still selected: the selection is keyed by feature UID, so
    re-drawing over ground already covered adds only what is new rather than toggling existing
    picks back off. That is the "add" half of add-and-remove, and it is tested.
-4. **Send** — tick contacts and send, or save to a file.
+4. **Send or save** — two peers, not a primary and a fallback:
+   - *Send to selected contacts* — needs at least one contact ticked.
+   - *Create package without sending* — needs only a selection. **Choosing contacts is
+     optional.**
+
+### Contacts are optional
+
+Creating the package without picking anybody is a supported outcome, not a consolation prize for
+when there is nobody to send to. On a disconnected network, handing over a file is often the only
+way to move data at all — so the save path needs only a selection, the button is always live once
+something is selected, and a hint under the contact list says so whether the list is empty or
+merely unticked.
+
+Both outcomes close the workflow, because both are completions. A **failure** leaves the selection
+intact so the operator can retry without rebuilding it — that is the case that matters, since a
+hand-picked selection of points is the expensive thing to recreate. Backing out of the file dialog
+reports nothing and changes nothing.
 
 ### Why the steps are cards in a tab, not a wizard dialog
 

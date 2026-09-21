@@ -57,14 +57,44 @@ namespace FeatureLink.ViewModels
             /// <summary>The layer's <c>.featurelinkshare</c> config.</summary>
             public Func<ArcGisLayer, string> BuildShareConfig { get; set; }
 
-            /// <summary>Writes and sends the package. Returns a status line.</summary>
-            public Func<DataPackageBuilder.PackagePlan, string, IReadOnlyList<string>, bool, string> Deliver { get; set; }
+            /// <summary>Writes the package, and sends it when asked to.</summary>
+            public Func<DataPackageBuilder.PackagePlan, string, IReadOnlyList<string>, bool, DeliveryResult> Deliver { get; set; }
 
             /// <summary>Puts a line in the panel's status strip.</summary>
             public Action<string> SetStatus { get; set; }
 
             /// <summary>Centres the map on a feature, so a review-list row can be located.</summary>
             public Action<double, double> LookAt { get; set; }
+        }
+
+        /// <summary>What came of a delivery. An explicit flag rather than the caller sniffing the
+        /// message for a prefix: whether the workflow closes is a real decision, and tying it to
+        /// the first word of an operator-facing sentence meant rewording that sentence could
+        /// silently stop the workflow closing.</summary>
+        public sealed class DeliveryResult
+        {
+            /// <summary>True when the package was written, and sent if sending was asked for.</summary>
+            public bool Succeeded { get; set; }
+
+            /// <summary>Line for the status strip. Null when the operator cancelled a dialog, in
+            /// which case nothing is reported and nothing changes.</summary>
+            public string Message { get; set; }
+
+            public static DeliveryResult Ok(string message)
+            {
+                return new DeliveryResult { Succeeded = true, Message = message };
+            }
+
+            public static DeliveryResult Failed(string message)
+            {
+                return new DeliveryResult { Succeeded = false, Message = message };
+            }
+
+            /// <summary>The operator backed out of a file dialog — not a failure to report.</summary>
+            public static DeliveryResult Cancelled()
+            {
+                return new DeliveryResult { Succeeded = false, Message = null };
+            }
         }
 
         private readonly Host _host;
@@ -161,7 +191,7 @@ namespace FeatureLink.ViewModels
                     case Step.Name: return "Step 1 of 4 — Name the package";
                     case Step.Select: return "Step 2 of 4 — Select data";
                     case Step.Review: return "Step 3 of 4 — Review data";
-                    case Step.Send: return "Step 4 of 4 — Send to contacts";
+                    case Step.Send: return "Step 4 of 4 — Send or save";
                     default: return "Data package";
                 }
             }
@@ -250,7 +280,7 @@ namespace FeatureLink.ViewModels
             }
         }
 
-        public string NextLabel { get { return CurrentStep == Step.Review ? "Choose contacts" : "Next"; } }
+        public string NextLabel { get { return CurrentStep == Step.Review ? "Send or save" : "Next"; } }
 
         /// <summary>Back exists from the second step onwards. Explicit rather than "not the first
         /// step", because Idle is not a step the operator can go back into.</summary>
@@ -263,9 +293,29 @@ namespace FeatureLink.ViewModels
             }
         }
 
+        /// <summary>Sending needs both a selection and a recipient.</summary>
         public bool CanSend
         {
             get { return _selection.Count > 0 && Contacts.Any(c => c.IsSelected); }
+        }
+
+        /// <summary>Saving needs only a selection. Deliberately independent of
+        /// <see cref="CanSend"/>: creating the package without picking anybody is a supported
+        /// outcome, not a consolation prize for when there is nobody to send to.</summary>
+        public bool CanSave { get { return _selection.Count > 0; } }
+
+        /// <summary>Shown under the contact list, so an empty tick-list never reads as a dead
+        /// end.</summary>
+        public string ContactHint
+        {
+            get
+            {
+                if (!HasContacts)
+                    return "No contacts are reachable. You can still save the package to a file.";
+                return Contacts.Any(c => c.IsSelected)
+                    ? "You can also save a copy to a file."
+                    : "Choosing contacts is optional — you can just save the package to a file.";
+            }
         }
 
         /// <summary>A contact row with a checkbox.</summary>
@@ -555,11 +605,14 @@ namespace FeatureLink.ViewModels
 
             Raise(nameof(HasContacts));
             Raise(nameof(CanSend));
+            Raise(nameof(CanSave));
+            Raise(nameof(ContactHint));
         }
 
         private void OnContactToggled()
         {
             Raise(nameof(CanSend));
+            Raise(nameof(ContactHint));
         }
 
         private void RefreshSelectionState()
@@ -576,6 +629,8 @@ namespace FeatureLink.ViewModels
             Raise(nameof(SelectedCount));
             Raise(nameof(CanGoNext));
             Raise(nameof(CanSend));
+            Raise(nameof(CanSave));
+            Raise(nameof(ContactHint));
         }
 
         private void AutoName()
@@ -603,9 +658,13 @@ namespace FeatureLink.ViewModels
             }
 
             var recipients = Contacts.Where(c => c.IsSelected).Select(c => c.Uid).ToList();
+
+            // Sending needs a recipient; SAVING DOES NOT. Choosing nobody is a legitimate way to
+            // finish — the operator gets the .zip and moves it by whatever means they have, which
+            // on a disconnected network is often the only means there is.
             if (send && recipients.Count == 0)
             {
-                Status("Choose at least one contact, or save the package to a file.");
+                Status("Choose at least one contact, or save the package to a file instead.");
                 return;
             }
 
@@ -616,16 +675,18 @@ namespace FeatureLink.ViewModels
                 return;
             }
 
-            string result = _host.Deliver != null
+            var result = _host.Deliver != null
                 ? _host.Deliver(plan, PackageName, recipients, send)
-                : null;
+                : DeliveryResult.Failed("Packaging is unavailable.");
 
-            if (!string.IsNullOrEmpty(result)) Status(result);
+            if (result == null) return;
+            if (!string.IsNullOrEmpty(result.Message)) Status(result.Message);
 
-            // Only a completed send closes the workflow. A failure leaves the selection intact so
-            // the operator can retry without rebuilding it by hand.
-            if (!string.IsNullOrEmpty(result) && result.StartsWith("Sent", StringComparison.Ordinal))
-                Cancel();
+            // Saving is as much a completion as sending, so both close the workflow. A FAILURE
+            // leaves the selection intact so the operator can retry without rebuilding it by hand
+            // — which is the case that matters, since a hand-picked selection of points is the
+            // expensive thing to recreate.
+            if (result.Succeeded) Cancel();
         }
 
         /// <summary>Turns the selection into a package plan: one config plus its iconsets per

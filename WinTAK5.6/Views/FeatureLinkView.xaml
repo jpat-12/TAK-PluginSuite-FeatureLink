@@ -1198,15 +1198,11 @@
                         <Border Style="{StaticResource Card}" Margin="0,0,0,12"
                                 Visibility="{Binding IsSending, Converter={StaticResource BoolToVis}}">
                             <StackPanel>
-                                <TextBlock Text="Send to" Style="{StaticResource SectionHeaderText}"
+                                <TextBlock Text="Send to (optional)" Style="{StaticResource SectionHeaderText}"
                                            Margin="0,0,0,8"/>
 
-                                <TextBlock Style="{StaticResource BodyText}" TextWrapping="Wrap"
-                                           Margin="0,0,0,8"
-                                           Visibility="{Binding HasContacts, Converter={StaticResource InverseBoolToVis}}"
-                                           Text="No contacts are reachable. You can still save the package to a file."/>
-
-                                <ItemsControl ItemsSource="{Binding Contacts}" MaxHeight="220">
+                                <ItemsControl ItemsSource="{Binding Contacts}" MaxHeight="220"
+                                              Visibility="{Binding HasContacts, Converter={StaticResource BoolToVis}}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <CheckBox Content="{Binding Name}"
@@ -1217,14 +1213,29 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
 
+                                <!-- Always present, whether or not there are contacts and whether
+                                     or not any are ticked, so an empty tick-list never reads as a
+                                     dead end. -->
+                                <TextBlock Text="{Binding ContactHint}" Style="{StaticResource BodyText}"
+                                           TextWrapping="Wrap" Margin="0,6,0,0" Opacity="0.8"/>
+
                                 <TextBlock Text="{Binding SelectionSummary}" Style="{StaticResource BodyText}"
                                            TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="Bold"/>
 
-                                <Button Content="Send package" Style="{StaticResource PrimaryButton}"
-                                        Command="{Binding SendCommand}" MinHeight="42" Margin="0,10,0,6"
-                                        IsEnabled="{Binding CanSend}"/>
-                                <Button Content="Save to file instead" Style="{StaticResource SecondaryButton}"
-                                        Command="{Binding SaveCommand}" MinHeight="34"/>
+                                <!-- Two peers, not a primary and a consolation prize: creating the
+                                     package without sending it is a supported outcome, and on a
+                                     disconnected network it is often the only one available. -->
+                                <Button Content="Send to selected contacts"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding SendCommand}" MinHeight="42" Margin="0,12,0,8"
+                                        IsEnabled="{Binding CanSend}"
+                                        ToolTip="Tick at least one contact above to enable this"/>
+
+                                <Button Content="Create package without sending"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding SaveCommand}" MinHeight="42"
+                                        IsEnabled="{Binding CanSave}"
+                                        ToolTip="Write the package to a file you choose"/>
                             </StackPanel>
                         </Border>
 
