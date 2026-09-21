@@ -22,3 +22,7 @@ dist/
 # .NET test build output
 Tests/**/bin/
 Tests/**/obj/
+
+# MSBuild generates a temporary project per WPF build (FeatureLink_<hash>_wpftmp.csproj)
+# and leaves it behind when a build is interrupted. Never source.
+*_wpftmp.csproj

@@ -97,6 +97,12 @@
       <HintPath>libs\WinTak.Display.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!-- IMissionPackageService + MissionPackage, so a package FeatureLink creates appears in
+         WinTAK's own Data Packages list instead of only existing as a file. -->
+    <Reference Include="WinTak.MissionPackages">
+      <HintPath>libs\WinTak.MissionPackages.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <!-- MapItem (RemoveLayerMarkers' Dispose() call) lives here -->
     <Reference Include="WinTak.Graphics">
       <HintPath>libs\WinTak.Graphics.dll</HintPath>
@@ -146,6 +152,7 @@
     <Compile Include="Services\DialogService.cs" />
     <Compile Include="Services\FeatureSelection.cs" />
     <Compile Include="Services\MapAreaSelector.cs" />
+    <Compile Include="Services\MissionPackageRegistrar.cs" />
     <Compile Include="Services\DisplayStyleResolver.cs" />
     <Compile Include="Services\ErrorText.cs" />
     <Compile Include="Services\IconsetInstaller.cs" />

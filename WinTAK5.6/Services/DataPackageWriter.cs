@@ -32,8 +32,14 @@ namespace FeatureLink.Services
         /// <summary>Where the manifest lives inside the zip. Fixed by the format.</summary>
         public const string ManifestEntryPath = "MANIFEST/manifest.xml";
 
-        /// <summary>Staging directory for packages awaiting send.</summary>
-        public static string StagingDirectory
+        /// <summary>
+        /// Where packages are written when the caller does not supply a folder.
+        ///
+        /// <para>A last-resort fallback only. The dock pane passes WinTAK's own Data Packages
+        /// folder, because a package written to %TEMP% cannot be listed in the host: the record
+        /// would point at a file that is cleaned up underneath it.</para>
+        /// </summary>
+        public static string FallbackDirectory
         {
             get { return Path.Combine(Path.GetTempPath(), "FeatureLinkPackages"); }
         }
@@ -256,12 +262,19 @@ namespace FeatureLink.Services
             }
         }
 
-        /// <summary>Full path for a package of the given name in the staging directory.</summary>
-        public static string StagedPath(string packageName)
+        /// <summary>
+        /// Full path for a package of the given name, inside <paramref name="directory"/>.
+        /// </summary>
+        /// <param name="packageName">Operator-visible name; sanitized into a legal file stem.</param>
+        /// <param name="directory">Where to put it. Null or blank falls back to
+        /// <see cref="FallbackDirectory"/>.</param>
+        public static string PathIn(string packageName, string directory)
         {
             string stem = DataPackageBuilder.Sanitize(packageName, 96);
             if (stem.Length == 0) stem = "FeatureLink-package";
-            return Path.Combine(StagingDirectory, stem + ".zip");
+
+            string folder = string.IsNullOrWhiteSpace(directory) ? FallbackDirectory : directory;
+            return Path.Combine(folder, stem + ".zip");
         }
     }
 }

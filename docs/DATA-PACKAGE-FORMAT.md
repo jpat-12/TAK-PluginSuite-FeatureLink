@@ -1,6 +1,6 @@
 # FeatureLink Data Packages
 
-**Status:** implemented in WinTAK 5.6 as of 2.11.1. Not yet implemented in ATAK, CloudTAK or
+**Status:** implemented in WinTAK 5.6 as of 2.12.0. Not yet implemented in ATAK, CloudTAK or
 TAK Portal — this document is the contract those ports should follow.
 
 ---
@@ -58,6 +58,37 @@ FeatureLink-Ground_Teams-20260920-1234.zip
 - **`iconsets/`** — the generated zips, named by their UID, exactly as
   `IconsetInstaller` wrote them to `%AppData%\WinTAK\FeatureLink\iconsets\`. An iconset referenced
   by two selected layers is included once.
+
+## Where packages are saved
+
+**`%AppData%\WinTAK\Data Packages\`** — WinTAK's own packages folder, the same place every
+other package on the machine lives. Both paths land there: sending writes into it, and the "create
+without sending" file dialog opens there (the operator can still navigate anywhere).
+
+The exact folder comes from the host's `PackagesDirectory.DirectoryFullName`, so it follows WinTAK
+if it ever moves; the literal above is the fallback.
+
+### They are listed in WinTAK
+
+A created package is registered with `IMissionPackageService.AddPackage`, so it appears in
+WinTAK's Data Packages list immediately. Without that a package was only a file: it sent fine and
+a recipient could import it, but the operator who built it could not find it again anywhere in
+WinTAK, which made "create a package" feel like it had not done anything.
+
+The host record carries the package's SHA-256 and the same UID as the manifest, so the two agree
+on identity.
+
+### Packages are no longer deleted after sending
+
+They used to be written to `%TEMP%\FeatureLinkPackages\` and removed two minutes after the send,
+which kept a file holding layer URLs and display configs off a shared workstation. **That is no
+longer the case** — a package has to persist to be listed, and a sent package the sender cannot
+find again is the problem this change exists to fix.
+
+The trade is deliberate and worth stating: a data package contains the layer URLs, display configs
+and (when features were selected) the feature positions of whatever went into it, and it now stays
+on disk until someone removes it. Removing it is the operator's call, from the same Data Packages
+list. This matches how every other package on the machine already behaves.
 
 ## Manifest
 
@@ -192,21 +223,33 @@ and a searcher's marker simply is not in it.
 
 ## Implementation notes
 
-### Why this does not use `WinTak.MissionPackages`
+### Why the package is still written by hand, but registered through the SDK
 
-The SDK exposes a package builder — `MissionPackage` + `FilePackageContent` + `Save()` — and using
-it would be the obvious route. It is deliberately not used:
+The SDK exposes a package builder — `MissionPackage` + `FilePackageContent` + `Save()`. It is
+still **not** used to write the package, for one reason that has not changed: the manifest is the
+one part of this feature every other TAK client must agree with, which makes it exactly the part
+worth having under test. The format above is asserted against fixtures in `DataPackageTests`; a
+call into a host type could only be verified by running WinTAK.
 
-1. It would add an **eighth SDK assembly reference** to a project CI already cannot compile,
-   widening the surface that only builds on a licensed workstation.
-2. The manifest is the one part of this feature every other TAK client must agree with, which
-   makes it exactly the part worth having under test. The format above is asserted against
-   fixtures in `DataPackageTests`; a call into a host type could only be verified by running
-   WinTAK.
+An earlier version of this document gave a second reason — avoiding an eighth SDK assembly
+reference. **That reason no longer applies.** Listing a package in WinTAK's Data Packages list is
+something only the host can do, so `WinTak.MissionPackages` is now referenced and
+`MissionPackageRegistrar` calls `IMissionPackageService.AddPackage`. The split is the point: the
+testable part stayed testable, and the part that had to go through the host is twenty lines in one
+file.
 
-Only `ICommunicationService.SendMissionPackage(List<string>, FileInfo, string, bool)` touches the
-host — already referenced, and already used by the single-layer Share button. It takes a **list**
-of contact UIDs, so multi-recipient send needed no new host surface.
+Two mitigations keep the new reference from being a risk:
+
+- `IMissionPackageService` is imported as a **property with `AllowDefault`**, like
+  `IMapViewController`. An unsatisfied constructor import fails MEF composition and the whole dock
+  pane silently never loads; listing is an enhancement on top of a package that is written and
+  sent either way, so its absence costs only the listing.
+- The assembly is referenced with `Private=False` and is **not** packaged into the `.wpk` — the
+  host supplies it, exactly like the other seven.
+
+Sending still goes through `ICommunicationService.SendMissionPackage(List<string>, FileInfo,
+string, bool)`, which was already referenced and already used by the single-layer Share button. It
+takes a **list** of contact UIDs, so multi-recipient send needed no new host surface.
 
 ### The persisted `IconsetUids` key
 
@@ -258,6 +301,12 @@ recipient who cannot reach ArcGIS would get nothing at all.
    whether the `.featurelinkshare` import path needs to install it explicitly.
 3. **Cross-platform:** ATAK, CloudTAK and TAK Portal neither produce nor consume these packages
    yet.
+
+5. **Host registration is unverified.** `IMissionPackageService.AddPackage` is undocumented beyond
+   its signature, so whether a package added this way appears in the Data Packages list
+   immediately — and whether the host expects the file to already be in its own folder, which is
+   why it is written there — is inferred. It fails safe: a throw is caught and logged, and the
+   package is still written and still sent.
 
 4. **The map selection modes have not been exercised against a live map.** `PushMapEvents`,
    `PopMapEvents` and `MapMouseEventArgs.WorldLocation` are all **undocumented** in the 5.6 SDK

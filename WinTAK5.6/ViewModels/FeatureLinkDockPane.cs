@@ -109,6 +109,17 @@ namespace FeatureLink.ViewModels
         /// plugin because the host did not export this contract would be a wildly
         /// disproportionate failure. Null simply means the affordance does nothing, and says so
         /// in the log.</para></summary>
+        /// <summary>WinTAK's package list, so a package FeatureLink creates is findable in the
+        /// host afterwards rather than being only a file on disk.
+        ///
+        /// <para>A property import with <c>AllowDefault</c>, for the same reason as
+        /// <see cref="MapViewController"/> below: an unsatisfied constructor import fails MEF
+        /// composition and the whole dock pane never loads. Listing is an enhancement on top of a
+        /// package that is written and sent either way, so its absence must cost only the listing.
+        /// </para></summary>
+        [Import(AllowDefault = true)]
+        public WinTak.MissionPackages.IMissionPackageService MissionPackageService { get; set; }
+
         [Import(AllowDefault = true)]
         public WinTak.Display.IMapViewController MapViewController
         {
@@ -1286,57 +1297,13 @@ namespace FeatureLink.ViewModels
                 return;
             }
 
-            string destination = dialog.SaveToFileRequested
-                ? AskWhereToSave(dialog.PackageName)
-                : DataPackageWriter.StagedPath(dialog.PackageName);
-            if (string.IsNullOrEmpty(destination)) return;   // the save dialog was cancelled
+            // Same delivery path as the PACKAGE tab, so both write to WinTAK's Data Packages
+            // folder, both register with the host, and neither can drift from the other in where
+            // a package ends up or what the operator is told.
+            var result = DeliverPackage(plan, dialog.PackageName,
+                dialog.SelectedContactUids, !dialog.SaveToFileRequested);
 
-            DataPackageWriter.WriteResult written;
-            try
-            {
-                written = DataPackageWriter.Write(plan, dialog.PackageName, destination);
-            }
-            catch (Exception ex)
-            {
-                Log.Error("Could not build the data package.", ex);
-                SetStatus("Could not build the data package: " + Describe(ex));
-                return;
-            }
-
-            string detail = DataPackageBuilder.Describe(plan);
-            if (written.Skipped.Count > 0)
-                detail += $"; {written.Skipped.Count} file(s) could not be read and were left out";
-
-            if (dialog.SaveToFileRequested)
-            {
-                SetStatus($"Saved \"{dialog.PackageName}\" ({detail}) to {written.Path}.");
-                return;
-            }
-
-            var recipients = dialog.SelectedContactUids.ToList();
-            bool sent = false;
-            try
-            {
-                _communicationService.SendMissionPackage(
-                    recipients, new FileInfo(written.Path), dialog.PackageName, false);
-                sent = true;
-
-                string who = recipients.Count == 1 ? "1 contact" : recipients.Count + " contacts";
-                SetStatus($"Sent \"{dialog.PackageName}\" ({detail}) to {who}.");
-            }
-            catch (Exception ex)
-            {
-                Log.Error("Could not send the data package.", ex);
-                SetStatus("Could not send the data package: " + Describe(ex));
-            }
-            finally
-            {
-                // The package holds every selected layer's URL and display config, so it does not
-                // stay in %TEMP% — the same policy the single-layer share already follows. The
-                // delay is there because the send reads the file asynchronously.
-                if (sent) TryDeleteLater(written.Path);
-                else TryDelete(written.Path);
-            }
+            if (result != null && !string.IsNullOrEmpty(result.Message)) SetStatus(result.Message);
         }
 
         /// <summary>Deletes a staged package immediately, for the path where no send was started.</summary>
@@ -1347,12 +1314,38 @@ namespace FeatureLink.ViewModels
             catch (Exception ex) { Log.Warn("Could not delete the unsent package file: " + ex.Message); }
         }
 
+        /// <summary>This machine's callsign, for the package record's "who made it" field.
+        /// Falls back to the self UID and then to a literal, because a package with a blank
+        /// creator reads as corrupt in the host's list.</summary>
+        private string SelfCallsign()
+        {
+            try
+            {
+                var self = _locationService?.GetSelfCotEvent();
+                string callsign = self?.Detail?.GetDetailAttribute("contact", "callsign");
+                if (!string.IsNullOrWhiteSpace(callsign)) return callsign;
+                if (!string.IsNullOrWhiteSpace(self?.Uid)) return self.Uid;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not read this machine's callsign: " + ex.Message);
+            }
+            return "FeatureLink";
+        }
+
         /// <summary>Asks where to save a package. Returns null when the operator cancels.</summary>
         private static string AskWhereToSave(string packageName)
         {
+            string folder = MissionPackageRegistrar.PackagesFolder;
+            try { if (!string.IsNullOrEmpty(folder)) Directory.CreateDirectory(folder); }
+            catch (Exception ex) { Log.Warn("Could not prepare the packages folder: " + ex.Message); }
+
             var save = new Microsoft.Win32.SaveFileDialog
             {
                 Title = "Save data package",
+                // Opens where WinTAK keeps packages, so the default action also produces a listed
+                // one; the operator can still navigate anywhere.
+                InitialDirectory = folder,
                 FileName = DataPackageBuilder.Sanitize(packageName, 96) + ".zip",
                 DefaultExt = ".zip",
                 Filter = "TAK data package (*.zip)|*.zip|All files (*.*)|*.*",
@@ -1463,8 +1456,11 @@ namespace FeatureLink.ViewModels
             if (plan == null || plan.Entries.Count == 0)
                 return DataPackageWorkflow.DeliveryResult.Failed("Nothing to package.");
 
+            // Both paths now default to WinTAK's Data Packages folder. A package has to live
+            // somewhere durable to be listed in the host, and that is where every other package on
+            // the machine already lives.
             string destination = send
-                ? DataPackageWriter.StagedPath(packageName)
+                ? DataPackageWriter.PathIn(packageName, MissionPackageRegistrar.PackagesFolder)
                 : AskWhereToSave(packageName);
 
             // Backing out of the file dialog is not a failure — say nothing and change nothing,
@@ -1488,10 +1484,15 @@ namespace FeatureLink.ViewModels
             if (written.Skipped.Count > 0)
                 detail += $"; {written.Skipped.Count} file(s) could not be read and were left out";
 
+            bool listed = MissionPackageRegistrar.Register(
+                MissionPackageService, written.Path, packageName, written.Uid, SelfCallsign());
+
             if (!send)
             {
-                return DataPackageWorkflow.DeliveryResult.Ok(
-                    $"Saved \"{packageName}\" ({detail}) to {written.Path}.");
+                string where = listed
+                    ? $"Saved \"{packageName}\" ({detail}) to {written.Path} and listed it in Data Packages."
+                    : $"Saved \"{packageName}\" ({detail}) to {written.Path}.";
+                return DataPackageWorkflow.DeliveryResult.Ok(where);
             }
 
             try
@@ -1499,7 +1500,13 @@ namespace FeatureLink.ViewModels
                 _communicationService.SendMissionPackage(
                     recipients.ToList(), new FileInfo(written.Path), packageName, false);
 
-                TryDeleteLater(written.Path);
+                // Deliberately NOT deleted after sending any more. It used to go to %TEMP% and be
+                // removed two minutes later, which kept a file holding layer URLs and display
+                // configs off a shared workstation. It now lives in WinTAK's Data Packages folder
+                // and is listed there, which is the behaviour asked for and the behaviour every
+                // other package on the machine already has — a sent package the sender cannot find
+                // again is the thing that made this feel broken. Removing it is the operator's call
+                // now, from the same list.
                 string who = recipients.Count == 1 ? "1 contact" : recipients.Count + " contacts";
                 return DataPackageWorkflow.DeliveryResult.Ok(
                     $"Sent \"{packageName}\" ({detail}) to {who}.");

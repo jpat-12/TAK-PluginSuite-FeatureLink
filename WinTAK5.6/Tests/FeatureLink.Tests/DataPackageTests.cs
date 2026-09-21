@@ -677,21 +677,44 @@ namespace FeatureLink.Tests
         }
 
         [Fact]
-        public void A_staged_path_is_a_legal_file_name_even_for_an_awkward_package_name()
+        public void A_package_path_is_a_legal_file_name_even_for_an_awkward_package_name()
         {
-            string staged = DataPackageWriter.StagedPath("Teams / ICP: 2026");
+            string path = DataPackageWriter.PathIn("Teams / ICP: 2026", @"C:\packages");
 
-            Assert.EndsWith(".zip", staged);
-            Assert.Equal(-1, Path.GetFileName(staged).IndexOfAny(Path.GetInvalidFileNameChars()));
+            Assert.EndsWith(".zip", path);
+            Assert.Equal(-1, Path.GetFileName(path).IndexOfAny(Path.GetInvalidFileNameChars()));
         }
 
         [Fact]
-        public void A_blank_package_name_still_stages_somewhere_legal()
+        public void A_blank_package_name_still_produces_somewhere_legal()
         {
-            string staged = DataPackageWriter.StagedPath("   ");
+            string path = DataPackageWriter.PathIn("   ", @"C:\packages");
 
-            Assert.EndsWith(".zip", staged);
-            Assert.Equal(-1, Path.GetFileName(staged).IndexOfAny(Path.GetInvalidFileNameChars()));
+            Assert.EndsWith(".zip", path);
+            Assert.Equal(-1, Path.GetFileName(path).IndexOfAny(Path.GetInvalidFileNameChars()));
+        }
+
+        /// <summary>The package goes where the caller says — WinTAK's Data Packages folder in
+        /// practice. A package written anywhere transient cannot be listed in the host, because
+        /// the record would point at a file that is cleaned up underneath it.</summary>
+        [Fact]
+        public void A_package_is_written_into_the_folder_it_was_given()
+        {
+            string path = DataPackageWriter.PathIn("Teams", @"C:\WinTAK\Data Packages");
+
+            Assert.Equal(@"C:\WinTAK\Data Packages", Path.GetDirectoryName(path));
+        }
+
+        [Fact]
+        public void No_folder_falls_back_rather_than_producing_a_bare_file_name()
+        {
+            foreach (string folder in new[] { null, "", "   " })
+            {
+                string path = DataPackageWriter.PathIn("Teams", folder);
+
+                Assert.Equal(DataPackageWriter.FallbackDirectory, Path.GetDirectoryName(path));
+                Assert.True(Path.IsPathRooted(path));
+            }
         }
 
         // ── helper ──────────────────────────────────────────────────────────────
