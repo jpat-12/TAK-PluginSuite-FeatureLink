@@ -78,6 +78,7 @@
     <Compile Include="..\..\Services\DataPackageBuilder.cs" Link="Production\Services\DataPackageBuilder.cs" />
     <Compile Include="..\..\Services\DataPackageWriter.cs" Link="Production\Services\DataPackageWriter.cs" />
     <Compile Include="..\..\Services\FeatureSelection.cs" Link="Production\Services\FeatureSelection.cs" />
+    <Compile Include="..\..\Services\PackageLibrary.cs" Link="Production\Services\PackageLibrary.cs" />
     <Compile Include="..\..\Services\DisplayStyleResolver.cs" Link="Production\Services\DisplayStyleResolver.cs" />
     <Compile Include="..\..\Services\ErrorText.cs"          Link="Production\Services\ErrorText.cs" />
     <Compile Include="..\..\Services\Log.cs"                Link="Production\Services\Log.cs" />

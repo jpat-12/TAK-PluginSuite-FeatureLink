@@ -618,7 +618,7 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <Button Grid.Column="2" Content="PACKAGE" Command="{Binding NavigatePackageCommand}" Margin="3,0,3,0">
+                    <Button Grid.Column="2" Content="PACKAGES" Command="{Binding NavigatePackageCommand}" Margin="3,0,3,0">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource TabBarButtonBase}">
                                 <Style.Triggers>
@@ -1013,7 +1013,12 @@
                             </Style.Triggers>
                         </Style>
                     </ScrollViewer.Style>
-                    <StackPanel Margin="12" DataContext="{Binding Package}">
+                    <StackPanel Margin="12">
+
+                      <!-- Create: the four-step workflow. Bound to the workflow view model; the
+                           listing below binds to the dock pane, which is why the DataContext is
+                           set here rather than on the page. -->
+                      <StackPanel DataContext="{Binding Package}">
 
                         <TextBlock Text="{Binding StepTitle}" Style="{StaticResource SectionHeaderText}"
                                    Margin="0,0,0,10"/>
@@ -1259,6 +1264,102 @@
                         <Button Content="Back" Style="{StaticResource SecondaryButton}"
                                 Command="{Binding BackCommand}" MinHeight="32" Margin="0,0,0,12"
                                 Visibility="{Binding CanGoBack, Converter={StaticResource BoolToVis}}"/>
+
+                      </StackPanel>
+
+                      <!-- ── Built packages ─────────────────────────────────────────
+                           Read back off disk rather than accumulated as packages are
+                           built, so one deleted from WinTAK's own list, moved, or left
+                           over from a previous run all show correctly. -->
+                      <Border Style="{StaticResource Card}" Margin="0,4,0,12"
+                              DataContext="{Binding PackageLibrary}">
+                          <StackPanel>
+                              <Grid Margin="0,0,0,4">
+                                  <Grid.ColumnDefinitions>
+                                      <ColumnDefinition Width="*"/>
+                                      <ColumnDefinition Width="Auto"/>
+                                  </Grid.ColumnDefinitions>
+                                  <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                              VerticalAlignment="Center">
+                                      <TextBlock Text="Built packages"
+                                                 Style="{StaticResource SectionHeaderText}"/>
+                                      <Border Background="{StaticResource BadgeCountBg}" CornerRadius="8"
+                                              Padding="6,1" Margin="6,0,0,0"
+                                              Visibility="{Binding HasPackages, Converter={StaticResource BoolToVis}}">
+                                          <TextBlock Text="{Binding Packages.Count}"
+                                                     Foreground="{StaticResource BadgeCountText}"
+                                                     FontSize="10" FontWeight="Bold"/>
+                                      </Border>
+                                  </StackPanel>
+                                  <Button Grid.Column="1" Content="Refresh"
+                                          Style="{StaticResource SmallButton}"
+                                          Command="{Binding RefreshCommand}"/>
+                              </Grid>
+
+                              <!-- Where the files actually are: the most common question about
+                                   this feature, so it is on screen rather than in a doc. -->
+                              <TextBlock Text="{Binding FolderText}" Foreground="{StaticResource TextMuted}"
+                                         FontSize="10" TextWrapping="Wrap" Margin="0,0,0,8"
+                                         ToolTip="{Binding FolderText}"/>
+
+                              <TextBlock Text="{Binding EmptyText}" Style="{StaticResource BodyText}"
+                                         TextWrapping="Wrap" Opacity="0.75"
+                                         Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVis}}"/>
+
+                              <ItemsControl ItemsSource="{Binding Packages}"
+                                            Visibility="{Binding HasPackages, Converter={StaticResource BoolToVis}}">
+                                  <ItemsControl.ItemTemplate>
+                                      <DataTemplate>
+                                          <Border BorderBrush="{StaticResource Divider}"
+                                                  BorderThickness="0,0,0,1" Padding="0,8">
+                                              <Grid>
+                                                  <Grid.ColumnDefinitions>
+                                                      <ColumnDefinition Width="*"/>
+                                                      <ColumnDefinition Width="Auto"/>
+                                                  </Grid.ColumnDefinitions>
+
+                                                  <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                                      <TextBlock Text="{Binding Name}"
+                                                                 Foreground="{StaticResource TextPrimary}"
+                                                                 FontWeight="Bold"
+                                                                 TextTrimming="CharacterEllipsis"
+                                                                 ToolTip="{Binding Path}"/>
+                                                      <TextBlock Text="{Binding Contents}"
+                                                                 Foreground="{StaticResource TextMuted}"
+                                                                 FontSize="11"
+                                                                 TextTrimming="CharacterEllipsis"/>
+                                                      <TextBlock Text="{Binding Detail}"
+                                                                 Foreground="{StaticResource TextMuted}"
+                                                                 FontSize="10"/>
+                                                  </StackPanel>
+
+                                                  <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                              VerticalAlignment="Center">
+                                                      <Button Content="Send" Style="{StaticResource SmallButton}"
+                                                              Margin="0,0,4,0"
+                                                              ToolTip="Send this package to contacts"
+                                                              Command="{Binding DataContext.SendCommand,
+                                                                        RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                              CommandParameter="{Binding}"/>
+                                                      <Button Content="Show" Style="{StaticResource SmallButton}"
+                                                              Margin="0,0,4,0"
+                                                              ToolTip="Show the file in Explorer"
+                                                              Command="{Binding DataContext.RevealCommand,
+                                                                        RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                              CommandParameter="{Binding}"/>
+                                                      <Button Content="Delete" Style="{StaticResource SmallButton}"
+                                                              ToolTip="Delete this package from disk"
+                                                              Command="{Binding DataContext.DeleteCommand,
+                                                                        RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                              CommandParameter="{Binding}"/>
+                                                  </StackPanel>
+                                              </Grid>
+                                          </Border>
+                                      </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+                          </StackPanel>
+                      </Border>
 
                     </StackPanel>
                 </ScrollViewer>

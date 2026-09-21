@@ -225,20 +225,48 @@ namespace FeatureLink.Services
             }
         }
 
-        /// <summary>Serializes the manifest with its XML declaration, which the format requires.</summary>
+        /// <summary>
+        /// Serializes the manifest with its XML declaration, which the format requires.
+        ///
+        /// <para><b>The writer must report UTF-8.</b> <c>XDocument.Save(TextWriter)</c> takes the
+        /// encoding it declares from the writer, and a plain <see cref="StringWriter"/> reports
+        /// UTF-16 — so the manifest went out saying <c>encoding="utf-16"</c> while the bytes were
+        /// UTF-8. Any consumer that parses from a STREAM, which is what reading a zip entry does
+        /// and therefore what a recipient's client does, then fails on the mismatch.</para>
+        ///
+        /// <para>It survived review and a test because parsing a <i>string</i> ignores the
+        /// declaration entirely: the round-trip assertion passed while the shipped bytes were
+        /// wrong. The tests now load from a stream and assert the declared encoding.</para>
+        /// </summary>
         public static string Serialize(XDocument manifest)
         {
             if (manifest == null) return string.Empty;
+
             var sb = new StringBuilder();
-            using (var writer = new StringWriter(sb, CultureInfo.InvariantCulture))
+            using (var writer = new Utf8StringWriter(sb))
             {
                 manifest.Save(writer);
                 writer.Flush();
             }
-            // XDocument.Save to a TextWriter omits the declaration; the format expects it.
+
+            // Save writes the declaration when the document has one; this covers a document built
+            // without it rather than silently emitting a manifest with no declaration at all.
             if (manifest.Declaration != null && !sb.ToString().StartsWith("<?xml", StringComparison.Ordinal))
                 sb.Insert(0, manifest.Declaration + Environment.NewLine);
+
             return sb.ToString();
+        }
+
+        /// <summary>A <see cref="StringWriter"/> that reports UTF-8, so XML written through it
+        /// declares the encoding its bytes are actually in. See <see cref="Serialize"/>.</summary>
+        private sealed class Utf8StringWriter : StringWriter
+        {
+            public Utf8StringWriter(StringBuilder sb) : base(sb, CultureInfo.InvariantCulture) { }
+
+            public override Encoding Encoding
+            {
+                get { return new UTF8Encoding(false); }
+            }
         }
 
         private static void WriteText(ZipArchive archive, string entryPath, string content)

@@ -475,6 +475,58 @@ namespace FeatureLink.Tests
             Assert.Equal("MissionPackageManifest", XDocument.Parse(xml).Root.Name.LocalName);
         }
 
+        /// <summary>
+        /// The manifest must declare the encoding its bytes are actually in.
+        ///
+        /// <para>It shipped declaring <c>utf-16</c> while being written as UTF-8, because
+        /// <c>XDocument.Save(TextWriter)</c> takes the declared encoding from the writer and a
+        /// plain <c>StringWriter</c> reports UTF-16. The test above did not catch it: parsing a
+        /// STRING ignores the declaration, so the round-trip passed while the shipped bytes were
+        /// wrong. A recipient reads the manifest out of a zip as a STREAM, where the declaration
+        /// is honoured and the mismatch is fatal.</para>
+        /// </summary>
+        [Fact]
+        public void The_manifest_declares_utf8_not_the_writers_encoding()
+        {
+            string xml = DataPackageWriter.Serialize(
+                DataPackageWriter.BuildManifest(SimplePlan(), "Pkg", "uid-1"));
+
+            Assert.DoesNotContain("utf-16", xml, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("utf-8", xml, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Reads the manifest back the way a recipient does — from the zip, as a stream —
+        /// which is the path the encoding mismatch actually broke.</summary>
+        [Fact]
+        public void The_manifest_can_be_loaded_from_the_zip_as_a_stream()
+        {
+            using (var dir = new TempDir())
+            {
+                var plan = SimplePlanWithRealIconset(dir);
+                var result = DataPackageWriter.Write(plan, "Pkg", Path.Combine(dir.Path, "out.zip"));
+
+                using (var archive = ZipFile.OpenRead(result.Path))
+                using (var stream = archive.GetEntry(DataPackageWriter.ManifestEntryPath).Open())
+                {
+                    var manifest = XDocument.Load(stream);
+                    Assert.Equal("MissionPackageManifest", manifest.Root.Name.LocalName);
+                }
+            }
+        }
+
+        private static DataPackageBuilder.PackagePlan SimplePlanWithRealIconset(TempDir dir)
+        {
+            var plan = new DataPackageBuilder.PackagePlan();
+            plan.Entries.Add(new DataPackageBuilder.PlannedEntry
+            {
+                PackagePath = "featurelink/a.featurelinkshare",
+                Uid = "cfg-1",
+                Kind = DataPackageBuilder.EntryKind.LayerConfig,
+                Content = "{}",
+            });
+            return plan;
+        }
+
         [Fact]
         public void The_package_uid_is_stable_for_the_same_contents_and_changes_with_them()
         {

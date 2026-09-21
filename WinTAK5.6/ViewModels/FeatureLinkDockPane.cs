@@ -193,8 +193,13 @@ namespace FeatureLink.ViewModels
 
         private void NavigatePage(int page)
         {
-            if (page < 0 || page > 3) return;   // HOME, LAYERS, PACKAGE, PLI
+            if (page < 0 || page > 3) return;   // HOME, LAYERS, PACKAGES, PLI
             CurrentTabIndex = page;
+
+            // Read the folder when the tab is opened rather than on a timer: packages can be
+            // deleted from WinTAK's own list or from Explorer, and a stale listing offering a Send
+            // button for a file that is gone is worse than a moment's work here.
+            if (page == 2) Guard(() => PackageLibrary.Refresh(), "list built packages");
         }
 
         // -------------------------------------------------------------------------
@@ -495,6 +500,7 @@ namespace FeatureLink.ViewModels
             // Resolves MapViewController lazily: MEF sets that import after this constructor.
             _mapSelector = new MapAreaSelector(() => MapViewController);
             Package = CreatePackageWorkflow();
+            PackageLibrary = CreatePackageLibrary();
 
             NavigateHomeCommand = new DelegateCommand(() => NavigatePage(0));
             NavigateLayersCommand = new DelegateCommand(() => NavigatePage(1));
@@ -1158,14 +1164,15 @@ namespace FeatureLink.ViewModels
             }
 
             var contacts = new List<ContactPickerWindow.ContactRow>();
-            foreach (var c in _contactService.AllContacts ?? Enumerable.Empty<Contact>())
-            {
-                if (c == null || string.IsNullOrEmpty(c.Uid)) continue;
-                contacts.Add(new ContactPickerWindow.ContactRow(c.Name ?? c.Uid, c.Uid));
-            }
+            foreach (var row in ContactRows())
+                contacts.Add(new ContactPickerWindow.ContactRow(row.Item2, row.Item1));
+
             if (contacts.Count == 0)
             {
-                SetStatus("No contacts available to share with.");
+                SetStatus(_unreachableContactCount > 0
+                    ? $"No contacts can be reached right now ({_unreachableContactCount} known but "
+                      + "with no route). Check the server connection."
+                    : "No contacts available to share with.");
                 return;
             }
 
@@ -1277,11 +1284,8 @@ namespace FeatureLink.ViewModels
                 .ToList();
 
             var contactRows = new List<DataPackageWindow.SelectableRow>();
-            foreach (var c in _contactService?.AllContacts ?? Enumerable.Empty<Contact>())
-            {
-                if (c == null || string.IsNullOrEmpty(c.Uid)) continue;
-                contactRows.Add(new DataPackageWindow.SelectableRow(c.Uid, c.Name ?? c.Uid));
-            }
+            foreach (var row in ContactRows())
+                contactRows.Add(new DataPackageWindow.SelectableRow(row.Item1, row.Item2));
 
             var dialog = new DataPackageWindow(layerRows, contactRows,
                 urls => DataPackageBuilder.Describe(PlanFor(urls)));
@@ -1362,6 +1366,9 @@ namespace FeatureLink.ViewModels
         /// whole dependency set is delegates onto this pane.</summary>
         public DataPackageWorkflow Package { get; }
 
+        /// <summary>The "Built packages" listing on the PACKAGES tab.</summary>
+        public PackageLibraryViewModel PackageLibrary { get; }
+
         private readonly MapAreaSelector _mapSelector;
 
         private DataPackageWorkflow CreatePackageWorkflow()
@@ -1379,19 +1386,188 @@ namespace FeatureLink.ViewModels
             return new DataPackageWorkflow(host, _mapSelector);
         }
 
+        private PackageLibraryViewModel CreatePackageLibrary()
+        {
+            return new PackageLibraryViewModel(new PackageLibraryViewModel.Host
+            {
+                PackagesFolder = () => MissionPackageRegistrar.PackagesFolder,
+                Send = SendExistingPackage,
+                Reveal = RevealPackage,
+                Delete = DeletePackage,
+                SetStatus = SetStatus,
+            });
+        }
+
+        /// <summary>Sends a package that already exists, without rebuilding it — the reason to keep
+        /// a list of them at all.</summary>
+        private void SendExistingPackage(Services.PackageLibrary.BuiltPackage package)
+        {
+            if (package == null) return;
+
+            if (!File.Exists(package.Path))
+            {
+                SetStatus($"\"{package.Name}\" is no longer on disk.");
+                PackageLibrary.Refresh();
+                return;
+            }
+
+            var contacts = new List<DataPackageWindow.SelectableRow>();
+            foreach (var row in ContactRows())
+                contacts.Add(new DataPackageWindow.SelectableRow(row.Item1, row.Item2));
+
+            if (contacts.Count == 0)
+            {
+                SetStatus(_unreachableContactCount > 0
+                    ? $"No contacts can be reached right now ({_unreachableContactCount} known but "
+                      + "with no route). Check the server connection."
+                    : "No contacts are available to send that package to.");
+                return;
+            }
+
+            var dialog = new ContactMultiPickerWindow(
+                package.Name, contacts, _unreachableContactCount);
+            var owner = Application.Current?.MainWindow;
+            if (owner != null) dialog.Owner = owner;
+
+            if (dialog.ShowDialog() != true) return;
+
+            var picked = dialog.SelectedUids;
+            if (picked.Count == 0) return;
+
+            try
+            {
+                _communicationService.SendMissionPackage(
+                    picked, new FileInfo(package.Path), package.Name, false);
+
+                string who = picked.Count == 1 ? "1 contact" : picked.Count + " contacts";
+                SetStatus($"Sent \"{package.Name}\" to {who}.");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not send an existing data package.", ex);
+                SetStatus("Could not send that package: " + Describe(ex));
+            }
+        }
+
+        private void RevealPackage(Services.PackageLibrary.BuiltPackage package)
+        {
+            if (package == null || string.IsNullOrEmpty(package.Path)) return;
+
+            if (!File.Exists(package.Path))
+            {
+                SetStatus($"\"{package.Name}\" is no longer on disk.");
+                PackageLibrary.Refresh();
+                return;
+            }
+
+            try
+            {
+                // /select opens Explorer with the file highlighted rather than just the folder.
+                System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + package.Path + "\"");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not open Explorer: " + ex.Message);
+                SetStatus("Could not open that folder: " + Describe(ex));
+            }
+        }
+
+        private bool DeletePackage(Services.PackageLibrary.BuiltPackage package)
+        {
+            if (package == null) return false;
+
+            // Deleting removes the file AND the only record of what went into it, so it is
+            // confirmed rather than instant.
+            bool confirmed = DialogService.Confirm(
+                $"Delete the data package \"{package.Name}\"?\n\n{package.Contents}\n{package.Path}"
+                + "\n\nThis cannot be undone.",
+                "Delete data package");
+            if (!confirmed) return false;
+
+            try
+            {
+                if (File.Exists(package.Path)) File.Delete(package.Path);
+                SetStatus($"Deleted \"{package.Name}\".");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Could not delete the data package \"{package.Name}\".", ex);
+                SetStatus("Could not delete that package: " + Describe(ex));
+                return false;
+            }
+        }
+
         /// <summary>Metres per pixel used when centring on a single reviewed feature — close
         /// enough to see it in context without guessing at a layer-wide extent.</summary>
         private const double DefaultFeatureResolution = 20.0;
 
+        /// <summary>How many contacts were left out of the last <see cref="ContactRows"/> call for
+        /// having no route. Reported to the operator so a missing name is explained.</summary>
+        private int _unreachableContactCount;
+
+        /// <summary>
+        /// Contacts that can actually receive a package.
+        ///
+        /// <para>This used to list <c>AllContacts</c>, which is every contact the client has ever
+        /// seen — including ones long gone. Offering those produced a send that failed with
+        /// <c>CommoIllegalArgument</c> and a bare "Failed to send Data Package", because Commo
+        /// refuses the whole transfer when it cannot find a usable endpoint for ANY of the
+        /// destinations: <c>MP Send init failed to find usable endpoints for any of the given
+        /// destination contacts</c>. One stale contact in the selection was enough.</para>
+        ///
+        /// <para>Two filters, both needed. <c>Contacts</c> rather than <c>AllContacts</c> is the
+        /// host's own live set. <c>CurrentConnector</c> is then the literal expression of the thing
+        /// Commo was looking for — a contact with no connector has no endpoint to send to, whatever
+        /// its presence says.</para>
+        /// </summary>
         private IReadOnlyList<Tuple<string, string>> ContactRows()
         {
             var rows = new List<Tuple<string, string>>();
-            foreach (var c in _contactService?.AllContacts ?? Enumerable.Empty<Contact>())
+            int unreachable = 0;
+
+            var candidates = _contactService?.Contacts
+                ?? _contactService?.AllContacts
+                ?? Enumerable.Empty<Contact>();
+
+            foreach (var c in candidates)
             {
                 if (c == null || string.IsNullOrEmpty(c.Uid)) continue;
+
+                if (!CanReceive(c)) { unreachable++; continue; }
                 rows.Add(Tuple.Create(c.Uid, c.Name ?? c.Uid));
             }
+
+            _unreachableContactCount = unreachable;
+            if (unreachable > 0)
+                Log.Info($"{unreachable} contact(s) omitted from the send list: no usable endpoint.");
+
             return rows;
+        }
+
+        /// <summary>Whether a package can be sent to this contact at all.</summary>
+        private static bool CanReceive(Contact contact)
+        {
+            if (contact == null) return false;
+
+            try
+            {
+                // Gone and Offline are exactly the states with no route.
+                if (contact.PresenceLevel == ContactStatus.Gone
+                    || contact.PresenceLevel == ContactStatus.Offline) return false;
+
+                // The endpoint itself. Checked last and treated as decisive: presence describes
+                // whether we have heard from them, this describes whether we can reach them.
+                if (contact.CurrentConnector != null) return true;
+                return contact.Connectors != null && contact.Connectors.Count > 0;
+            }
+            catch (Exception ex)
+            {
+                // A contact mid-teardown can throw from these. Excluding it is the safe answer:
+                // including it risks failing the whole multi-recipient transfer.
+                Log.Info("Treating a contact as unreachable after an error reading it: " + ex.Message);
+                return false;
+            }
         }
 
         /// <summary>
@@ -1486,6 +1662,10 @@ namespace FeatureLink.ViewModels
 
             bool listed = MissionPackageRegistrar.Register(
                 MissionPackageService, written.Path, packageName, written.Uid, SelfCallsign());
+
+            // The new package should appear in the tab's own listing immediately, not on the next
+            // manual refresh.
+            RunOnUi(() => PackageLibrary.Refresh());
 
             if (!send)
             {

@@ -43,6 +43,12 @@ namespace FeatureLink.Tests
         private static string WorkflowSource =>
             File.ReadAllText(RepoLocator.Path0("WinTAK5.6", "ViewModels", "DataPackageWorkflow.cs"));
 
+        /// <summary>The "Built packages" half of the PACKAGES tab sets its DataContext to the dock
+        /// pane's <c>PackageLibrary</c>. Parsed for the same reason as the workflow: a page this
+        /// size is where a typo'd binding hides.</summary>
+        private static string LibrarySource =>
+            File.ReadAllText(RepoLocator.Path0("WinTAK5.6", "ViewModels", "PackageLibraryViewModel.cs"));
+
         private static string XamlSource =>
             File.ReadAllText(RepoLocator.Path0("WinTAK5.6", "Views", "FeatureLinkView.xaml"));
 
@@ -70,6 +76,7 @@ namespace FeatureLink.Tests
         {
             var all = PublicPropertiesIn(ViewModelSource);
             all.AddRange(PublicPropertiesIn(WorkflowSource));
+            all.AddRange(PublicPropertiesIn(LibrarySource));
             return all;
         }
 
@@ -160,8 +167,10 @@ namespace FeatureLink.Tests
                 "RecurrenceInterval", "RecurrenceUnit", "IsPliLayer", "Visible", "EyeIconSource",
                 // RecentCotItem
                 "Uid", "Callsign", "CotType", "LastSeen", "LastSeenLabel",
-                // SelectableFeature and ContactChoice rows in the PACKAGE tab
+                // SelectableFeature and ContactChoice rows in the PACKAGES tab
                 "DisplayName", "LayerName", "IsSelected",
+                // PackageLibrary.BuiltPackage rows in the "Built packages" list
+                "Contents", "Detail", "Path",
                 // WPF/BCL intrinsics reached via RelativeSource, PlacementTarget or a collection
                 "DataContext", "PlacementTarget", "IsChecked", "SelectedItem", "Count",
             };

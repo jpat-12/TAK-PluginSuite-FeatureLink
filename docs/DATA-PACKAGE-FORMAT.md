@@ -1,6 +1,6 @@
 # FeatureLink Data Packages
 
-**Status:** implemented in WinTAK 5.6 as of 2.12.1. Not yet implemented in ATAK, CloudTAK or
+**Status:** implemented in WinTAK 5.6 as of 2.13.0. Not yet implemented in ATAK, CloudTAK or
 TAK Portal — this document is the contract those ports should follow.
 
 ---
@@ -59,6 +59,25 @@ FeatureLink-Ground_Teams-20260920-1234.zip
   `IconsetInstaller` wrote them to `%AppData%\WinTAK\FeatureLink\iconsets\`. An iconset referenced
   by two selected layers is included once.
 
+## Who a package can be sent to
+
+Only contacts with a **usable endpoint** are offered. The list comes from
+`IContactService.Contacts` (the host's live set) filtered to those with a `CurrentConnector`, and
+excludes `Gone`/`Offline` presence.
+
+This was a bug, and its symptom was opaque. The list used to come from `AllContacts` — every
+contact the client has *ever* seen, including long-departed ones — and Commo refuses the **whole**
+transfer when it cannot find an endpoint for **any** destination:
+
+```
+MP Send init failed to find usable endpoints for any of the given destination contacts
+Failed to send Data Package: CommoIllegalArgument
+```
+
+One stale contact in the selection was enough to fail the send, and the operator saw only "Failed
+to send Data Package". Contacts hidden for having no route are counted and reported, so a missing
+familiar name is explained rather than mysterious.
+
 ## Marker identity, and why a package keeps working after a refresh
 
 A packaged `.cot` names each feature by its marker uid. If that uid changed when the layer was
@@ -98,6 +117,22 @@ rows are otherwise invisible until someone notices markers flashing on every ref
 on 2.12.1, so their markers are recreated once and packages built before the upgrade are stale for
 those layers. Layers with a `uid` or object id column — which is nearly all hosted ArcGIS content
 — are unaffected.
+
+## The Built packages listing
+
+The lower half of the PACKAGES tab lists what this plugin has created: name, contents
+("3 features from 1 layer, 2 iconsets"), size and time, with **Send**, **Show** and **Delete** per
+row. It refreshes when the tab is opened and whenever a package is written.
+
+It is read back **off disk** every refresh rather than accumulated as packages are built. Disk is
+the truth: a package deleted from WinTAK's own Data Packages list, moved, or left over from a
+previous run all have to produce the right answer, and a remembered list gets every one of those
+wrong. The cost is a directory listing plus a few kilobytes of manifest per file.
+
+**What counts as "ours"** is the `featurelink-pkg-` prefix on the manifest's package UID — not the
+file name, so a renamed package is still recognised. The rule is deliberately strict and tested,
+because the folder holds every other client's packages and each row offers a Delete button.
+Being generous here would offer to delete somebody else's package.
 
 ## Where packages are saved
 
@@ -162,6 +197,14 @@ Two values are load-bearing:
   markers for as long as the layer is on the recipient's map, so deleting the package would strip
   symbology from exactly the offline peer the package exists for.
 
+The declaration must say **utf-8**, and this is worth stating because it shipped wrong.
+`XDocument.Save(TextWriter)` takes the encoding it declares from the writer, and a plain
+`StringWriter` reports UTF-16 — so manifests went out saying `encoding="utf-16"` while the bytes
+were UTF-8. Parsing a *string* ignores the declaration, which is why a round-trip test passed over
+it; a recipient reads the manifest out of the zip as a *stream*, where the declaration is honoured
+and the mismatch is fatal. Packages built before 2.13.0 carry the wrong declaration and should be
+rebuilt.
+
 The **manifest lists only what was actually written**. If an iconset's source file could not be
 read, the entry is dropped from both the zip and the manifest, rather than telling a recipient to
 import something absent.
@@ -194,7 +237,7 @@ duplicates in the recipient's list; different contents produce a different UID.
 
 ## The selection workflow
 
-The **PACKAGE** tab (between LAYERS and PLI) runs a four-step workflow. It is also reachable from
+The **PACKAGES** tab (between LAYERS and PLI) has two halves: the four-step **create** workflow below, and a **Built packages** listing under it. It is also reachable from
 a button on each layer row — which pre-selects that layer's features — and from the package button
 beside the account icon in the header.
 

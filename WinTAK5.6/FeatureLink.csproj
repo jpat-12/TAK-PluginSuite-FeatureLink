@@ -153,6 +153,7 @@
     <Compile Include="Services\FeatureSelection.cs" />
     <Compile Include="Services\MapAreaSelector.cs" />
     <Compile Include="Services\MissionPackageRegistrar.cs" />
+    <Compile Include="Services\PackageLibrary.cs" />
     <Compile Include="Services\DisplayStyleResolver.cs" />
     <Compile Include="Services\ErrorText.cs" />
     <Compile Include="Services\IconsetInstaller.cs" />
@@ -162,6 +163,7 @@
     <Compile Include="Services\SettingsStore.cs" />
     <Compile Include="Services\UrlGuard.cs" />
     <Compile Include="ViewModels\DataPackageWorkflow.cs" />
+    <Compile Include="ViewModels\PackageLibraryViewModel.cs" />
     <Compile Include="ViewModels\FeatureLinkDockPane.cs" />
     <Compile Include="Views\Converters.cs" />
     <Compile Include="Views\FeatureLinkView.xaml.cs">
@@ -172,6 +174,9 @@
     </Compile>
     <Compile Include="Views\DataPackageWindow.xaml.cs">
       <DependentUpon>DataPackageWindow.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Views\ContactMultiPickerWindow.xaml.cs">
+      <DependentUpon>ContactMultiPickerWindow.xaml</DependentUpon>
     </Compile>
   </ItemGroup>
 
@@ -185,6 +190,10 @@
       <SubType>Designer</SubType>
     </Page>
     <Page Include="Views\DataPackageWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\ContactMultiPickerWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
