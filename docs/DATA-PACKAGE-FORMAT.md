@@ -1,6 +1,6 @@
 # FeatureLink Data Packages
 
-**Status:** implemented in WinTAK 5.6 as of 2.11.0. Not yet implemented in ATAK, CloudTAK or
+**Status:** implemented in WinTAK 5.6 as of 2.11.1. Not yet implemented in ATAK, CloudTAK or
 TAK Portal — this document is the contract those ports should follow.
 
 ---
