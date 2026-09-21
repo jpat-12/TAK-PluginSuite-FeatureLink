@@ -163,7 +163,9 @@ namespace FeatureLink.Services
 
                         try
                         {
-                            if (entry.Kind == DataPackageBuilder.EntryKind.LayerConfig)
+                            // Configs and CoT are held in memory as text; only an iconset is a
+                            // file on disk that has to be copied.
+                            if (entry.Kind != DataPackageBuilder.EntryKind.Iconset)
                             {
                                 WriteText(archive, entry.PackagePath, entry.Content ?? string.Empty);
                             }

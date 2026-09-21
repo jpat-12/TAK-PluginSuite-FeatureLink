@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -35,6 +35,14 @@ namespace FeatureLink.Tests
         private static string ViewModelSource =>
             File.ReadAllText(RepoLocator.Path0("WinTAK5.6", "ViewModels", "FeatureLinkDockPane.cs"));
 
+        /// <summary>The PACKAGE tab sets its DataContext to the dock pane's <c>Package</c>
+        /// property, so its bindings resolve against this second view model. It is parsed with the
+        /// same rules rather than allowlisted: allowlisting ~40 member names would have switched
+        /// the guard off for the largest page in the panel, which is exactly the page most likely
+        /// to carry a typo'd binding.</summary>
+        private static string WorkflowSource =>
+            File.ReadAllText(RepoLocator.Path0("WinTAK5.6", "ViewModels", "DataPackageWorkflow.cs"));
+
         private static string XamlSource =>
             File.ReadAllText(RepoLocator.Path0("WinTAK5.6", "Views", "FeatureLinkView.xaml"));
 
@@ -54,8 +62,21 @@ namespace FeatureLink.Tests
 
         private static List<(string Type, string Name)> PublicProperties()
         {
+            return PublicPropertiesIn(ViewModelSource);
+        }
+
+        /// <summary>Public members of every view model the XAML binds against.</summary>
+        private static List<(string Type, string Name)> AllBindableProperties()
+        {
+            var all = PublicPropertiesIn(ViewModelSource);
+            all.AddRange(PublicPropertiesIn(WorkflowSource));
+            return all;
+        }
+
+        private static List<(string Type, string Name)> PublicPropertiesIn(string source)
+        {
             var list = new List<(string, string)>();
-            foreach (Match m in PublicProperty.Matches(ViewModelSource))
+            foreach (Match m in PublicProperty.Matches(source))
             {
                 string type = m.Groups["type"].Value.Trim();
                 string name = m.Groups["name"].Value;
@@ -139,11 +160,14 @@ namespace FeatureLink.Tests
                 "RecurrenceInterval", "RecurrenceUnit", "IsPliLayer", "Visible", "EyeIconSource",
                 // RecentCotItem
                 "Uid", "Callsign", "CotType", "LastSeen", "LastSeenLabel",
+                // SelectableFeature and ContactChoice rows in the PACKAGE tab
+                "DisplayName", "LayerName", "IsSelected",
                 // WPF/BCL intrinsics reached via RelativeSource, PlacementTarget or a collection
                 "DataContext", "PlacementTarget", "IsChecked", "SelectedItem", "Count",
             };
 
-            var vmMembers = new HashSet<string>(PublicProperties().Select(p => p.Name), StringComparer.Ordinal);
+            var vmMembers = new HashSet<string>(
+                AllBindableProperties().Select(p => p.Name), StringComparer.Ordinal);
             var unresolved = BoundPaths()
                 .Where(p => !vmMembers.Contains(p) && !itemMembers.Contains(p))
                 .OrderBy(n => n, StringComparer.Ordinal)

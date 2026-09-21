@@ -144,6 +144,8 @@
     <Compile Include="Services\DataPackageBuilder.cs" />
     <Compile Include="Services\DataPackageWriter.cs" />
     <Compile Include="Services\DialogService.cs" />
+    <Compile Include="Services\FeatureSelection.cs" />
+    <Compile Include="Services\MapAreaSelector.cs" />
     <Compile Include="Services\DisplayStyleResolver.cs" />
     <Compile Include="Services\ErrorText.cs" />
     <Compile Include="Services\IconsetInstaller.cs" />
@@ -152,6 +154,7 @@
     <Compile Include="Services\TokenBlobFormat.cs" />
     <Compile Include="Services\SettingsStore.cs" />
     <Compile Include="Services\UrlGuard.cs" />
+    <Compile Include="ViewModels\DataPackageWorkflow.cs" />
     <Compile Include="ViewModels\FeatureLinkDockPane.cs" />
     <Compile Include="Views\Converters.cs" />
     <Compile Include="Views\FeatureLinkView.xaml.cs">

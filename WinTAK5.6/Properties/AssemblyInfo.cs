@@ -24,9 +24,9 @@ using System.Windows;
 // to a release and every crash dump reported 1.0.0.0 forever.
 // The fourth field carries the WinTAK SDK minor (6 = 5.6.x) so a support engineer can tell the 5.6
 // and 5.7 builds apart from file properties alone — C-17.
-[assembly: AssemblyVersion("2.10.0.0")]
-[assembly: AssemblyFileVersion("2.10.0.0")]
-[assembly: AssemblyInformationalVersion("2.10.0+wintak5.6.0.151")]
+[assembly: AssemblyVersion("2.11.0.0")]
+[assembly: AssemblyFileVersion("2.11.0.0")]
+[assembly: AssemblyInformationalVersion("2.11.0+wintak5.6.0.151")]
 
 // ── WinTAK plugin identity attributes ────────────────────────────────────────
 // These are what WinTAK reads to validate and display the plugin.

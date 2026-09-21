@@ -286,6 +286,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
                         <!-- Hidden until the layer has plotted something. A browse-list row has
@@ -447,6 +448,19 @@
                             <Image Source="pack://application:,,,/FeatureLink;component/Assets/ic_share.png"
                                    Width="16" Height="16"/>
                         </Button>
+
+                        <!-- Data package: opens the PACKAGE tab with this layer's features
+                             already selected. Hidden until the layer has plotted something,
+                             like the eye above — there is nothing to package otherwise. -->
+                        <Button Grid.Column="3" VerticalAlignment="Top"
+                                Style="{StaticResource IconGlyphButton}"
+                                Command="{Binding DataContext.StartPackageWorkflowCommand,
+                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                CommandParameter="{Binding}"
+                                Visibility="{Binding CanToggleVisibility, Converter={StaticResource BoolToVis}}"
+                                ToolTip="Create a data package from this layer">
+                            <TextBlock Text="&#128230;" FontSize="13"/>
+                        </Button>
                     </Grid>
 
                     <!-- Row 2 -->
@@ -565,6 +579,7 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <Image Grid.Column="0" Width="28" Height="28" Margin="0,0,10,0"
                        Source="pack://application:,,,/FeatureLink;component/Assets/Small.png"
@@ -574,6 +589,7 @@
 
                 <Grid Grid.Column="2" Height="32">
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
@@ -602,7 +618,7 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <Button Grid.Column="2" Content="PLI" Command="{Binding NavigatePliCommand}" Margin="3,0,0,0">
+                    <Button Grid.Column="2" Content="PACKAGE" Command="{Binding NavigatePackageCommand}" Margin="3,0,3,0">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource TabBarButtonBase}">
                                 <Style.Triggers>
@@ -614,9 +630,29 @@
                             </Style>
                         </Button.Style>
                     </Button>
+                    <Button Grid.Column="3" Content="PLI" Command="{Binding NavigatePliCommand}" Margin="3,0,0,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource TabBarButtonBase}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentTabIndex}" Value="3">
+                                        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
                 </Grid>
 
+                <!-- Data package: sits beside the account icon because it acts on everything
+                     the plugin holds, not on whichever tab happens to be open. -->
                 <Button Grid.Column="3" Style="{StaticResource IconGlyphButton}"
+                        Command="{Binding StartPackageWorkflowCommand}"
+                        ToolTip="Create a data package" Margin="8,0,0,0">
+                    <TextBlock Text="&#128230;" FontSize="14"/>
+                </Button>
+
+                <Button Grid.Column="4" Style="{StaticResource IconGlyphButton}"
                         Command="{Binding ShowAccountPageCommand}"
                         ToolTip="ArcGIS account" Margin="8,0,0,0">
                     <!-- Recolors the account icon by its alpha channel (Account.png is a solid
@@ -641,7 +677,7 @@
 
                 <!-- Gear menu: Click opens the ContextMenu below via code-behind (WPF only
                      opens a ContextMenu on right-click by default). -->
-                <Button Grid.Column="4" Style="{StaticResource IconGlyphButton}"
+                <Button Grid.Column="5" Style="{StaticResource IconGlyphButton}"
                         Click="GearButton_Click"
                         ToolTip="Settings" Margin="4,0,0,0">
                     <TextBlock Text="&#9881;" FontSize="16"/>
@@ -961,13 +997,268 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <!-- ── PLI (page_pli.xml) ──────────────────────────────────────── -->
+                <!-- ── PACKAGE ─────────────────────────────────────────────────────
+                     A four-step workflow: name it, pick the points, review them, send.
+                     The steps are separate cards rather than a wizard dialog so the map stays
+                     visible and clickable throughout — selecting features on the map is the
+                     whole point, and a modal window over it would defeat that. -->
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <ScrollViewer.Style>
                         <Style TargetType="ScrollViewer">
                             <Setter Property="Visibility" Value="Collapsed"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding CurrentTabIndex}" Value="2">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ScrollViewer.Style>
+                    <StackPanel Margin="12" DataContext="{Binding Package}">
+
+                        <TextBlock Text="{Binding StepTitle}" Style="{StaticResource SectionHeaderText}"
+                                   Margin="0,0,0,10"/>
+
+                        <!-- Idle: nothing started yet -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12"
+                                Visibility="{Binding IsIdle, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource BodyText}" TextWrapping="Wrap"
+                                           Margin="0,0,0,10"
+                                           Text="Bundle individual features from your downloaded layers into a TAK data package — with the icons this machine generated for them — and send it to contacts."/>
+                                <Button Content="Start a data package" Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding StartCommand}" MinHeight="42"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Step 1: name -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12"
+                                Visibility="{Binding IsNaming, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <TextBlock Text="Package name" Style="{StaticResource SectionHeaderText}"
+                                           Margin="0,0,0,6"/>
+                                <TextBox Style="{StaticResource FlInput}"
+                                         Text="{Binding PackageName, UpdateSourceTrigger=PropertyChanged}"/>
+                                <TextBlock Style="{StaticResource BodyText}" TextWrapping="Wrap"
+                                           Margin="0,6,0,0" Opacity="0.75"
+                                           Text="Named automatically from what you select and the current time. Edit it and it stays as you typed it."/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Step 2: select -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12"
+                                Visibility="{Binding IsSelecting, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <TextBlock Text="Pick features on the map"
+                                           Style="{StaticResource SectionHeaderText}" Margin="0,0,0,8"/>
+
+                                <UniformGrid Columns="3" Margin="0,0,0,8">
+                                    <Button Content="Click points" Command="{Binding SelectPointsCommand}"
+                                            MinHeight="38" Margin="0,0,4,0"
+                                            ToolTip="Click features on the map to add or remove them">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsPickingPoints}" Value="True">
+                                                        <Setter Property="Background" Value="{StaticResource Success}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
+                                    <Button Content="Draw area" Command="{Binding SelectBoxCommand}"
+                                            MinHeight="38" Margin="2,0,2,0"
+                                            ToolTip="Drag a rectangle; everything inside is added">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDrawingBox}" Value="True">
+                                                        <Setter Property="Background" Value="{StaticResource Success}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
+                                    <Button Content="Draw radius" Command="{Binding SelectRadiusCommand}"
+                                            MinHeight="38" Margin="4,0,0,0"
+                                            ToolTip="Drag out from a centre point; everything inside the radius is added">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDrawingRadius}" Value="True">
+                                                        <Setter Property="Background" Value="{StaticResource Success}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
+                                </UniformGrid>
+
+                                <TextBlock Text="{Binding ModeHint}" Style="{StaticResource BodyText}"
+                                           TextWrapping="Wrap" Margin="0,0,0,8" Opacity="0.85"/>
+
+                                <Button Content="Stop selecting" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding StopSelectingCommand}" MinHeight="32" Margin="0,0,0,10"
+                                        Visibility="{Binding IsMapModeActive, Converter={StaticResource BoolToVis}}"/>
+
+                                <TextBlock Text="Or add a whole layer" Style="{StaticResource SectionHeaderText}"
+                                           Margin="0,4,0,6"/>
+                                <ItemsControl ItemsSource="{Binding AvailableLayers}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Content="{Binding Name}"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    MinHeight="30" Margin="0,0,0,4"
+                                                    HorizontalContentAlignment="Left"
+                                                    Command="{Binding DataContext.SelectAllInLayerCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="{Binding SelectionSummary}" Style="{StaticResource BodyText}"
+                                           TextWrapping="Wrap" Margin="0,8,0,0" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Step 3: review -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12"
+                                Visibility="{Binding IsReviewing, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding SelectionSummary}"
+                                               Style="{StaticResource SectionHeaderText}"
+                                               VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                    <Button Grid.Column="1" Content="Clear" Style="{StaticResource SmallButton}"
+                                            Command="{Binding ClearSelectionCommand}"/>
+                                </Grid>
+
+                                <Border Background="{StaticResource BgRoot}" CornerRadius="4" Padding="2">
+                                    <ItemsControl ItemsSource="{Binding SelectedFeatures}" MaxHeight="280">
+                                        <ItemsControl.Template>
+                                            <ControlTemplate TargetType="ItemsControl">
+                                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                              CanContentScroll="True">
+                                                    <ItemsPresenter/>
+                                                </ScrollViewer>
+                                            </ControlTemplate>
+                                        </ItemsControl.Template>
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <VirtualizingStackPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="4,3">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0">
+                                                        <TextBlock Text="{Binding DisplayName}"
+                                                                   Foreground="{StaticResource TextPrimary}"
+                                                                   TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Foreground="{StaticResource TextMuted}"
+                                                                   FontSize="10" TextTrimming="CharacterEllipsis">
+                                                            <Run Text="{Binding LayerName, Mode=OneWay}"/>
+                                                            <Run Text=" · "/>
+                                                            <Run Text="{Binding PositionText, Mode=OneWay}"/>
+                                                        </TextBlock>
+                                                    </StackPanel>
+                                                    <Button Grid.Column="1" Content="Find"
+                                                            Style="{StaticResource SmallButton}" Margin="0,0,4,0"
+                                                            ToolTip="Centre the map on this feature"
+                                                            Command="{Binding DataContext.LocateFeatureCommand,
+                                                                      RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <Button Grid.Column="2" Content="Remove"
+                                                            Style="{StaticResource SmallButton}"
+                                                            Command="{Binding DataContext.RemoveFeatureCommand,
+                                                                      RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Border>
+
+                                <TextBlock Style="{StaticResource BodyText}" TextWrapping="Wrap"
+                                           Margin="0,8,0,0" Opacity="0.75"
+                                           Text="Back goes to the selection step with everything here still selected, so drawing again only adds."/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Step 4: contacts -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12"
+                                Visibility="{Binding IsSending, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <TextBlock Text="Send to" Style="{StaticResource SectionHeaderText}"
+                                           Margin="0,0,0,8"/>
+
+                                <TextBlock Style="{StaticResource BodyText}" TextWrapping="Wrap"
+                                           Margin="0,0,0,8"
+                                           Visibility="{Binding HasContacts, Converter={StaticResource InverseBoolToVis}}"
+                                           Text="No contacts are reachable. You can still save the package to a file."/>
+
+                                <ItemsControl ItemsSource="{Binding Contacts}" MaxHeight="220">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}"
+                                                      IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Foreground="{StaticResource TextPrimary}"
+                                                      Margin="2,4"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="{Binding SelectionSummary}" Style="{StaticResource BodyText}"
+                                           TextWrapping="Wrap" Margin="0,10,0,0" FontWeight="Bold"/>
+
+                                <Button Content="Send package" Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding SendCommand}" MinHeight="42" Margin="0,10,0,6"
+                                        IsEnabled="{Binding CanSend}"/>
+                                <Button Content="Save to file instead" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding SaveCommand}" MinHeight="34"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Wizard navigation -->
+                        <Grid Margin="0,0,0,12"
+                              Visibility="{Binding IsIdle, Converter={StaticResource InverseBoolToVis}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Content="Cancel" Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding CancelCommand}" MinWidth="88" MinHeight="34"/>
+                            <Button Grid.Column="2" Content="{Binding NextLabel}"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding NextCommand}" MinWidth="110" MinHeight="34"
+                                    IsEnabled="{Binding CanGoNext}"
+                                    Visibility="{Binding IsSending, Converter={StaticResource InverseBoolToVis}}"/>
+                        </Grid>
+
+                        <Button Content="Back" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding BackCommand}" MinHeight="32" Margin="0,0,0,12"
+                                Visibility="{Binding CanGoBack, Converter={StaticResource BoolToVis}}"/>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- ── PLI (page_pli.xml) ──────────────────────────────────────── -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer.Style>
+                        <Style TargetType="ScrollViewer">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTabIndex}" Value="3">
                                     <Setter Property="Visibility" Value="Visible"/>
                                 </DataTrigger>
                             </Style.Triggers>

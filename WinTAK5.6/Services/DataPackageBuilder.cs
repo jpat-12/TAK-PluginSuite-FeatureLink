@@ -41,6 +41,9 @@ namespace FeatureLink.Services
         /// <summary>Folder inside the package holding the generated iconset zips.</summary>
         public const string IconsetFolder = "iconsets";
 
+        /// <summary>Folder inside the package holding individually selected features, as CoT.</summary>
+        public const string FeatureFolder = "cot";
+
         /// <summary>A section-4 iconset UID: the full SHA-256 digest, lower-case hex.</summary>
         private static readonly Regex IconsetUid = new Regex("^[0-9a-f]{64}$", RegexOptions.Compiled);
 
@@ -167,6 +170,9 @@ namespace FeatureLink.Services
 
             /// <summary>A generated iconset zip.</summary>
             Iconset,
+
+            /// <summary>One selected feature, as a CoT event.</summary>
+            Feature,
         }
 
         /// <summary>One file destined for the package.</summary>
@@ -216,6 +222,27 @@ namespace FeatureLink.Services
             /// <summary>Iconset UIDs recorded against the layer when they were installed. The
             /// authoritative source, because it survives a restart.</summary>
             public IEnumerable<string> IconsetUids { get; set; }
+
+            /// <summary>
+            /// The individually selected features from this layer, as ready-made CoT XML.
+            ///
+            /// <para>Null or empty means "the whole layer": the package carries only the config
+            /// and the recipient downloads the features from ArcGIS themselves. When features are
+            /// listed here the package carries the points <b>themselves</b>, which is the only way
+            /// a subset can travel — a layer config names a service, and a service cannot express
+            /// "these nineteen of its markers".</para>
+            /// </summary>
+            public IEnumerable<FeatureContent> Features { get; set; }
+        }
+
+        /// <summary>One selected feature bound for the package.</summary>
+        public sealed class FeatureContent
+        {
+            /// <summary>The feature's CoT UID, which is also its file name.</summary>
+            public string Uid { get; set; }
+
+            /// <summary>The serialized CoT event.</summary>
+            public string CotXml { get; set; }
         }
 
         /// <summary>The planned package, plus what could not be included.</summary>
@@ -230,6 +257,7 @@ namespace FeatureLink.Services
 
             public int LayerCount { get { return Entries.Count(e => e.Kind == EntryKind.LayerConfig); } }
             public int IconsetCount { get { return Entries.Count(e => e.Kind == EntryKind.Iconset); } }
+            public int FeatureCount { get { return Entries.Count(e => e.Kind == EntryKind.Feature); } }
         }
 
         /// <summary>Plans a package for the selected layers.</summary>
@@ -266,6 +294,25 @@ namespace FeatureLink.Services
                     Kind = EntryKind.LayerConfig,
                     Content = layer.ConfigJson,
                 });
+
+                foreach (var feature in layer.Features ?? Enumerable.Empty<FeatureContent>())
+                {
+                    if (feature == null) continue;
+                    if (string.IsNullOrEmpty(feature.Uid) || string.IsNullOrWhiteSpace(feature.CotXml))
+                        continue;
+
+                    // The same feature selected twice (two layers serving one source) travels once.
+                    string entryPath = FeatureFolder + "/" + Sanitize(feature.Uid, 96) + ".cot";
+                    if (!usedNames.Add(entryPath)) continue;
+
+                    plan.Entries.Add(new PlannedEntry
+                    {
+                        PackagePath = entryPath,
+                        Uid = feature.Uid,
+                        Kind = EntryKind.Feature,
+                        Content = feature.CotXml,
+                    });
+                }
 
                 var referenced = ExtractIconsetUids(layer.DisplayConfigJson);
                 foreach (string recorded in layer.IconsetUids ?? Enumerable.Empty<string>())
@@ -306,7 +353,11 @@ namespace FeatureLink.Services
             string icons = plan.IconsetCount == 0
                 ? "no iconsets"
                 : plan.IconsetCount == 1 ? "1 iconset" : plan.IconsetCount + " iconsets";
-            string text = layers + ", " + icons;
+
+            string text = plan.FeatureCount > 0
+                ? (plan.FeatureCount == 1 ? "1 feature" : plan.FeatureCount + " features")
+                  + " from " + layers + ", " + icons
+                : layers + ", " + icons;
 
             if (plan.MissingIconsets.Count > 0)
                 text += " (" + plan.MissingIconsets.Count + " not generated yet)";

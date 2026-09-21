@@ -101,6 +101,19 @@ namespace FeatureLink.Models
         /// would cost more than it gives.</summary>
         public const int MaxListedFeatures = 500;
 
+        /// <summary>
+        /// Every feature this layer plotted, uncapped — the pool a data-package selection draws on.
+        ///
+        /// <para>Separate from <see cref="Features"/>, which is capped at
+        /// <see cref="MaxListedFeatures"/> because it is realized into a scrolling panel. This one
+        /// is never bound to the UI, so the cap would buy nothing and would cost correctness: an
+        /// operator dragging a box round the south end of an 8,000-feature layer must select what
+        /// is inside it, not whichever of the first 500 happen to fall there. Not persisted, for
+        /// the same reasons as <see cref="Features"/>.</para>
+        /// </summary>
+        public System.Collections.Generic.List<LayerFeature> AllFeatures { get; set; }
+            = new System.Collections.Generic.List<LayerFeature>();
+
         public bool HasFeatures => _features != null && _features.Count > 0;
 
         /// <summary>Call after rebuilding <see cref="Features"/> in place. The collection instance

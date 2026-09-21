@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -287,6 +287,103 @@ namespace FeatureLink.Tests
 
             Assert.Equal(expected, DataPackageBuilder.Describe(
                 DataPackageBuilder.Plan(inputs, uid => true)));
+        }
+
+        // ── selected features ───────────────────────────────────────────────────
+
+        private static DataPackageBuilder.LayerPlanInput LayerWithFeatures(
+            string name, string url, params string[] uids)
+        {
+            var layer = Layer(name, url);
+            layer.Features = uids.Select(u => new DataPackageBuilder.FeatureContent
+            {
+                Uid = u,
+                CotXml = "<event uid=\"" + u + "\"/>",
+            }).ToList();
+            return layer;
+        }
+
+        [Fact]
+        public void Selected_features_travel_as_cot_alongside_the_layer_config()
+        {
+            var plan = DataPackageBuilder.Plan(
+                new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1", "f2") },
+                uid => false);
+
+            Assert.Equal(1, plan.LayerCount);
+            Assert.Equal(2, plan.FeatureCount);
+            Assert.All(plan.Entries.Where(e => e.Kind == DataPackageBuilder.EntryKind.Feature),
+                e => Assert.StartsWith("cot/", e.PackagePath));
+            Assert.All(plan.Entries.Where(e => e.Kind == DataPackageBuilder.EntryKind.Feature),
+                e => Assert.EndsWith(".cot", e.PackagePath));
+        }
+
+        /// <summary>A layer with no listed features means "the whole layer" — the recipient
+        /// downloads it from ArcGIS, which is the original share behaviour.</summary>
+        [Fact]
+        public void A_layer_with_no_listed_features_carries_only_its_config()
+        {
+            var plan = DataPackageBuilder.Plan(
+                new[] { Layer("Teams", "https://h/a/FeatureServer/0") }, uid => false);
+
+            Assert.Equal(1, plan.LayerCount);
+            Assert.Equal(0, plan.FeatureCount);
+        }
+
+        [Fact]
+        public void A_feature_with_no_cot_is_left_out_rather_than_packaged_empty()
+        {
+            var layer = Layer("Teams", "https://h/a/FeatureServer/0");
+            layer.Features = new[]
+            {
+                new DataPackageBuilder.FeatureContent { Uid = "good", CotXml = "<event/>" },
+                new DataPackageBuilder.FeatureContent { Uid = "blank", CotXml = "   " },
+                new DataPackageBuilder.FeatureContent { Uid = null, CotXml = "<event/>" },
+            };
+
+            var plan = DataPackageBuilder.Plan(new[] { layer }, uid => false);
+
+            Assert.Equal(1, plan.FeatureCount);
+        }
+
+        /// <summary>The same feature reached through two layers travels once — a duplicate zip
+        /// entry would mean one silently overwriting the other.</summary>
+        [Fact]
+        public void The_same_feature_selected_from_two_layers_travels_once()
+        {
+            var plan = DataPackageBuilder.Plan(
+                new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "shared"),
+                        LayerWithFeatures("ICP", "https://h/b/FeatureServer/0", "shared") },
+                uid => false);
+
+            Assert.Equal(2, plan.LayerCount);
+            Assert.Equal(1, plan.FeatureCount);
+        }
+
+        [Fact]
+        public void Describe_leads_with_the_feature_count_when_features_were_selected()
+        {
+            var plan = DataPackageBuilder.Plan(
+                new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1", "f2") },
+                uid => false);
+
+            Assert.Equal("2 features from 1 layer, no iconsets", DataPackageBuilder.Describe(plan));
+        }
+
+        [Fact]
+        public void A_packaged_feature_is_written_into_the_zip_as_its_cot()
+        {
+            using (var dir = new TempDir())
+            {
+                var plan = DataPackageBuilder.Plan(
+                    new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1") },
+                    uid => false);
+
+                var result = DataPackageWriter.Write(plan, "Pkg", Path.Combine(dir.Path, "out.zip"));
+                var entries = ReadZip(result.Path);
+
+                Assert.Equal("<event uid=\"f1\"/>", entries["cot/f1.cot"]);
+            }
         }
 
         // ── manifest ────────────────────────────────────────────────────────────

@@ -110,7 +110,19 @@ namespace FeatureLink.ViewModels
         /// disproportionate failure. Null simply means the affordance does nothing, and says so
         /// in the log.</para></summary>
         [Import(AllowDefault = true)]
-        public WinTak.Display.IMapViewController MapViewController { get; set; }
+        public WinTak.Display.IMapViewController MapViewController
+        {
+            get { return _mapViewController; }
+            set
+            {
+                _mapViewController = value;
+                // The concrete MapViewControl also implements TAKEngine.Core.RenderContext, which
+                // is IconsetInstaller's only route onto the render thread. Handed over here
+                // because MEF sets this after construction, so the installer cannot ask for it.
+                IconsetInstaller.RenderHost = value;
+            }
+        }
+        private WinTak.Display.IMapViewController _mapViewController;
 
         private readonly ArcGisAuthService _authService = new ArcGisAuthService();
         private readonly ArcGisFeatureService _restClient = new ArcGisFeatureService();
@@ -165,11 +177,12 @@ namespace FeatureLink.ViewModels
 
         public ICommand NavigateHomeCommand { get; }
         public ICommand NavigateLayersCommand { get; }
+        public ICommand NavigatePackageCommand { get; }
         public ICommand NavigatePliCommand { get; }
 
         private void NavigatePage(int page)
         {
-            if (page < 0 || page > 2) return;
+            if (page < 0 || page > 3) return;   // HOME, LAYERS, PACKAGE, PLI
             CurrentTabIndex = page;
         }
 
@@ -444,6 +457,10 @@ namespace FeatureLink.ViewModels
 
         /// <summary>Opens the data-package dialog: pick layers, pick contacts, send.</summary>
         public ICommand CreateDataPackageCommand { get; }
+
+        /// <summary>Opens the PACKAGE tab and begins the workflow. A non-null layer pre-selects
+        /// everything in it, which is what the per-layer button does.</summary>
+        public ICommand StartPackageWorkflowCommand { get; }
         public ICommand ToggleLayerVisibilityCommand { get; }
         public ICommand PliActionCommand { get; }
 
@@ -464,9 +481,14 @@ namespace FeatureLink.ViewModels
             _contactService = contactService;
             _dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
 
+            // Resolves MapViewController lazily: MEF sets that import after this constructor.
+            _mapSelector = new MapAreaSelector(() => MapViewController);
+            Package = CreatePackageWorkflow();
+
             NavigateHomeCommand = new DelegateCommand(() => NavigatePage(0));
             NavigateLayersCommand = new DelegateCommand(() => NavigatePage(1));
-            NavigatePliCommand = new DelegateCommand(() => NavigatePage(2));
+            NavigatePackageCommand = new DelegateCommand(() => NavigatePage(2));
+            NavigatePliCommand = new DelegateCommand(() => NavigatePage(3));
 
             ShowAccountPageCommand = new DelegateCommand(ShowAccountPage);
             ShowAddLayerPageCommand = new DelegateCommand(ShowAddLayerPage);
@@ -525,6 +547,9 @@ namespace FeatureLink.ViewModels
                 if (IsPliJoinMode) Guard(OnJoinPliLayer, "join PLI layer");
                 else RunGuarded(OnCreatePliLayerAsync(), "create PLI layer");
             });
+
+            StartPackageWorkflowCommand = new DelegateCommand<ArcGisLayer>(
+                layer => Guard(() => { NavigatePage(2); Package.Start(layer); }, "start data package"));
 
             LoadSettings();
             StartRecurrenceTimer();
@@ -1336,6 +1361,156 @@ namespace FeatureLink.ViewModels
             return save.ShowDialog() == true ? save.FileName : null;
         }
 
+        // -------------------------------------------------------------------------
+        // Data package workflow (select features on the map, then send)
+        // -------------------------------------------------------------------------
+
+        /// <summary>Drives the PACKAGE tab. Constructed here rather than injected because its
+        /// whole dependency set is delegates onto this pane.</summary>
+        public DataPackageWorkflow Package { get; }
+
+        private readonly MapAreaSelector _mapSelector;
+
+        private DataPackageWorkflow CreatePackageWorkflow()
+        {
+            var host = new DataPackageWorkflow.Host
+            {
+                PackageableLayers = () => PackageableLayers(),
+                Contacts = () => ContactRows(),
+                BuildFeatureCot = BuildFeatureCotXml,
+                BuildShareConfig = BuildShareConfigJson,
+                Deliver = DeliverPackage,
+                SetStatus = SetStatus,
+                LookAt = (lat, lon) => LookAt(lat, lon, DefaultFeatureResolution, "feature"),
+            };
+            return new DataPackageWorkflow(host, _mapSelector);
+        }
+
+        /// <summary>Metres per pixel used when centring on a single reviewed feature — close
+        /// enough to see it in context without guessing at a layer-wide extent.</summary>
+        private const double DefaultFeatureResolution = 20.0;
+
+        private IReadOnlyList<Tuple<string, string>> ContactRows()
+        {
+            var rows = new List<Tuple<string, string>>();
+            foreach (var c in _contactService?.AllContacts ?? Enumerable.Empty<Contact>())
+            {
+                if (c == null || string.IsNullOrEmpty(c.Uid)) continue;
+                rows.Add(Tuple.Create(c.Uid, c.Name ?? c.Uid));
+            }
+            return rows;
+        }
+
+        /// <summary>
+        /// Serializes one plotted feature to CoT XML for a package.
+        ///
+        /// <para>Rebuilt through <see cref="BuildFeatureCotEvent"/> — the same call the map is
+        /// drawn from — using the style captured when the feature was plotted. The recipient
+        /// therefore gets the marker the sender is looking at, not an approximation of it.</para>
+        /// </summary>
+        private string BuildFeatureCotXml(ArcGisLayer layer, LayerFeature feature)
+        {
+            if (layer == null || feature == null) return null;
+
+            try
+            {
+                var downloaded = new DownloadedFeature(
+                    uid: feature.Uid,
+                    cotType: feature.CotType,
+                    callsign: feature.Callsign,
+                    remarks: feature.Remarks,
+                    lat: feature.Lat,
+                    lon: feature.Lon,
+                    hae: feature.Hae,
+                    attributes: null);
+
+                Color? color = feature.ColorArgb.HasValue
+                    ? Color.FromArgb(feature.ColorArgb.Value)
+                    : (Color?)null;
+
+                bool iconApplied;
+                var cot = BuildFeatureCotEvent(
+                    downloaded,
+                    StalenessFor(layer),
+                    out iconApplied,
+                    feature.IconsetPath,
+                    color,
+                    feature.Label,
+                    feature.Remarks);
+
+                if (cot == null) return null;
+
+                var xml = cot.ToXml();
+                return xml?.OuterXml;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Could not build CoT for feature {feature.Uid}: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Writes the planned package and either sends it or saves it.
+        /// </summary>
+        /// <returns>A status line for the operator. A send that succeeded starts with "Sent",
+        /// which is what tells the workflow it may close.</returns>
+        private string DeliverPackage(DataPackageBuilder.PackagePlan plan, string packageName,
+            IReadOnlyList<string> recipients, bool send)
+        {
+            if (plan == null || plan.Entries.Count == 0) return "Nothing to package.";
+
+            string destination = send
+                ? DataPackageWriter.StagedPath(packageName)
+                : AskWhereToSave(packageName);
+            if (string.IsNullOrEmpty(destination)) return null;   // the save dialog was cancelled
+
+            DataPackageWriter.WriteResult written;
+            try
+            {
+                written = DataPackageWriter.Write(plan, packageName, destination);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not build the data package.", ex);
+                return "Could not build the data package: " + Describe(ex);
+            }
+
+            string detail = DataPackageBuilder.Describe(plan);
+            if (written.Skipped.Count > 0)
+                detail += $"; {written.Skipped.Count} file(s) could not be read and were left out";
+
+            if (!send) return $"Saved \"{packageName}\" ({detail}) to {written.Path}.";
+
+            try
+            {
+                _communicationService.SendMissionPackage(
+                    recipients.ToList(), new FileInfo(written.Path), packageName, false);
+
+                TryDeleteLater(written.Path);
+                string who = recipients.Count == 1 ? "1 contact" : recipients.Count + " contacts";
+                return $"Sent \"{packageName}\" ({detail}) to {who}.";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not send the data package.", ex);
+                TryDelete(written.Path);
+                return "Could not send the data package: " + Describe(ex);
+            }
+        }
+
+        /// <summary>The staleness a layer's markers were plotted with, so a packaged CoT carries
+        /// the same lifetime as the marker it was built from. Same expression as the download
+        /// path — a package whose markers expired on a different schedule to the sender's would
+        /// be a confusing thing to receive.</summary>
+        private static TimeSpan StalenessFor(ArcGisLayer layer)
+        {
+            if (layer == null) return DefaultFeatureStaleness;
+            return layer.RecurrenceTimeSpan() > TimeSpan.Zero
+                ? TimeSpan.FromTicks(layer.RecurrenceTimeSpan().Ticks * StaleIntervalMultiplier)
+                : DefaultFeatureStaleness;
+        }
+
         private static void TryDeleteLater(string path)
         {
             if (string.IsNullOrEmpty(path)) return;
@@ -1654,6 +1829,12 @@ namespace FeatureLink.ViewModels
                 var uids = new List<string>(download.Features.Count);
                 int shapeStyled = 0;
                 var tally = new PostTally();
+
+                // Resolved style per feature, captured as it is applied, so a data package can
+                // rebuild exactly the CoT the map was drawn from. See LayerFeature's remarks for
+                // why this is retained instead of the raw attributes.
+                var styleByUid = new Dictionary<string, PlottedStyle>(
+                    download.Features.Count, StringComparer.Ordinal);
                 foreach (var f in download.Features)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -1680,6 +1861,16 @@ namespace FeatureLink.ViewModels
                             if (!color.HasValue) color = shape.StrokeColor;
                         }
                     }
+
+                    styleByUid[f.Uid] = new PlottedStyle
+                    {
+                        Hae = f.Hae,
+                        CotType = f.CotType,
+                        IconsetPath = iconsetPath,
+                        ColorArgb = color.HasValue ? ToArgbSigned(color.Value) : (int?)null,
+                        Label = label,
+                        Remarks = remarks,
+                    };
 
                     await PostFeatureAsCotAsync(f, layer.Visible, staleness, iconsetPath, color, label,
                         remarks, tally).ConfigureAwait(false);
@@ -1728,20 +1919,42 @@ namespace FeatureLink.ViewModels
                 var extent = LayerExtent.FromPoints(
                     plotted.Select(f => Tuple.Create(f.Lat, f.Lon)));
 
-                var listed = plotted
-                    .Take(ArcGisLayer.MaxListedFeatures)
-                    .Select(f => new LayerFeature
+                Func<DownloadedFeature, LayerFeature> toLayerFeature = f =>
+                {
+                    var lf = new LayerFeature
                     {
                         Uid = f.Uid,
                         Callsign = f.Callsign,
                         Lat = f.Lat,
                         Lon = f.Lon,
-                    })
+                        Hae = f.Hae,
+                        CotType = f.CotType,
+                    };
+                    PlottedStyle style;
+                    if (styleByUid.TryGetValue(f.Uid ?? string.Empty, out style) && style != null)
+                    {
+                        lf.Hae = style.Hae;
+                        lf.CotType = style.CotType ?? lf.CotType;
+                        lf.IconsetPath = style.IconsetPath;
+                        lf.ColorArgb = style.ColorArgb;
+                        lf.Label = style.Label;
+                        lf.Remarks = style.Remarks;
+                    }
+                    return lf;
+                };
+
+                var listed = plotted
+                    .Take(ArcGisLayer.MaxListedFeatures)
+                    .Select(toLayerFeature)
                     .ToList();
+
+                // Uncapped pool for package selection; the bound list stays capped.
+                var selectable = plotted.Select(toLayerFeature).ToList();
 
                 RunOnUi(() =>
                 {
                     layer.Extent = extent;
+                    layer.AllFeatures = selectable;
                     layer.Features.Clear();
                     foreach (var f in listed) layer.Features.Add(f);
                     layer.RaiseFeaturesChanged();
@@ -2188,6 +2401,18 @@ namespace FeatureLink.ViewModels
         /// engineer than a single line saying how many. Counted here, reported once by
         /// <see cref="DownloadLayerAsync"/>.
         /// </summary>
+        /// <summary>The style actually applied to one plotted feature, kept so a data package can
+        /// rebuild its CoT without re-resolving against a config that may since have changed.</summary>
+        private sealed class PlottedStyle
+        {
+            public double Hae;
+            public string CotType;
+            public string IconsetPath;
+            public int? ColorArgb;
+            public string Label;
+            public string Remarks;
+        }
+
         private sealed class PostTally
         {
             public int OutOfRange;
@@ -2210,15 +2435,29 @@ namespace FeatureLink.ViewModels
             }
         }
 
-        private async Task PostFeatureAsCotAsync(DownloadedFeature f, bool visible, TimeSpan staleness,
+        /// <summary>
+        /// Builds the CoT event for a downloaded feature — everything the marker is, short of
+        /// sending it.
+        ///
+        /// <para>Split out of <see cref="PostFeatureAsCotAsync"/> so a data package can carry the
+        /// SAME event that plotting would create. Rebuilding an equivalent-looking event for the
+        /// package would be two implementations of the styling rules, and they would drift: the
+        /// icon-forces-white-colour rule and the iconset-path safety check both live here, and a
+        /// package built from a second copy would be the one that quietly stopped matching.</para>
+        ///
+        /// <para>Returns null when the feature cannot be plotted at all.</para>
+        /// </summary>
+        private CotEvent BuildFeatureCotEvent(DownloadedFeature f, TimeSpan staleness,
+            out bool iconApplied,
             string iconsetPath = null, Color? color = null, string label = null, string remarks = null,
             PostTally tally = null)
         {
+            iconApplied = false;
             if (!ArcGisFeatureService.IsPlottable(f.Lat, f.Lon))
             {
                 if (tally != null) tally.OutOfRange++;
                 else Log.Warn($"Refusing to plot feature {f.Uid}: coordinates out of range.");
-                return;
+                return null;
             }
 
             var now = DateTime.UtcNow;
@@ -2244,7 +2483,6 @@ namespace FeatureLink.ViewModels
                 detail.AddChild(remarksItem);
             }
 
-            bool iconApplied = false;
             if (!string.IsNullOrEmpty(iconsetPath))
             {
                 // A peer controls this string via a received share and it is broadcast to the whole
@@ -2298,6 +2536,18 @@ namespace FeatureLink.ViewModels
                 opex: null,
                 qos: null,
                 access: null);
+
+            return cotEvent;
+        }
+
+        private async Task PostFeatureAsCotAsync(DownloadedFeature f, bool visible, TimeSpan staleness,
+            string iconsetPath = null, Color? color = null, string label = null, string remarks = null,
+            PostTally tally = null)
+        {
+            bool iconApplied;
+            var cotEvent = BuildFeatureCotEvent(
+                f, staleness, out iconApplied, iconsetPath, color, label, remarks, tally);
+            if (cotEvent == null) return;
 
             // Post (create) the marker and WAIT for the host to have processed it, then set its
             // live Visible/Color via IMapItemFinderService.
