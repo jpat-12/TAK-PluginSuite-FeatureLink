@@ -118,7 +118,77 @@ namespace FeatureLink.ViewModels
         /// package that is written and sent either way, so its absence must cost only the listing.
         /// </para></summary>
         [Import(AllowDefault = true)]
-        public WinTak.MissionPackages.IMissionPackageService MissionPackageService { get; set; }
+        public WinTak.MissionPackages.IMissionPackageService MissionPackageService
+        {
+            get { return _missionPackageService; }
+            set
+            {
+                if (ReferenceEquals(_missionPackageService, value)) return;
+
+                Unsubscribe(_missionPackageService);
+                _missionPackageService = value;
+                Subscribe(_missionPackageService);
+            }
+        }
+        private WinTak.MissionPackages.IMissionPackageService _missionPackageService;
+
+        private void Subscribe(WinTak.MissionPackages.IMissionPackageService service)
+        {
+            if (service == null) return;
+            try
+            {
+                service.MissionPackageSent += OnMissionPackageSent;
+                service.MissionPackageTransferFailed += OnMissionPackageTransferFailed;
+            }
+            catch (Exception ex) { Log.Warn("Could not watch package transfers: " + ex.Message); }
+        }
+
+        private void Unsubscribe(WinTak.MissionPackages.IMissionPackageService service)
+        {
+            if (service == null) return;
+            try
+            {
+                service.MissionPackageSent -= OnMissionPackageSent;
+                service.MissionPackageTransferFailed -= OnMissionPackageTransferFailed;
+            }
+            catch (Exception ex) { Log.Warn("Could not stop watching package transfers: " + ex.Message); }
+        }
+
+        /// <summary>True when a transfer event is about a package this plugin built, so the panel
+        /// does not narrate other plugins' transfers.</summary>
+        private static bool IsOurs(WinTak.MissionPackages.MissionPackage package)
+        {
+            return package != null && package.Uid != null
+                && package.Uid.StartsWith(Services.PackageLibrary.UidPrefix, StringComparison.Ordinal);
+        }
+
+        private void OnMissionPackageSent(object sender,
+            WinTak.MissionPackages.MissionPackageSentEventArgs e)
+        {
+            try
+            {
+                if (!IsOurs(e?.Package)) return;
+                RunOnUi(() => SetStatus($"Sent \"{e.Package.Name}\"."));
+            }
+            catch (Exception ex) { Log.Warn("Could not report a completed send: " + ex.Message); }
+        }
+
+        private void OnMissionPackageTransferFailed(object sender,
+            WinTak.MissionPackages.MissionPackageErrorEventArgs e)
+        {
+            try
+            {
+                if (!IsOurs(e?.Package)) return;
+
+                string name = e.Package.Name;
+                string reason = ErrorText.ForPackageTransfer(e.Error, e.Message);
+                Log.Error($"Data package \"{name}\" failed to transfer: {e.Error} {e.Message}");
+                RunOnUi(() => SetStatus($"Could not send \"{name}\" — {reason}"));
+            }
+            catch (Exception ex) { Log.Warn("Could not report a failed send: " + ex.Message); }
+        }
+
+
 
         [Import(AllowDefault = true)]
         public WinTak.Display.IMapViewController MapViewController
@@ -1440,7 +1510,7 @@ namespace FeatureLink.ViewModels
                     picked, new FileInfo(package.Path), package.Name, false);
 
                 string who = picked.Count == 1 ? "1 contact" : picked.Count + " contacts";
-                SetStatus($"Sent \"{package.Name}\" to {who}.");
+                SetStatus($"Sending \"{package.Name}\" to {who}…");
             }
             catch (Exception ex)
             {
@@ -1687,9 +1757,14 @@ namespace FeatureLink.ViewModels
                 // other package on the machine already has — a sent package the sender cannot find
                 // again is the thing that made this feel broken. Removing it is the operator's call
                 // now, from the same list.
+                // "Sending", not "Sent". SendMissionPackage returns as soon as the transfer is
+                // QUEUED and fails asynchronously inside Commo, so claiming success here was a
+                // lie the operator could see through: the panel said "Sent" while WinTAK's own
+                // notification said "Failed to send Data Package". The MissionPackageSent and
+                // MissionPackageTransferFailed handlers above report what actually happened.
                 string who = recipients.Count == 1 ? "1 contact" : recipients.Count + " contacts";
                 return DataPackageWorkflow.DeliveryResult.Ok(
-                    $"Sent \"{packageName}\" ({detail}) to {who}.");
+                    $"Sending \"{packageName}\" ({detail}) to {who}…");
             }
             catch (Exception ex)
             {
