@@ -1,6 +1,6 @@
 # FeatureLink Data Packages
 
-**Status:** implemented in WinTAK 5.6 as of 2.12.6. Not yet implemented in ATAK, CloudTAK or
+**Status:** implemented in WinTAK 5.6 as of 2.12.7. Not yet implemented in ATAK, CloudTAK or
 TAK Portal — this document is the contract those ports should follow.
 
 ---
@@ -265,7 +265,7 @@ The declaration must say **utf-8**, and this is worth stating because it shipped
 `StringWriter` reports UTF-16 — so manifests went out saying `encoding="utf-16"` while the bytes
 were UTF-8. Parsing a *string* ignores the declaration, which is why a round-trip test passed over
 it; a recipient reads the manifest out of the zip as a *stream*, where the declaration is honoured
-and the mismatch is fatal. Packages built before 2.12.6 carry the wrong declaration and should be
+and the mismatch is fatal. Packages built before 2.12.7 carry the wrong declaration and should be
 rebuilt.
 
 The **manifest lists only what was actually written**. If an iconset's source file could not be
