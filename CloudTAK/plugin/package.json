@@ -1,6 +1,6 @@
 {
     "name": "cloudtak-plugin-featurelink",
-    "version": "2.12.5",
+    "version": "2.12.6",
     "private": true,
     "license": "Apache-2.0",
     "type": "module",

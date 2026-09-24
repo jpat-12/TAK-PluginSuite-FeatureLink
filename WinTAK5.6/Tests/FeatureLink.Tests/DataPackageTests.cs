@@ -24,14 +24,12 @@ namespace FeatureLink.Tests
         private const string UidA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         private const string UidB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-        /// <summary>Stands in for a generated iconset on disk: the two files a minimal one holds.
-        /// The real reader returns exactly this shape — <c>iconset.xml</c> beside a group folder
-        /// of PNGs.</summary>
-        private static readonly Func<string, IReadOnlyList<string>> Iconset2 =
-            uid => new[] { "iconset.xml", "Grp/a.png" };
+        /// <summary>Stands in for a generated iconset on disk, returning its group name — which
+        /// is what the plan needs, because the group names the zip inside the package.</summary>
+        private static readonly Func<string, string> Iconset2 = uid => "CoT-Vis Icons";
 
         /// <summary>No iconset has been generated for this uid.</summary>
-        private static readonly Func<string, IReadOnlyList<string>> NoIconset = uid => null;
+        private static readonly Func<string, string> NoIconset = uid => null;
 
         private static readonly DateTime Noon = new DateTime(2026, 9, 20, 12, 34, 0, DateTimeKind.Local);
 
@@ -190,45 +188,70 @@ namespace FeatureLink.Tests
         }
 
         /// <summary>
-        /// An iconset travels EXPANDED, as its own files, not as a nested zip.
+        /// An iconset travels as its own ZIP, at the package root, named for its group.
         ///
-        /// <para>Shipping the generated zip inside the package was the original shape and it never
-        /// worked: ATAK does not unpack a zip within a package, so the whole thing was filed under
-        /// <c>atak/attachments/</c> and no icons were installed. A working iconset appears as
-        /// <c>iconset.xml</c> beside its group folder of PNGs.</para>
+        /// <para>Verified against ATAK. Both other shapes fail silently: a zip carrying a uid
+        /// parameter is filed as a CoT attachment and never imported, and expanding the iconset
+        /// into the package makes ATAK treat each PNG as a standalone image to place on the map.
+        /// Leaving it zipped is what lets ATAK's iconset importer recognise and unpack it.</para>
         /// </summary>
         [Fact]
-        public void A_layers_generated_iconset_travels_expanded_not_as_a_nested_zip()
+        public void A_layers_generated_iconset_travels_as_a_zip_named_for_its_group()
         {
             var plan = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA) },
                 Iconset2);
+
+            var iconset = plan.Entries.Single(e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
+
+            Assert.Equal("CoT-Vis Icons.zip", iconset.PackagePath);
+            Assert.EndsWith(UidA + ".zip", iconset.SourcePath);
+            Assert.Equal(1, plan.IconsetCount);
+        }
+
+        /// <summary>At the package ROOT — not under a folder. The verified-working package had it
+        /// there, and nesting is the variant that failed.</summary>
+        [Fact]
+        public void The_iconset_zip_sits_at_the_package_root()
+        {
+            var plan = DataPackageBuilder.Plan(
+                new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA) },
+                Iconset2);
+
+            var iconset = plan.Entries.Single(e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
+            Assert.DoesNotContain("/", iconset.PackagePath);
+        }
+
+        /// <summary>Two iconsets whose groups share a name must not overwrite each other inside
+        /// the zip.</summary>
+        [Fact]
+        public void Two_iconsets_with_the_same_group_name_get_distinct_entries()
+        {
+            var a = Layer("Teams", "https://h/a/FeatureServer/0", null, UidA);
+            var b = Layer("ICP", "https://h/b/FeatureServer/0", null, UidB);
+
+            var plan = DataPackageBuilder.Plan(new[] { a, b }, uid => "Shared Name");
 
             var paths = plan.Entries
                 .Where(e => e.Kind == DataPackageBuilder.EntryKind.Iconset)
                 .Select(e => e.PackagePath).ToList();
 
-            Assert.Equal(new[] { "iconsets/" + UidA + "/iconset.xml",
-                                 "iconsets/" + UidA + "/Grp/a.png" }, paths);
-            Assert.DoesNotContain(paths, path => path.EndsWith(".zip", StringComparison.Ordinal));
-
-            // One iconset, however many files it expands into.
-            Assert.Equal(1, plan.IconsetCount);
+            Assert.Equal(2, paths.Count);
+            Assert.Equal(2, paths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
         }
 
-        /// <summary>Each expanded file names the entry inside the generated zip it is copied
-        /// from, so the writer can pull it across without unpacking to disk.</summary>
-        [Fact]
-        public void An_expanded_iconset_file_points_back_into_the_generated_zip()
+        /// <summary>Spaces are KEPT — the reference iconsets ATAK ships are "Incident Icons" and
+        /// the verified-working package used a spaced name. Only path-illegal characters go.</summary>
+        [Theory]
+        [InlineData("CoT-Vis Icons", "CoT-Vis Icons")]
+        [InlineData("Incident Icons", "Incident Icons")]
+        [InlineData("a/b\\c:d", "a_b_c_d")]
+        [InlineData("", "iconset")]
+        [InlineData(null, "iconset")]
+        public void An_iconset_zip_name_keeps_spaces_and_drops_illegal_characters(
+            string group, string expected)
         {
-            var plan = DataPackageBuilder.Plan(
-                new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA) },
-                Iconset2);
-
-            var first = plan.Entries.First(e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
-
-            Assert.Equal("iconset.xml", first.SourceZipEntry);
-            Assert.EndsWith(UidA + ".zip", first.SourcePath);
+            Assert.Equal(expected, DataPackageBuilder.ZipEntryName(group));
         }
 
         /// <summary>The recorded UID is what survives a restart; the display config only exists for
@@ -245,9 +268,10 @@ namespace FeatureLink.Tests
                 .Where(e => e.Kind == DataPackageBuilder.EntryKind.Iconset)
                 .Select(e => e.PackagePath).ToList();
 
-            Assert.Contains("iconsets/" + UidA + "/iconset.xml", packaged);
-            Assert.Contains("iconsets/" + UidB + "/iconset.xml", packaged);
+            // One zip per iconset; the stand-in names them both, so they are disambiguated.
+            Assert.Equal(2, packaged.Count);
             Assert.Equal(2, plan.IconsetCount);
+            Assert.All(packaged, path => Assert.EndsWith(".zip", path, StringComparison.Ordinal));
         }
 
         [Fact]

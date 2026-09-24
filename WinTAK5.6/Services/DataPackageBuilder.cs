@@ -168,8 +168,8 @@ namespace FeatureLink.Services
             /// <summary>A layer's <c>.featurelinkshare</c> config.</summary>
             LayerConfig,
 
-            /// <summary>One file of a generated iconset — its <c>iconset.xml</c> or one of its
-            /// PNGs, expanded out of the generated zip. NOT the zip itself; see below.</summary>
+            /// <summary>A generated iconset, carried as its own zip. See the remarks in
+            /// <see cref="Plan"/> for why it stays zipped.</summary>
             Iconset,
 
             /// <summary>One selected feature, as a CoT event.</summary>
@@ -180,13 +180,8 @@ namespace FeatureLink.Services
         public sealed class PlannedEntry
         {
             /// <summary>Absolute path on this machine. Null for a layer config until the writer
-            /// has staged it; already set for an iconset file, which exists.</summary>
+            /// has staged it; already set for an iconset, which exists.</summary>
             public string SourcePath { get; set; }
-
-            /// <summary>When set, the content is one entry INSIDE the zip at
-            /// <see cref="SourcePath"/> rather than the file itself. Iconsets are expanded this
-            /// way — see the remarks on <see cref="EntryKind.Iconset"/>.</summary>
-            public string SourceZipEntry { get; set; }
 
             /// <summary>Path inside the package, forward-slashed, as it appears in the manifest.</summary>
             public string PackagePath { get; set; }
@@ -262,32 +257,20 @@ namespace FeatureLink.Services
             public List<string> MissingIconsets { get; } = new List<string>();
 
             public int LayerCount { get { return Entries.Count(e => e.Kind == EntryKind.LayerConfig); } }
-            /// <summary>How many distinct ICONSETS are included — not how many files they expand
-            /// into. An iconset contributes one <c>iconset.xml</c> plus a PNG per icon, and
-            /// "27 iconsets" for a single set would be a nonsense thing to tell an operator.</summary>
-            public int IconsetCount
-            {
-                get
-                {
-                    return Entries.Where(e => e.Kind == EntryKind.Iconset)
-                                  .Select(e => e.Uid)
-                                  .Distinct(StringComparer.Ordinal)
-                                  .Count();
-                }
-            }
+            public int IconsetCount { get { return Entries.Count(e => e.Kind == EntryKind.Iconset); } }
             public int FeatureCount { get { return Entries.Count(e => e.Kind == EntryKind.Feature); } }
         }
 
         /// <summary>Plans a package for the selected layers.</summary>
         /// <param name="layers">The selected layers, in display order.</param>
-        /// <param name="iconsetContents">Lists the files inside a generated iconset zip, or null
-        /// when there is no such iconset. Injected so a plan is testable without touching
-        /// <c>%AppData%</c>. Replaces an earlier "does it exist" probe, because the plan now needs
-        /// to name each file the iconset contains rather than the zip as a whole.</param>
+        /// <param name="iconsetGroup">The group name of a generated iconset, or null when there is
+        /// no such iconset. Injected so a plan is testable without touching <c>%AppData%</c>. The
+        /// group name becomes the zip's name inside the package, which is what the operator sees
+        /// listed on the receiving device.</param>
         public static PackagePlan Plan(IEnumerable<LayerPlanInput> layers,
-            Func<string, IReadOnlyList<string>> iconsetContents)
+            Func<string, string> iconsetGroup)
         {
-            if (iconsetContents == null) iconsetContents = ReadIconsetContents;
+            if (iconsetGroup == null) iconsetGroup = ReadIconsetGroup;
 
             var plan = new PackagePlan();
             var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -331,33 +314,37 @@ namespace FeatureLink.Services
                     // Layers sharing a renderer field share a UID; it goes in once.
                     if (!seenIconsets.Add(uid)) continue;
 
-                    var contents = iconsetContents(uid);
-                    if (contents == null || contents.Count == 0)
-                    {
-                        plan.MissingIconsets.Add(uid);
-                        continue;
-                    }
+                    string group = iconsetGroup(uid);
+                    if (string.IsNullOrEmpty(group)) { plan.MissingIconsets.Add(uid); continue; }
 
-                    // EXPANDED, not embedded. A zip nested inside the package is never unpacked:
-                    // ATAK filed ours whole under atak/attachments/ and no icons were installed.
-                    // A working iconset appears in the package as its own files —
-                    // "<folder>/iconset.xml" beside "<folder>/<Group>/*.png" — which is exactly
-                    // the layout the generated zip already has internally, so each entry is copied
-                    // straight across under a folder named for the uid.
-                    foreach (string inner in contents)
-                    {
-                        if (string.IsNullOrWhiteSpace(inner)) continue;
-                        if (inner.EndsWith("/", StringComparison.Ordinal)) continue;   // directory
+                    // The iconset stays ZIPPED, at the package root, named for its group, and
+                    // carries NO uid parameter. Verified against ATAK; the two obvious-looking
+                    // alternatives both fail silently:
+                    //
+                    //   zipped + a uid parameter -> a uid means "attachment of the CoT item with
+                    //       this uid". Ours matched no item, so the whole zip was filed under
+                    //       atak/attachments/<uid>/ and no importer ever saw it.
+                    //
+                    //   expanded into the package -> the files extract, and ATAK then treats each
+                    //       PNG as a standalone image, prompting the operator to place them on the
+                    //       map one by one. Unpacking it ourselves robs the iconset importer of
+                    //       the .zip it recognises.
+                    //
+                    // Leaving it zipped and undeclared-by-uid lets that importer unpack it, which
+                    // is what produces the working layout seen on a device:
+                    //     atak/tools/datapackage/files/<guid>/iconset.xml
+                    //     atak/tools/datapackage/files/<guid>/<Group>/*.png
+                    string entryName = ZipEntryName(group) + ".zip";
+                    for (int n = 2; !usedNames.Add(entryName); n++)
+                        entryName = ZipEntryName(group) + "_" + n.ToString(CultureInfo.InvariantCulture) + ".zip";
 
-                        plan.Entries.Add(new PlannedEntry
-                        {
-                            SourcePath = IconsetZipPath(uid),
-                            SourceZipEntry = inner,
-                            PackagePath = IconsetFolder + "/" + uid + "/" + inner,
-                            Uid = "featurelink-iconset-" + uid,
-                            Kind = EntryKind.Iconset,
-                        });
-                    }
+                    plan.Entries.Add(new PlannedEntry
+                    {
+                        SourcePath = IconsetZipPath(uid),
+                        PackagePath = entryName,
+                        Uid = "featurelink-iconset-" + uid,
+                        Kind = EntryKind.Iconset,
+                    });
                 }
 
                 plan.Entries.Add(new PlannedEntry
@@ -414,9 +401,10 @@ namespace FeatureLink.Services
             }
         }
 
-        /// <summary>The files inside a generated iconset zip, or null when it is not there.
-        /// Never throws: a corrupt or half-written iconset costs its icons, not the package.</summary>
-        public static IReadOnlyList<string> ReadIconsetContents(string uid)
+        /// <summary>The group name of a generated iconset, read from the <c>name</c> attribute of
+        /// its <c>iconset.xml</c>, or null when the iconset is not on disk. Never throws: a corrupt
+        /// or half-written iconset costs its icons, not the package.</summary>
+        public static string ReadIconsetGroup(string uid)
         {
             string path = IconsetZipPath(uid);
             if (!File.Exists(path)) return null;
@@ -424,16 +412,42 @@ namespace FeatureLink.Services
             try
             {
                 using (var archive = System.IO.Compression.ZipFile.OpenRead(path))
-                    return archive.Entries
-                        .Select(e => e.FullName)
-                        .Where(n => !string.IsNullOrEmpty(n) && !n.EndsWith("/", StringComparison.Ordinal))
-                        .ToList();
+                {
+                    var entry = archive.GetEntry("iconset.xml");
+                    if (entry == null) return null;
+
+                    using (var stream = entry.Open())
+                    {
+                        var document = System.Xml.Linq.XDocument.Load(stream);
+                        var name = document.Root?.Attribute("name");
+                        if (name != null && !string.IsNullOrWhiteSpace(name.Value)) return name.Value;
+                    }
+
+                    // No usable name: fall back to the uid so the iconset still travels.
+                    return uid;
+                }
             }
             catch (Exception ex)
             {
                 Log.Warn("Could not read the generated iconset " + uid + ": " + ex.Message);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Makes a group name safe as a zip entry, KEEPING SPACES.
+        ///
+        /// <para>Deliberately gentler than <see cref="Sanitize"/>, which folds spaces to
+        /// underscores for file stems. The reference iconsets ATAK ships with are named
+        /// "Incident Icons" and "Civil_Air_Patrol_Iconset" — spaces are fine here and the
+        /// verified-working package used one. Only characters that are illegal in a path are
+        /// removed.</para>
+        /// </summary>
+        internal static string ZipEntryName(string group)
+        {
+            string cleaned = Regex.Replace(group ?? string.Empty, "[\\\\/:*?\"<>|\\x00-\\x1f]", "_").Trim();
+            if (cleaned.Length > 80) cleaned = cleaned.Substring(0, 80).Trim();
+            return cleaned.Length == 0 ? "iconset" : cleaned;
         }
 
         /// <summary>Where a generated iconset zip lives on this machine.</summary>

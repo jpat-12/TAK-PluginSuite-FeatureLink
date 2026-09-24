@@ -192,11 +192,7 @@ namespace FeatureLink.Services
                                     continue;
                                 }
 
-                                if (string.IsNullOrEmpty(entry.SourceZipEntry))
-                                    WriteFile(archive, entry.PackagePath, entry.SourcePath);
-                                else
-                                    WriteFromZip(archive, entry.PackagePath,
-                                                 entry.SourcePath, entry.SourceZipEntry);
+                                WriteFile(archive, entry.PackagePath, entry.SourcePath);
                             }
                             written.Add(entry);
                         }
@@ -291,27 +287,6 @@ namespace FeatureLink.Services
             using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
             {
                 writer.Write(content);
-            }
-        }
-
-        /// <summary>Copies one entry out of a source zip and into the package, so an iconset
-        /// arrives as its own files rather than as a zip nobody unpacks.</summary>
-        private static void WriteFromZip(ZipArchive archive, string entryPath,
-            string sourceZipPath, string sourceEntry)
-        {
-            using (var source = ZipFile.OpenRead(sourceZipPath))
-            {
-                var found = source.GetEntry(sourceEntry);
-                if (found == null)
-                    throw new FileNotFoundException(
-                        "\"" + sourceEntry + "\" is not in " + Path.GetFileName(sourceZipPath));
-
-                var target = archive.CreateEntry(entryPath, CompressionLevel.Optimal);
-                using (var to = target.Open())
-                using (var from = found.Open())
-                {
-                    from.CopyTo(to);
-                }
             }
         }
 

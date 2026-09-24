@@ -1,6 +1,6 @@
 # FeatureLink Data Packages
 
-**Status:** implemented in WinTAK 5.6 as of 2.12.5. Not yet implemented in ATAK, CloudTAK or
+**Status:** implemented in WinTAK 5.6 as of 2.12.6. Not yet implemented in ATAK, CloudTAK or
 TAK Portal — this document is the contract those ports should follow.
 
 ---
@@ -29,15 +29,12 @@ A package is an ordinary zip:
 ```
 FeatureLink-Ground_Teams-20260920-1234.zip
 ├── MANIFEST/manifest.xml
+├── Incident Icons.zip          ← iconset, STILL ZIPPED, at the root, named for its group
 ├── featurelink/
-│   ├── Ground_Teams-a1b2c3d4e5f6.featurelinkshare
-│   └── ICP-9f8e7d6c5b4a.featurelinkshare
-├── cot/
-│   ├── <feature-uid>.cot
-│   └── <feature-uid>.cot
-└── iconsets/
-    ├── <64-hex-uid>.zip
-    └── <64-hex-uid>.zip
+│   └── Ground_Teams-a1b2c3d4e5f6.featurelinkshare
+└── cot/
+    ├── <feature-uid>.cot
+    └── <feature-uid>.cot
 ```
 
 - **`featurelink/`** — one `.featurelinkshare` per selected layer, byte-identical to what the
@@ -55,9 +52,9 @@ FeatureLink-Ground_Teams-20260920-1234.zip
   the sender is looking at rather than an approximation of it. A layer with no `cot/` entries
   means "the whole layer": the recipient downloads it from ArcGIS, which is the original Share
   behaviour.
-- **`iconsets/`** — the generated zips, named by their UID, exactly as
-  `IconsetInstaller` wrote them to `%AppData%\WinTAK\FeatureLink\iconsets\`. An iconset referenced
-  by two selected layers is included once.
+- **`<Group>.zip`** — the generated iconset, **left zipped**, at the package root, named for
+  its icon group. See "How an iconset must be carried" below; the two other shapes both fail
+  silently. An iconset referenced by two selected layers is included once.
 
 ## Who a package can be sent to
 
@@ -165,6 +162,39 @@ and (when features were selected) the feature positions of whatever went into it
 on disk until someone removes it. Removing it is the operator's call, from the same Data Packages
 list. This matches how every other package on the machine already behaves.
 
+## How an iconset must be carried
+
+**Verified against ATAK on 24 Sep 2026.** This was got wrong twice, and both wrong answers
+fail *silently* — the package imports, the markers appear, and only the symbols are missing.
+
+| Shape | Result |
+|---|---|
+| Zipped, with a `uid` Parameter | Filed under `atak/attachments/<uid>/`. No importer ever sees it. |
+| Expanded into the package | Files extract, then ATAK treats **each PNG as a standalone image** and prompts the operator to place them on the map one by one. |
+| **Zipped, no `uid` Parameter** | **Works.** |
+
+Two rules, and both are needed:
+
+1. **Leave the iconset zipped.** Unpacking it ourselves robs ATAK's iconset importer of the
+   `.zip` it recognises. Letting it do the unpacking is what produces the layout a working
+   iconset has on disk:
+   ```
+   atak/tools/datapackage/files/<guid>/iconset.xml
+   atak/tools/datapackage/files/<guid>/<Group>/*.png
+   ```
+2. **No `uid` Parameter on the content.** In ATAK a `uid` means *"this content is an attachment
+   of the CoT item with that uid"*. Ours matched no item, so the iconset — and the layer config,
+   which had the same problem — became orphan folders under `attachments/`. Real packages carry a
+   uid only on CoT content; everything else carries none.
+
+The zip sits at the package **root** and is named for its icon group (`Incident Icons.zip`),
+because that is the form that was verified. Spaces are kept: ATAK's own reference iconsets are
+named "Incident Icons" and "Civil_Air_Patrol_Iconset", and the working package used a spaced
+name. Two iconsets whose groups share a name are disambiguated with a `_2` suffix.
+
+The iconset zip's own internal layout is unchanged and already correct — `iconset.xml` beside
+`<Group>/*.png`, matching ATAK's reference iconsets exactly.
+
 ## Import order: iconsets before features
 
 Entries are written **iconsets first, then layer configs, then CoT features** — in the manifest
@@ -181,12 +211,12 @@ put layer A's features ahead of layer B's iconsets. The reorder uses LINQ `Order
 documented stable, rather than `List.Sort`, which is an introsort and is not — features carry a
 meaningful build order.
 
-### This is necessary but not proven sufficient
+### Ordering was not the problem after all
 
-WinTAK's `MissionPackageService.ImportPackage` copies the zip into its share directory and then
-hands **the whole file** to `IImportManager.ImportAsync`. Whether that dispatches contents in
-manifest order, in zip order, or grouped by type is **not documented and has not been verified**.
-Ordering is therefore the cheapest correct thing to do, not a guarantee.
+Ordering was the first theory when icons did not arrive, and a field test disproved it: the
+iconset was never installed at all, so nothing could have been late. The real causes are in
+"How an iconset must be carried" above. Iconsets-first is kept because it is still the correct
+order and costs nothing, but it was not the fix.
 
 If a field test shows icons still resolving late, the reliable pattern is **two stages**: send a
 package containing only the iconsets, confirm it has imported, then send the features. Iconset
@@ -235,7 +265,7 @@ The declaration must say **utf-8**, and this is worth stating because it shipped
 `StringWriter` reports UTF-16 — so manifests went out saying `encoding="utf-16"` while the bytes
 were UTF-8. Parsing a *string* ignores the declaration, which is why a round-trip test passed over
 it; a recipient reads the manifest out of the zip as a *stream*, where the declaration is honoured
-and the mismatch is fatal. Packages built before 2.12.5 carry the wrong declaration and should be
+and the mismatch is fatal. Packages built before 2.12.6 carry the wrong declaration and should be
 rebuilt.
 
 The **manifest lists only what was actually written**. If an iconset's source file could not be
