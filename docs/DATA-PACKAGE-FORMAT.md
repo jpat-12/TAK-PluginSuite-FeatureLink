@@ -1,6 +1,6 @@
 # FeatureLink Data Packages
 
-**Status:** implemented in WinTAK 5.6 as of 2.12.3. Not yet implemented in ATAK, CloudTAK or
+**Status:** implemented in WinTAK 5.6 as of 2.12.4. Not yet implemented in ATAK, CloudTAK or
 TAK Portal — this document is the contract those ports should follow.
 
 ---
@@ -165,6 +165,39 @@ and (when features were selected) the feature positions of whatever went into it
 on disk until someone removes it. Removing it is the operator's call, from the same Data Packages
 list. This matches how every other package on the machine already behaves.
 
+## Import order: iconsets before features
+
+Entries are written **iconsets first, then layer configs, then CoT features** — in the manifest
+and in the zip, since an importer may honour either.
+
+This matters because **a marker resolves its icon when it is created and keeps what it resolved**
+— the same rule that made replacing an installed iconset so awkward. An iconset that arrives
+*after* the CoT referencing it is too late: the markers are already on the recipient's map wearing
+default symbols, and nothing re-resolves them. Entries were previously emitted config → features →
+iconsets, exactly backwards.
+
+The whole plan is reordered, not each layer's slice, because the per-layer loop would otherwise
+put layer A's features ahead of layer B's iconsets. The reorder uses LINQ `OrderBy`, which is
+documented stable, rather than `List.Sort`, which is an introsort and is not — features carry a
+meaningful build order.
+
+### This is necessary but not proven sufficient
+
+WinTAK's `MissionPackageService.ImportPackage` copies the zip into its share directory and then
+hands **the whole file** to `IImportManager.ImportAsync`. Whether that dispatches contents in
+manifest order, in zip order, or grouped by type is **not documented and has not been verified**.
+Ordering is therefore the cheapest correct thing to do, not a guarantee.
+
+If a field test shows icons still resolving late, the reliable pattern is **two stages**: send a
+package containing only the iconsets, confirm it has imported, then send the features. Iconset
+UIDs are stable per layer and field, so this is a one-time setup per layer rather than a
+per-package chore. A receiving client running FeatureLink could also re-resolve affected markers
+after an iconset import; a plain ATAK or WinTAK recipient cannot.
+
+**The test to run:** build a package for a layer whose iconset the recipient has never seen,
+import it on that machine, and check whether the markers wear the right symbols or the default
+ones.
+
 ## Manifest
 
 Standard TAK manifest, format version 2, at the fixed path `MANIFEST/manifest.xml`:
@@ -202,7 +235,7 @@ The declaration must say **utf-8**, and this is worth stating because it shipped
 `StringWriter` reports UTF-16 — so manifests went out saying `encoding="utf-16"` while the bytes
 were UTF-8. Parsing a *string* ignores the declaration, which is why a round-trip test passed over
 it; a recipient reads the manifest out of the zip as a *stream*, where the declaration is honoured
-and the mismatch is fatal. Packages built before 2.12.3 carry the wrong declaration and should be
+and the mismatch is fatal. Packages built before 2.12.4 carry the wrong declaration and should be
 rebuilt.
 
 The **manifest lists only what was actually written**. If an iconset's source file could not be

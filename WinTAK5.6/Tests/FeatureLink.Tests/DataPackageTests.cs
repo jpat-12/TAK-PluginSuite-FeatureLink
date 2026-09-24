@@ -386,6 +386,109 @@ namespace FeatureLink.Tests
             }
         }
 
+        // ── import ordering ───────────────────────────────────
+
+        /// <summary>
+        /// Icons must be installed before the markers that reference them are created.
+        ///
+        /// <para>A marker resolves its icon at creation and keeps it — the same rule that made
+        /// replacing an installed iconset so awkward. An iconset arriving after its CoT is
+        /// therefore too late: the markers are already on the recipient's map wearing defaults and
+        /// nothing re-resolves them. Entries used to be emitted config, features, iconsets —
+        /// exactly backwards.</para>
+        /// </summary>
+        [Fact]
+        public void Every_iconset_is_ordered_before_every_feature()
+        {
+            var layer = LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1", "f2");
+            layer.IconsetUids = new[] { UidA };
+
+            var plan = DataPackageBuilder.Plan(new[] { layer }, uid => true);
+
+            int lastIconset = plan.Entries.FindLastIndex(
+                e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
+            int firstFeature = plan.Entries.FindIndex(
+                e => e.Kind == DataPackageBuilder.EntryKind.Feature);
+
+            Assert.True(lastIconset >= 0, "no iconset in the plan");
+            Assert.True(firstFeature >= 0, "no feature in the plan");
+            Assert.True(lastIconset < firstFeature,
+                "iconset at " + lastIconset + " comes after the first feature at " + firstFeature);
+        }
+
+        /// <summary>The per-layer loop interleaves, so layer A's features would otherwise precede
+        /// layer B's iconsets. The whole plan is reordered, not each layer's slice.</summary>
+        [Fact]
+        public void Ordering_holds_across_several_layers()
+        {
+            var a = LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1");
+            a.IconsetUids = new[] { UidA };
+            var b = LayerWithFeatures("ICP", "https://h/b/FeatureServer/0", "f2");
+            b.IconsetUids = new[] { UidB };
+
+            var plan = DataPackageBuilder.Plan(new[] { a, b }, uid => true);
+
+            int lastIconset = plan.Entries.FindLastIndex(
+                e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
+            int firstFeature = plan.Entries.FindIndex(
+                e => e.Kind == DataPackageBuilder.EntryKind.Feature);
+
+            Assert.Equal(2, plan.IconsetCount);
+            Assert.True(lastIconset < firstFeature,
+                "an iconset for the second layer landed after the first layer's features");
+        }
+
+        /// <summary>Reordering must not shuffle within a group: OrderBy is stable, List.Sort is
+        /// not, and the features carry a meaningful build order.</summary>
+        [Fact]
+        public void Features_keep_the_order_they_were_selected_in()
+        {
+            var plan = DataPackageBuilder.Plan(
+                new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0",
+                                          "f1", "f2", "f3", "f4", "f5") },
+                uid => true);
+
+            var features = plan.Entries
+                .Where(e => e.Kind == DataPackageBuilder.EntryKind.Feature)
+                .Select(e => e.Uid).ToList();
+
+            Assert.Equal(new[] { "f1", "f2", "f3", "f4", "f5" }, features);
+        }
+
+        /// <summary>The zip must carry the same order as the manifest, since an importer may
+        /// honour either one.</summary>
+        [Fact]
+        public void The_zip_entries_are_written_in_the_same_order_as_the_manifest()
+        {
+            using (var dir = new TempDir())
+            {
+                var plan = new DataPackageBuilder.PackagePlan();
+                plan.Entries.Add(new DataPackageBuilder.PlannedEntry
+                {
+                    PackagePath = "iconsets/" + UidA + ".zip",
+                    Uid = "icon-1",
+                    Kind = DataPackageBuilder.EntryKind.Iconset,
+                    SourcePath = dir.File("set.zip"),
+                });
+                plan.Entries.Add(new DataPackageBuilder.PlannedEntry
+                {
+                    PackagePath = "cot/f1.cot",
+                    Uid = "f1",
+                    Kind = DataPackageBuilder.EntryKind.Feature,
+                    Content = "<event/>",
+                });
+
+                var result = DataPackageWriter.Write(plan, "Pkg", Path.Combine(dir.Path, "out.zip"));
+
+                using (var archive = ZipFile.OpenRead(result.Path))
+                {
+                    var names = archive.Entries.Select(e => e.FullName)
+                        .Where(n => n != DataPackageWriter.ManifestEntryPath).ToList();
+                    Assert.Equal(new[] { "iconsets/" + UidA + ".zip", "cot/f1.cot" }, names);
+                }
+            }
+        }
+
         // ── manifest ────────────────────────────────────────────────────────────
 
         private static DataPackageBuilder.PackagePlan SimplePlan()

@@ -287,6 +287,40 @@ namespace FeatureLink.Services
                 for (int n = 2; !usedNames.Add(unique); n++)
                     unique = stem + "_" + n.ToString(CultureInfo.InvariantCulture);
 
+                // ── ICONSETS FIRST. ──────────────────────────────────────────────
+                // A marker resolves its icon when it is CREATED and keeps what it resolved — the
+                // same rule that made replacing an installed iconset so awkward. So an iconset
+                // that arrives after the CoT it belongs to is too late: the markers are already
+                // on the recipient's map wearing default symbols, and nothing re-resolves them.
+                //
+                // Entries were previously emitted config → features → iconsets, i.e. exactly the
+                // wrong way round. They now go iconsets → config → features, in the manifest and
+                // in the zip (the writer preserves this order), so any importer that honours
+                // either one installs the icons before it creates the markers.
+                //
+                // NOTE this is necessary but not proven sufficient: WinTAK's ImportPackage hands
+                // the whole zip to IImportManager.ImportAsync, and whether that dispatches in
+                // manifest order is not documented. See docs/DATA-PACKAGE-FORMAT.md.
+                var referenced = ExtractIconsetUids(layer.DisplayConfigJson);
+                foreach (string recorded in layer.IconsetUids ?? Enumerable.Empty<string>())
+                    if (!string.IsNullOrWhiteSpace(recorded)) referenced.Add(recorded.Trim());
+
+                foreach (string uid in referenced)
+                {
+                    // Layers sharing a renderer field share a UID; the zip goes in once.
+                    if (!seenIconsets.Add(uid)) continue;
+
+                    if (!iconsetExists(uid)) { plan.MissingIconsets.Add(uid); continue; }
+
+                    plan.Entries.Add(new PlannedEntry
+                    {
+                        SourcePath = IconsetZipPath(uid),
+                        PackagePath = IconsetFolder + "/" + uid + ".zip",
+                        Uid = "featurelink-iconset-" + uid,
+                        Kind = EntryKind.Iconset,
+                    });
+                }
+
                 plan.Entries.Add(new PlannedEntry
                 {
                     PackagePath = ConfigFolder + "/" + unique + ".featurelinkshare",
@@ -313,29 +347,32 @@ namespace FeatureLink.Services
                         Content = feature.CotXml,
                     });
                 }
-
-                var referenced = ExtractIconsetUids(layer.DisplayConfigJson);
-                foreach (string recorded in layer.IconsetUids ?? Enumerable.Empty<string>())
-                    if (!string.IsNullOrWhiteSpace(recorded)) referenced.Add(recorded.Trim());
-
-                foreach (string uid in referenced)
-                {
-                    // Layers sharing a renderer field share a UID; the zip goes in once.
-                    if (!seenIconsets.Add(uid)) continue;
-
-                    if (!iconsetExists(uid)) { plan.MissingIconsets.Add(uid); continue; }
-
-                    plan.Entries.Add(new PlannedEntry
-                    {
-                        SourcePath = IconsetZipPath(uid),
-                        PackagePath = IconsetFolder + "/" + uid + ".zip",
-                        Uid = "featurelink-iconset-" + uid,
-                        Kind = EntryKind.Iconset,
-                    });
-                }
             }
 
+            // With several layers the per-layer loop still interleaves: layer A's features precede
+            // layer B's iconsets. Reordering the finished plan puts EVERY iconset ahead of every
+            // CoT, which is what the ordering is for.
+            //
+            // OrderBy, not List.Sort: LINQ's OrderBy is documented stable, List.Sort is an
+            // introsort and is not. Within a group the build order carries meaning — features
+            // follow their own layer's config — and an unstable sort would shuffle it for free.
+            var ordered = plan.Entries.OrderBy(e => ImportRank(e.Kind)).ToList();
+            plan.Entries.Clear();
+            plan.Entries.AddRange(ordered);
+
             return plan;
+        }
+
+        /// <summary>Import precedence: lower goes into the package first. Icons must exist before
+        /// the markers that reference them are created.</summary>
+        private static int ImportRank(EntryKind kind)
+        {
+            switch (kind)
+            {
+                case EntryKind.Iconset: return 0;
+                case EntryKind.LayerConfig: return 1;
+                default: return 2;   // Feature
+            }
         }
 
         /// <summary>Where a generated iconset zip lives on this machine.</summary>
