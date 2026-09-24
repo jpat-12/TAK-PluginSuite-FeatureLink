@@ -168,7 +168,8 @@ namespace FeatureLink.Services
             /// <summary>A layer's <c>.featurelinkshare</c> config.</summary>
             LayerConfig,
 
-            /// <summary>A generated iconset zip.</summary>
+            /// <summary>One file of a generated iconset — its <c>iconset.xml</c> or one of its
+            /// PNGs, expanded out of the generated zip. NOT the zip itself; see below.</summary>
             Iconset,
 
             /// <summary>One selected feature, as a CoT event.</summary>
@@ -179,8 +180,13 @@ namespace FeatureLink.Services
         public sealed class PlannedEntry
         {
             /// <summary>Absolute path on this machine. Null for a layer config until the writer
-            /// has staged it; already set for an iconset, which exists.</summary>
+            /// has staged it; already set for an iconset file, which exists.</summary>
             public string SourcePath { get; set; }
+
+            /// <summary>When set, the content is one entry INSIDE the zip at
+            /// <see cref="SourcePath"/> rather than the file itself. Iconsets are expanded this
+            /// way — see the remarks on <see cref="EntryKind.Iconset"/>.</summary>
+            public string SourceZipEntry { get; set; }
 
             /// <summary>Path inside the package, forward-slashed, as it appears in the manifest.</summary>
             public string PackagePath { get; set; }
@@ -256,17 +262,32 @@ namespace FeatureLink.Services
             public List<string> MissingIconsets { get; } = new List<string>();
 
             public int LayerCount { get { return Entries.Count(e => e.Kind == EntryKind.LayerConfig); } }
-            public int IconsetCount { get { return Entries.Count(e => e.Kind == EntryKind.Iconset); } }
+            /// <summary>How many distinct ICONSETS are included — not how many files they expand
+            /// into. An iconset contributes one <c>iconset.xml</c> plus a PNG per icon, and
+            /// "27 iconsets" for a single set would be a nonsense thing to tell an operator.</summary>
+            public int IconsetCount
+            {
+                get
+                {
+                    return Entries.Where(e => e.Kind == EntryKind.Iconset)
+                                  .Select(e => e.Uid)
+                                  .Distinct(StringComparer.Ordinal)
+                                  .Count();
+                }
+            }
             public int FeatureCount { get { return Entries.Count(e => e.Kind == EntryKind.Feature); } }
         }
 
         /// <summary>Plans a package for the selected layers.</summary>
         /// <param name="layers">The selected layers, in display order.</param>
-        /// <param name="iconsetExists">Tests whether a generated iconset zip is present. Injected
-        /// so a plan is testable without touching <c>%AppData%</c>.</param>
-        public static PackagePlan Plan(IEnumerable<LayerPlanInput> layers, Func<string, bool> iconsetExists)
+        /// <param name="iconsetContents">Lists the files inside a generated iconset zip, or null
+        /// when there is no such iconset. Injected so a plan is testable without touching
+        /// <c>%AppData%</c>. Replaces an earlier "does it exist" probe, because the plan now needs
+        /// to name each file the iconset contains rather than the zip as a whole.</param>
+        public static PackagePlan Plan(IEnumerable<LayerPlanInput> layers,
+            Func<string, IReadOnlyList<string>> iconsetContents)
         {
-            if (iconsetExists == null) iconsetExists = uid => File.Exists(IconsetZipPath(uid));
+            if (iconsetContents == null) iconsetContents = ReadIconsetContents;
 
             var plan = new PackagePlan();
             var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -307,18 +328,36 @@ namespace FeatureLink.Services
 
                 foreach (string uid in referenced)
                 {
-                    // Layers sharing a renderer field share a UID; the zip goes in once.
+                    // Layers sharing a renderer field share a UID; it goes in once.
                     if (!seenIconsets.Add(uid)) continue;
 
-                    if (!iconsetExists(uid)) { plan.MissingIconsets.Add(uid); continue; }
-
-                    plan.Entries.Add(new PlannedEntry
+                    var contents = iconsetContents(uid);
+                    if (contents == null || contents.Count == 0)
                     {
-                        SourcePath = IconsetZipPath(uid),
-                        PackagePath = IconsetFolder + "/" + uid + ".zip",
-                        Uid = "featurelink-iconset-" + uid,
-                        Kind = EntryKind.Iconset,
-                    });
+                        plan.MissingIconsets.Add(uid);
+                        continue;
+                    }
+
+                    // EXPANDED, not embedded. A zip nested inside the package is never unpacked:
+                    // ATAK filed ours whole under atak/attachments/ and no icons were installed.
+                    // A working iconset appears in the package as its own files —
+                    // "<folder>/iconset.xml" beside "<folder>/<Group>/*.png" — which is exactly
+                    // the layout the generated zip already has internally, so each entry is copied
+                    // straight across under a folder named for the uid.
+                    foreach (string inner in contents)
+                    {
+                        if (string.IsNullOrWhiteSpace(inner)) continue;
+                        if (inner.EndsWith("/", StringComparison.Ordinal)) continue;   // directory
+
+                        plan.Entries.Add(new PlannedEntry
+                        {
+                            SourcePath = IconsetZipPath(uid),
+                            SourceZipEntry = inner,
+                            PackagePath = IconsetFolder + "/" + uid + "/" + inner,
+                            Uid = "featurelink-iconset-" + uid,
+                            Kind = EntryKind.Iconset,
+                        });
+                    }
                 }
 
                 plan.Entries.Add(new PlannedEntry
@@ -372,6 +411,28 @@ namespace FeatureLink.Services
                 case EntryKind.Iconset: return 0;
                 case EntryKind.LayerConfig: return 1;
                 default: return 2;   // Feature
+            }
+        }
+
+        /// <summary>The files inside a generated iconset zip, or null when it is not there.
+        /// Never throws: a corrupt or half-written iconset costs its icons, not the package.</summary>
+        public static IReadOnlyList<string> ReadIconsetContents(string uid)
+        {
+            string path = IconsetZipPath(uid);
+            if (!File.Exists(path)) return null;
+
+            try
+            {
+                using (var archive = System.IO.Compression.ZipFile.OpenRead(path))
+                    return archive.Entries
+                        .Select(e => e.FullName)
+                        .Where(n => !string.IsNullOrEmpty(n) && !n.EndsWith("/", StringComparison.Ordinal))
+                        .ToList();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not read the generated iconset " + uid + ": " + ex.Message);
+                return null;
             }
         }
 

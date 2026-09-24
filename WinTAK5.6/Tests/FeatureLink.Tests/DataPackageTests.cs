@@ -24,6 +24,15 @@ namespace FeatureLink.Tests
         private const string UidA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         private const string UidB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+        /// <summary>Stands in for a generated iconset on disk: the two files a minimal one holds.
+        /// The real reader returns exactly this shape — <c>iconset.xml</c> beside a group folder
+        /// of PNGs.</summary>
+        private static readonly Func<string, IReadOnlyList<string>> Iconset2 =
+            uid => new[] { "iconset.xml", "Grp/a.png" };
+
+        /// <summary>No iconset has been generated for this uid.</summary>
+        private static readonly Func<string, IReadOnlyList<string>> NoIconset = uid => null;
+
         private static readonly DateTime Noon = new DateTime(2026, 9, 20, 12, 34, 0, DateTimeKind.Local);
 
         // ── naming ──────────────────────────────────────────────────────────────
@@ -173,22 +182,53 @@ namespace FeatureLink.Tests
             var plan = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0"),
                         Layer("ICP", "https://h/b/FeatureServer/0") },
-                uid => false);
+                NoIconset);
 
             Assert.Equal(2, plan.LayerCount);
             Assert.All(plan.Entries, e => Assert.StartsWith("featurelink/", e.PackagePath));
             Assert.All(plan.Entries, e => Assert.EndsWith(".featurelinkshare", e.PackagePath));
         }
 
+        /// <summary>
+        /// An iconset travels EXPANDED, as its own files, not as a nested zip.
+        ///
+        /// <para>Shipping the generated zip inside the package was the original shape and it never
+        /// worked: ATAK does not unpack a zip within a package, so the whole thing was filed under
+        /// <c>atak/attachments/</c> and no icons were installed. A working iconset appears as
+        /// <c>iconset.xml</c> beside its group folder of PNGs.</para>
+        /// </summary>
         [Fact]
-        public void A_layers_generated_iconset_travels_with_it()
+        public void A_layers_generated_iconset_travels_expanded_not_as_a_nested_zip()
         {
             var plan = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA) },
-                uid => true);
+                Iconset2);
 
-            var iconset = plan.Entries.Single(e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
-            Assert.Equal("iconsets/" + UidA + ".zip", iconset.PackagePath);
+            var paths = plan.Entries
+                .Where(e => e.Kind == DataPackageBuilder.EntryKind.Iconset)
+                .Select(e => e.PackagePath).ToList();
+
+            Assert.Equal(new[] { "iconsets/" + UidA + "/iconset.xml",
+                                 "iconsets/" + UidA + "/Grp/a.png" }, paths);
+            Assert.DoesNotContain(paths, path => path.EndsWith(".zip", StringComparison.Ordinal));
+
+            // One iconset, however many files it expands into.
+            Assert.Equal(1, plan.IconsetCount);
+        }
+
+        /// <summary>Each expanded file names the entry inside the generated zip it is copied
+        /// from, so the writer can pull it across without unpacking to disk.</summary>
+        [Fact]
+        public void An_expanded_iconset_file_points_back_into_the_generated_zip()
+        {
+            var plan = DataPackageBuilder.Plan(
+                new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA) },
+                Iconset2);
+
+            var first = plan.Entries.First(e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
+
+            Assert.Equal("iconset.xml", first.SourceZipEntry);
+            Assert.EndsWith(UidA + ".zip", first.SourcePath);
         }
 
         /// <summary>The recorded UID is what survives a restart; the display config only exists for
@@ -199,14 +239,15 @@ namespace FeatureLink.Tests
             var plan = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0",
                               "{\"up\":\"" + UidB + "/Grp/b.png\"}", UidA) },
-                uid => true);
+                Iconset2);
 
             var packaged = plan.Entries
                 .Where(e => e.Kind == DataPackageBuilder.EntryKind.Iconset)
                 .Select(e => e.PackagePath).ToList();
 
-            Assert.Contains("iconsets/" + UidA + ".zip", packaged);
-            Assert.Contains("iconsets/" + UidB + ".zip", packaged);
+            Assert.Contains("iconsets/" + UidA + "/iconset.xml", packaged);
+            Assert.Contains("iconsets/" + UidB + "/iconset.xml", packaged);
+            Assert.Equal(2, plan.IconsetCount);
         }
 
         [Fact]
@@ -215,7 +256,7 @@ namespace FeatureLink.Tests
             var plan = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA),
                         Layer("ICP", "https://h/b/FeatureServer/0", null, UidA) },
-                uid => true);
+                Iconset2);
 
             Assert.Equal(2, plan.LayerCount);
             Assert.Equal(1, plan.IconsetCount);
@@ -226,7 +267,7 @@ namespace FeatureLink.Tests
         {
             var plan = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA) },
-                uid => false);
+                NoIconset);
 
             Assert.Equal(0, plan.IconsetCount);
             Assert.Equal(new[] { UidA }, plan.MissingIconsets.ToArray());
@@ -242,7 +283,7 @@ namespace FeatureLink.Tests
             var plan = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0"),
                         Layer("Teams", "https://h/b/FeatureServer/0") },
-                uid => false);
+                NoIconset);
 
             var paths = plan.Entries.Select(e => e.PackagePath).ToList();
             Assert.Equal(2, paths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
@@ -255,7 +296,7 @@ namespace FeatureLink.Tests
             var plan = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0"),
                         Layer("Teams", "https://h/a/FeatureServer/0") },
-                uid => false);
+                NoIconset);
 
             var paths = plan.Entries.Select(e => e.PackagePath).ToList();
             Assert.Equal(2, paths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
@@ -267,7 +308,7 @@ namespace FeatureLink.Tests
             var plan = DataPackageBuilder.Plan(
                 new[] { new DataPackageBuilder.LayerPlanInput { Name = "Teams", Url = "https://h/a" },
                         null },
-                uid => false);
+                NoIconset);
 
             Assert.Empty(plan.Entries);
             Assert.Equal("nothing selected", DataPackageBuilder.Describe(plan));
@@ -286,7 +327,7 @@ namespace FeatureLink.Tests
                 .ToList();
 
             Assert.Equal(expected, DataPackageBuilder.Describe(
-                DataPackageBuilder.Plan(inputs, uid => true)));
+                DataPackageBuilder.Plan(inputs, Iconset2)));
         }
 
         // ── selected features ───────────────────────────────────────────────────
@@ -308,7 +349,7 @@ namespace FeatureLink.Tests
         {
             var plan = DataPackageBuilder.Plan(
                 new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1", "f2") },
-                uid => false);
+                NoIconset);
 
             Assert.Equal(1, plan.LayerCount);
             Assert.Equal(2, plan.FeatureCount);
@@ -324,7 +365,7 @@ namespace FeatureLink.Tests
         public void A_layer_with_no_listed_features_carries_only_its_config()
         {
             var plan = DataPackageBuilder.Plan(
-                new[] { Layer("Teams", "https://h/a/FeatureServer/0") }, uid => false);
+                new[] { Layer("Teams", "https://h/a/FeatureServer/0") }, NoIconset);
 
             Assert.Equal(1, plan.LayerCount);
             Assert.Equal(0, plan.FeatureCount);
@@ -341,7 +382,7 @@ namespace FeatureLink.Tests
                 new DataPackageBuilder.FeatureContent { Uid = null, CotXml = "<event/>" },
             };
 
-            var plan = DataPackageBuilder.Plan(new[] { layer }, uid => false);
+            var plan = DataPackageBuilder.Plan(new[] { layer }, NoIconset);
 
             Assert.Equal(1, plan.FeatureCount);
         }
@@ -354,7 +395,7 @@ namespace FeatureLink.Tests
             var plan = DataPackageBuilder.Plan(
                 new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "shared"),
                         LayerWithFeatures("ICP", "https://h/b/FeatureServer/0", "shared") },
-                uid => false);
+                NoIconset);
 
             Assert.Equal(2, plan.LayerCount);
             Assert.Equal(1, plan.FeatureCount);
@@ -365,7 +406,7 @@ namespace FeatureLink.Tests
         {
             var plan = DataPackageBuilder.Plan(
                 new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1", "f2") },
-                uid => false);
+                NoIconset);
 
             Assert.Equal("2 features from 1 layer, no iconsets", DataPackageBuilder.Describe(plan));
         }
@@ -377,7 +418,7 @@ namespace FeatureLink.Tests
             {
                 var plan = DataPackageBuilder.Plan(
                     new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1") },
-                    uid => false);
+                    NoIconset);
 
                 var result = DataPackageWriter.Write(plan, "Pkg", Path.Combine(dir.Path, "out.zip"));
                 var entries = ReadZip(result.Path);
@@ -403,7 +444,7 @@ namespace FeatureLink.Tests
             var layer = LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1", "f2");
             layer.IconsetUids = new[] { UidA };
 
-            var plan = DataPackageBuilder.Plan(new[] { layer }, uid => true);
+            var plan = DataPackageBuilder.Plan(new[] { layer }, Iconset2);
 
             int lastIconset = plan.Entries.FindLastIndex(
                 e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
@@ -426,7 +467,7 @@ namespace FeatureLink.Tests
             var b = LayerWithFeatures("ICP", "https://h/b/FeatureServer/0", "f2");
             b.IconsetUids = new[] { UidB };
 
-            var plan = DataPackageBuilder.Plan(new[] { a, b }, uid => true);
+            var plan = DataPackageBuilder.Plan(new[] { a, b }, Iconset2);
 
             int lastIconset = plan.Entries.FindLastIndex(
                 e => e.Kind == DataPackageBuilder.EntryKind.Iconset);
@@ -446,7 +487,7 @@ namespace FeatureLink.Tests
             var plan = DataPackageBuilder.Plan(
                 new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0",
                                           "f1", "f2", "f3", "f4", "f5") },
-                uid => true);
+                Iconset2);
 
             var features = plan.Entries
                 .Where(e => e.Kind == DataPackageBuilder.EntryKind.Feature)
@@ -495,7 +536,7 @@ namespace FeatureLink.Tests
         {
             return DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA) },
-                uid => true);
+                Iconset2);
         }
 
         [Fact]
@@ -552,18 +593,35 @@ namespace FeatureLink.Tests
                 c => Assert.Equal("false", c.Attribute("ignore").Value));
         }
 
+        /// <summary>
+        /// ONLY CoT content carries a uid parameter.
+        ///
+        /// <para>An earlier version of this test asserted the opposite — that every content
+        /// element carries one — and that was the bug, not the contract. In ATAK a
+        /// <c>uid</c> parameter means "this content is an attachment of the CoT item with that
+        /// uid". Our iconsets and layer configs carried uids matching no item, so both were filed
+        /// into <c>atak/attachments/&lt;uid&gt;/</c> as orphan folders and neither was ever
+        /// imported. Real packages carry a uid only on CoT.</para>
+        /// </summary>
         [Fact]
-        public void Each_content_element_carries_a_uid()
+        public void Only_cot_content_carries_a_uid_parameter()
         {
-            var manifest = DataPackageWriter.BuildManifest(SimplePlan(), "Pkg", "uid-1");
+            var plan = DataPackageBuilder.Plan(
+                new[] { LayerWithFeatures("Teams", "https://h/a/FeatureServer/0", "f1") },
+                Iconset2);
+            var manifest = DataPackageWriter.BuildManifest(plan, "Pkg", "uid-1");
 
             foreach (var content in manifest.Root.Element("Contents").Elements("Content"))
             {
-                string uid = content.Elements("Parameter")
-                    .Where(p => p.Attribute("name").Value == "uid")
-                    .Select(p => p.Attribute("value").Value).SingleOrDefault();
+                string path = content.Attribute("zipEntry").Value;
+                bool hasUid = content.Elements("Parameter")
+                    .Any(p => p.Attribute("name").Value == "uid");
 
-                Assert.False(string.IsNullOrEmpty(uid));
+                if (path.StartsWith(DataPackageBuilder.FeatureFolder + "/", StringComparison.Ordinal))
+                    Assert.True(hasUid, "CoT content should carry its uid: " + path);
+                else
+                    Assert.False(hasUid,
+                        "a uid here makes ATAK file it as an attachment: " + path);
             }
         }
 
@@ -643,7 +701,7 @@ namespace FeatureLink.Tests
             var bigger = DataPackageBuilder.Plan(
                 new[] { Layer("Teams", "https://h/a/FeatureServer/0", null, UidA),
                         Layer("ICP", "https://h/b/FeatureServer/0") },
-                uid => true);
+                Iconset2);
             Assert.NotEqual(DataPackageWriter.PackageUid(plan, "Pkg"),
                             DataPackageWriter.PackageUid(bigger, "Pkg"));
         }

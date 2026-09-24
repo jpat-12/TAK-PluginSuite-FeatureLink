@@ -74,10 +74,19 @@ namespace FeatureLink.Services
             var contents = new XElement("Contents");
             foreach (var entry in plan.Entries)
             {
-                contents.Add(new XElement("Content",
+                var content = new XElement("Content",
                     new XAttribute("ignore", "false"),
-                    new XAttribute("zipEntry", entry.PackagePath),
-                    Parameter("uid", entry.Uid)));
+                    new XAttribute("zipEntry", entry.PackagePath));
+
+                // A uid parameter means "this content is an ATTACHMENT of the CoT item with that
+                // uid". Putting one on an iconset or a layer config sent both into
+                // atak/attachments/<uid>/ as orphan folders and nothing was ever imported — the
+                // observed failure. Real packages carry a uid only on CoT content; other files
+                // carry none, and are extracted to the package's own files directory.
+                if (entry.Kind == DataPackageBuilder.EntryKind.Feature)
+                    content.Add(Parameter("uid", entry.Uid));
+
+                contents.Add(content);
             }
 
             return new XDocument(
@@ -182,7 +191,12 @@ namespace FeatureLink.Services
                                     result.Skipped.Add(entry.DisplayName);
                                     continue;
                                 }
-                                WriteFile(archive, entry.PackagePath, entry.SourcePath);
+
+                                if (string.IsNullOrEmpty(entry.SourceZipEntry))
+                                    WriteFile(archive, entry.PackagePath, entry.SourcePath);
+                                else
+                                    WriteFromZip(archive, entry.PackagePath,
+                                                 entry.SourcePath, entry.SourceZipEntry);
                             }
                             written.Add(entry);
                         }
@@ -277,6 +291,27 @@ namespace FeatureLink.Services
             using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
             {
                 writer.Write(content);
+            }
+        }
+
+        /// <summary>Copies one entry out of a source zip and into the package, so an iconset
+        /// arrives as its own files rather than as a zip nobody unpacks.</summary>
+        private static void WriteFromZip(ZipArchive archive, string entryPath,
+            string sourceZipPath, string sourceEntry)
+        {
+            using (var source = ZipFile.OpenRead(sourceZipPath))
+            {
+                var found = source.GetEntry(sourceEntry);
+                if (found == null)
+                    throw new FileNotFoundException(
+                        "\"" + sourceEntry + "\" is not in " + Path.GetFileName(sourceZipPath));
+
+                var target = archive.CreateEntry(entryPath, CompressionLevel.Optimal);
+                using (var to = target.Open())
+                using (var from = found.Open())
+                {
+                    from.CopyTo(to);
+                }
             }
         }
 
