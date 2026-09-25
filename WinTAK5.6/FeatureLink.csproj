@@ -178,6 +178,9 @@
     <Compile Include="Views\ContactMultiPickerWindow.xaml.cs">
       <DependentUpon>ContactMultiPickerWindow.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Views\SubLayerPickerWindow.xaml.cs">
+      <DependentUpon>SubLayerPickerWindow.xaml</DependentUpon>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup>
@@ -194,6 +197,10 @@
       <SubType>Designer</SubType>
     </Page>
     <Page Include="Views\ContactMultiPickerWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="Views\SubLayerPickerWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>

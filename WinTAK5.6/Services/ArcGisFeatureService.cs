@@ -236,6 +236,183 @@ namespace FeatureLink.Services
             return null;
         }
 
+        // ---------------------------------------------------------------------
+        // Sublayer enumeration (C-08)
+        // ---------------------------------------------------------------------
+
+        /// <summary>One queryable sublayer of a FeatureServer or MapServer.</summary>
+        public sealed class SubLayerRef
+        {
+            public int Id { get; set; }
+            public string Name { get; set; }
+            public string GeometryType { get; set; }
+
+            /// <summary>Fully-qualified URL, <c>&lt;serviceRoot&gt;/&lt;id&gt;</c>. This, not the
+            /// service root, is what an <see cref="ArcGisLayer"/> is keyed by — so every existing
+            /// URL-keyed structure (display configs, iconset uids, extents, the marker map, the
+            /// dedupe checks) keeps working with no change at all.</summary>
+            public string Url { get; set; }
+
+            /// <summary>What the picker shows: the layer's own name, with its geometry as a hint
+            /// so an operator can tell a point layer from the lines drawn over it.</summary>
+            public string Display
+            {
+                get
+                {
+                    string name = string.IsNullOrWhiteSpace(Name) ? "Layer " + Id : Name;
+                    string kind = FriendlyGeometry(GeometryType);
+                    return kind == null ? name : name + "  (" + kind + ")";
+                }
+            }
+
+            internal static string FriendlyGeometry(string esri)
+            {
+                if (string.IsNullOrEmpty(esri)) return null;
+                switch (esri)
+                {
+                    case "esriGeometryPoint": return "points";
+                    case "esriGeometryMultipoint": return "points";
+                    case "esriGeometryPolyline": return "lines";
+                    case "esriGeometryPolygon": return "areas";
+                    default: return null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Lists the sublayers of a FeatureServer, so a multi-layer service becomes N selectable
+        /// layers instead of silently collapsing to layer 0.
+        ///
+        /// <para><b>The defect this closes.</b> <see cref="EnsureLayerIndex"/> appends <c>/0</c> to
+        /// a bare service root and nothing ever enumerated the rest, so adding a five-layer
+        /// FeatureServer gave the operator one layer with no error, no warning and nothing in the
+        /// log. It is silent data loss in the plugin's core function, and it is the likeliest
+        /// explanation for two field reports: "most of the layers weren't being downloaded", and a
+        /// line layer reporting zero features.</para>
+        ///
+        /// <para>A URL already addressing a sublayer returns exactly that one, so pasting
+        /// <c>…/FeatureServer/3</c> still means layer 3. A service that advertises no
+        /// <c>layers</c> array, or a request that fails, returns an EMPTY list and the caller
+        /// falls back to the legacy <c>/0</c> — never drop the layer because enumeration did not
+        /// work.</para>
+        /// </summary>
+        public async Task<List<SubLayerRef>> ListSubLayersAsync(string serviceUrl, string token,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            string url = CanonicalServiceUrl(serviceUrl);
+            if (string.IsNullOrEmpty(url)) return new List<SubLayerRef>();
+
+            // Already pointed at one sublayer: fetch its metadata so the picker can name it, but
+            // never widen the operator's explicit choice to the whole service.
+            if (LayerIndexOf(url) >= 0)
+            {
+                var single = new SubLayerRef
+                {
+                    Id = LayerIndexOf(url),
+                    Url = url,
+                    Name = string.Empty,
+                    GeometryType = string.Empty,
+                };
+                try
+                {
+                    var meta = await ArcGisHttp.GetJsonAsync(_http, url + "?f=json", token,
+                        cancellationToken).ConfigureAwait(false);
+                    single.Name = (string)meta["name"] ?? string.Empty;
+                    single.GeometryType = (string)meta["geometryType"] ?? string.Empty;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // A name is cosmetic; the url is what matters and we already have it.
+                    Log.Info("Could not read metadata for " + Log.Redact(url) + ": " + ex.Message);
+                }
+                return new List<SubLayerRef> { single };
+            }
+
+            if (!IsServiceRoot(url)) return new List<SubLayerRef>();
+
+            JObject root;
+            try
+            {
+                root = await ArcGisHttp.GetJsonAsync(_http, url + "?f=json", token, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not list sublayers of " + Log.Redact(url) + ": " + ex.Message);
+                return new List<SubLayerRef>();
+            }
+
+            return ParseSubLayers(root, url);
+        }
+
+        /// <summary>The parsing half of <see cref="ListSubLayersAsync"/>, split out so the rules
+        /// below are tested against fixtures rather than against a live service.</summary>
+        internal static List<SubLayerRef> ParseSubLayers(JObject root, string serviceRootUrl)
+        {
+            var found = new List<SubLayerRef>();
+            if (root == null || string.IsNullOrEmpty(serviceRootUrl)) return found;
+
+            string baseUrl = serviceRootUrl.TrimEnd('/');
+            var layers = root["layers"] as JArray;
+            if (layers == null) return found;
+
+            foreach (var entry in layers.OfType<JObject>())
+            {
+                // A GROUP layer has subLayerIds, no geometry of its own, and cannot be queried.
+                // Offering it would give the operator a row that can only ever fail to download.
+                var groupChildren = entry["subLayerIds"];
+                if (groupChildren != null && groupChildren.Type != JTokenType.Null) continue;
+
+                int? id = SubLayerId(entry["id"]);
+                if (id == null || id.Value < 0) continue;
+
+                found.Add(new SubLayerRef
+                {
+                    Id = id.Value,
+                    Name = (string)entry["name"] ?? string.Empty,
+                    GeometryType = (string)entry["geometryType"] ?? string.Empty,
+                    Url = baseUrl + "/" + id.Value.ToString(CultureInfo.InvariantCulture),
+                });
+            }
+
+            return found;
+        }
+
+        /// <summary>A layer id from the service metadata, or null when it is absent or not a
+        /// number. ArcGIS has been seen to send these as both JSON numbers and strings.</summary>
+        private static int? SubLayerId(JToken token)
+        {
+            if (token == null || token.Type == JTokenType.Null) return null;
+            if (token.Type == JTokenType.Integer) return (int)token;
+
+            int parsed;
+            return int.TryParse(token.ToString(), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out parsed) ? parsed : (int?)null;
+        }
+
+        /// <summary>True when the URL ends at a FeatureServer/MapServer root with no layer id.</summary>
+        internal static bool IsServiceRoot(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return false;
+            string trimmed = url.TrimEnd('/');
+            return trimmed.EndsWith("FeatureServer", StringComparison.OrdinalIgnoreCase)
+                || trimmed.EndsWith("MapServer", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Strips a query string and trailing slashes, leaving the bare service or layer
+        /// URL. Shared by enumeration and <see cref="EnsureLayerIndex"/> so the two can never
+        /// disagree about what a URL points at.</summary>
+        internal static string CanonicalServiceUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return string.Empty;
+            string trimmed = url.Trim().TrimEnd('/');
+            int query = trimmed.IndexOf('?');
+            if (query >= 0) trimmed = trimmed.Substring(0, query).TrimEnd('/');
+            return trimmed;
+        }
+
         /// <summary>The sublayer index a canonical layer URL addresses, or -1 when it has none.
         /// Used to pick the right entry out of an item's <c>layers[]</c> override list.</summary>
         public static int LayerIndexOf(string layerUrl)
@@ -1204,18 +1381,21 @@ namespace FeatureLink.Services
 
         /// <summary>Ensures the URL points at a specific layer index of a FeatureServer/MapServer.
         /// A URL that already carries an index is left alone; one that ends at the service root
-        /// gets <c>/0</c> appended, which is the plugin's documented single-sublayer limitation.</summary>
+        /// gets <c>/0</c> appended.
+        ///
+        /// <para>This used to BE the sublayer story, and it was silent data loss: a five-layer
+        /// service became layer 0 with no warning. <see cref="ListSubLayersAsync"/> now enumerates
+        /// before this is reached, so the <c>/0</c> is a genuine fallback for a service that
+        /// advertises no layers array rather than the normal path.</para></summary>
         internal static string EnsureLayerIndex(string url)
         {
-            if (string.IsNullOrEmpty(url)) return string.Empty;
-            url = url.Trim().TrimEnd('/');
-            int q = url.IndexOf('?');
-            if (q >= 0) url = url.Substring(0, q).TrimEnd('/');
+            string canonical = CanonicalServiceUrl(url);
+            if (canonical.Length == 0) return string.Empty;
 
-            if (url.EndsWith("FeatureServer", StringComparison.OrdinalIgnoreCase)
-                || url.EndsWith("MapServer", StringComparison.OrdinalIgnoreCase))
-                return url + "/0";
-            return url;
+            // Still the last-resort fallback, and now only that: Add Layer enumerates first via
+            // ListSubLayersAsync, so this is reached for a service that advertises no layers array
+            // or whose enumeration failed. Dropping the layer instead would be worse.
+            return IsServiceRoot(canonical) ? canonical + "/0" : canonical;
         }
     }
 }
