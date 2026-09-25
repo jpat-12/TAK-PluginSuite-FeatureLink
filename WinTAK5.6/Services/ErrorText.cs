@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -43,6 +43,58 @@ namespace FeatureLink.Services
         /// advice materially: "sign in" and "sign in again" are different instructions, and
         /// telling a signed-in operator to sign in is how you get eleven retries.
         /// </summary>
+        /// <summary>
+        /// Turns a mission-package transfer failure into something an operator can act on.
+        /// </summary>
+        ///
+        /// <para>The raw failure is a Commo enum name. The one seen in the field was
+        /// <c>CommoIllegalArgument</c>, shown to the operator as nothing but "Failed to send Data
+        /// Package" — which names no cause and suggests no action. The log line underneath said
+        /// what had actually happened: <c>MP Send init failed to find usable endpoints for any of
+        /// the given destination contacts</c>. That is not a problem with the package; it is
+        /// Commo rejecting the destination list before it reads the file at all.</para>
+        ///
+        /// <param name="error">The error code or enum name from the host.</param>
+        /// <param name="message">Any additional detail the host supplied.</param>
+        public static string ForPackageTransfer(string error, string message)
+        {
+            string combined = ((error ?? string.Empty) + " " + (message ?? string.Empty)).Trim();
+            string lower = combined.ToLowerInvariant();
+
+            // Commo rejects the whole transfer when it cannot resolve an endpoint for ANY
+            // destination, so this is the common failure whenever the server link is degraded.
+            if (lower.Contains("illegalargument") || lower.Contains("endpoint"))
+            {
+                return "there is no route to the selected contacts right now. They may be offline, "
+                     + "or the server connection may not be carrying data packages. The package is "
+                     + "saved — send it again later, or share the file directly.";
+            }
+
+            if (lower.Contains("contactgone"))
+                return "the contact went offline before the transfer finished. The package is saved.";
+
+            if (lower.Contains("timedout") || lower.Contains("timeout"))
+                return "the transfer timed out. The package is saved — try again.";
+
+            if (lower.Contains("serveruploadfailed") || lower.Contains("upload"))
+            {
+                return "the server would not accept the upload. Check the server connection; the "
+                     + "package is saved and can be sent again.";
+            }
+
+            if (lower.Contains("fileexists"))
+                return "the recipient already has a package with this name.";
+
+            if (lower.Contains("disabledlocally"))
+                return "package transfers are disabled in this client's settings.";
+
+            if (combined.Length == 0) return "the transfer failed. The package is saved.";
+
+            // Unknown code: show it rather than inventing an explanation, but still say what the
+            // operator can do about it.
+            return Clean(combined) + ". The package is saved — try again, or share the file directly.";
+        }
+
         public static string ForOperator(Exception ex, bool signedIn = false)
         {
             if (ex == null) return "Something went wrong.";

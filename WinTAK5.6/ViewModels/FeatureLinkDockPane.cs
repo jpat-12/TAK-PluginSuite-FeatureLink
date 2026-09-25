@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -109,8 +109,101 @@ namespace FeatureLink.ViewModels
         /// plugin because the host did not export this contract would be a wildly
         /// disproportionate failure. Null simply means the affordance does nothing, and says so
         /// in the log.</para></summary>
+        /// <summary>WinTAK's package list, so a package FeatureLink creates is findable in the
+        /// host afterwards rather than being only a file on disk.
+        ///
+        /// <para>A property import with <c>AllowDefault</c>, for the same reason as
+        /// <see cref="MapViewController"/> below: an unsatisfied constructor import fails MEF
+        /// composition and the whole dock pane never loads. Listing is an enhancement on top of a
+        /// package that is written and sent either way, so its absence must cost only the listing.
+        /// </para></summary>
         [Import(AllowDefault = true)]
-        public WinTak.Display.IMapViewController MapViewController { get; set; }
+        public WinTak.MissionPackages.IMissionPackageService MissionPackageService
+        {
+            get { return _missionPackageService; }
+            set
+            {
+                if (ReferenceEquals(_missionPackageService, value)) return;
+
+                Unsubscribe(_missionPackageService);
+                _missionPackageService = value;
+                Subscribe(_missionPackageService);
+            }
+        }
+        private WinTak.MissionPackages.IMissionPackageService _missionPackageService;
+
+        private void Subscribe(WinTak.MissionPackages.IMissionPackageService service)
+        {
+            if (service == null) return;
+            try
+            {
+                service.MissionPackageSent += OnMissionPackageSent;
+                service.MissionPackageTransferFailed += OnMissionPackageTransferFailed;
+            }
+            catch (Exception ex) { Log.Warn("Could not watch package transfers: " + ex.Message); }
+        }
+
+        private void Unsubscribe(WinTak.MissionPackages.IMissionPackageService service)
+        {
+            if (service == null) return;
+            try
+            {
+                service.MissionPackageSent -= OnMissionPackageSent;
+                service.MissionPackageTransferFailed -= OnMissionPackageTransferFailed;
+            }
+            catch (Exception ex) { Log.Warn("Could not stop watching package transfers: " + ex.Message); }
+        }
+
+        /// <summary>True when a transfer event is about a package this plugin built, so the panel
+        /// does not narrate other plugins' transfers.</summary>
+        private static bool IsOurs(WinTak.MissionPackages.MissionPackage package)
+        {
+            return package != null && package.Uid != null
+                && package.Uid.StartsWith(Services.PackageLibrary.UidPrefix, StringComparison.Ordinal);
+        }
+
+        private void OnMissionPackageSent(object sender,
+            WinTak.MissionPackages.MissionPackageSentEventArgs e)
+        {
+            try
+            {
+                if (!IsOurs(e?.Package)) return;
+                RunOnUi(() => SetStatus($"Sent \"{e.Package.Name}\"."));
+            }
+            catch (Exception ex) { Log.Warn("Could not report a completed send: " + ex.Message); }
+        }
+
+        private void OnMissionPackageTransferFailed(object sender,
+            WinTak.MissionPackages.MissionPackageErrorEventArgs e)
+        {
+            try
+            {
+                if (!IsOurs(e?.Package)) return;
+
+                string name = e.Package.Name;
+                string reason = ErrorText.ForPackageTransfer(e.Error, e.Message);
+                Log.Error($"Data package \"{name}\" failed to transfer: {e.Error} {e.Message}");
+                RunOnUi(() => SetStatus($"Could not send \"{name}\" — {reason}"));
+            }
+            catch (Exception ex) { Log.Warn("Could not report a failed send: " + ex.Message); }
+        }
+
+
+
+        [Import(AllowDefault = true)]
+        public WinTak.Display.IMapViewController MapViewController
+        {
+            get { return _mapViewController; }
+            set
+            {
+                _mapViewController = value;
+                // The concrete MapViewControl also implements TAKEngine.Core.RenderContext, which
+                // is IconsetInstaller's only route onto the render thread. Handed over here
+                // because MEF sets this after construction, so the installer cannot ask for it.
+                IconsetInstaller.RenderHost = value;
+            }
+        }
+        private WinTak.Display.IMapViewController _mapViewController;
 
         private readonly ArcGisAuthService _authService = new ArcGisAuthService();
         private readonly ArcGisFeatureService _restClient = new ArcGisFeatureService();
@@ -165,12 +258,18 @@ namespace FeatureLink.ViewModels
 
         public ICommand NavigateHomeCommand { get; }
         public ICommand NavigateLayersCommand { get; }
+        public ICommand NavigatePackageCommand { get; }
         public ICommand NavigatePliCommand { get; }
 
         private void NavigatePage(int page)
         {
-            if (page < 0 || page > 2) return;
+            if (page < 0 || page > 3) return;   // HOME, LAYERS, PACKAGES, PLI
             CurrentTabIndex = page;
+
+            // Read the folder when the tab is opened rather than on a timer: packages can be
+            // deleted from WinTAK's own list or from Explorer, and a stale listing offering a Send
+            // button for a file that is gone is worse than a moment's work here.
+            if (page == 2) Guard(() => PackageLibrary.Refresh(), "list built packages");
         }
 
         // -------------------------------------------------------------------------
@@ -441,6 +540,13 @@ namespace FeatureLink.ViewModels
         public ICommand DownloadLayerCommand { get; }
         public ICommand RemoveLayerCommand { get; }
         public ICommand ShareLayerCommand { get; }
+
+        /// <summary>Opens the data-package dialog: pick layers, pick contacts, send.</summary>
+        public ICommand CreateDataPackageCommand { get; }
+
+        /// <summary>Opens the PACKAGE tab and begins the workflow. A non-null layer pre-selects
+        /// everything in it, which is what the per-layer button does.</summary>
+        public ICommand StartPackageWorkflowCommand { get; }
         public ICommand ToggleLayerVisibilityCommand { get; }
         public ICommand PliActionCommand { get; }
 
@@ -461,9 +567,15 @@ namespace FeatureLink.ViewModels
             _contactService = contactService;
             _dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
 
+            // Resolves MapViewController lazily: MEF sets that import after this constructor.
+            _mapSelector = new MapAreaSelector(() => MapViewController);
+            Package = CreatePackageWorkflow();
+            PackageLibrary = CreatePackageLibrary();
+
             NavigateHomeCommand = new DelegateCommand(() => NavigatePage(0));
             NavigateLayersCommand = new DelegateCommand(() => NavigatePage(1));
-            NavigatePliCommand = new DelegateCommand(() => NavigatePage(2));
+            NavigatePackageCommand = new DelegateCommand(() => NavigatePage(2));
+            NavigatePliCommand = new DelegateCommand(() => NavigatePage(3));
 
             ShowAccountPageCommand = new DelegateCommand(ShowAccountPage);
             ShowAddLayerPageCommand = new DelegateCommand(ShowAddLayerPage);
@@ -513,6 +625,8 @@ namespace FeatureLink.ViewModels
                 layer => Guard(() => OnRemoveLayer(layer), "remove layer"));
             ShareLayerCommand = new DelegateCommand<ArcGisLayer>(
                 layer => Guard(() => OnShareLayer(layer), "share layer"));
+            CreateDataPackageCommand = new DelegateCommand(
+                () => Guard(OnCreateDataPackage, "create data package"));
             ToggleLayerVisibilityCommand = new DelegateCommand<ArcGisLayer>(
                 layer => Guard(() => OnToggleLayerVisibility(layer), "toggle layer visibility"));
             PliActionCommand = new DelegateCommand(() =>
@@ -520,6 +634,9 @@ namespace FeatureLink.ViewModels
                 if (IsPliJoinMode) Guard(OnJoinPliLayer, "join PLI layer");
                 else RunGuarded(OnCreatePliLayerAsync(), "create PLI layer");
             });
+
+            StartPackageWorkflowCommand = new DelegateCommand<ArcGisLayer>(
+                layer => Guard(() => { NavigatePage(2); Package.Start(layer); }, "start data package"));
 
             LoadSettings();
             StartRecurrenceTimer();
@@ -1117,14 +1234,15 @@ namespace FeatureLink.ViewModels
             }
 
             var contacts = new List<ContactPickerWindow.ContactRow>();
-            foreach (var c in _contactService.AllContacts ?? Enumerable.Empty<Contact>())
-            {
-                if (c == null || string.IsNullOrEmpty(c.Uid)) continue;
-                contacts.Add(new ContactPickerWindow.ContactRow(c.Name ?? c.Uid, c.Uid));
-            }
+            foreach (var row in ContactRows())
+                contacts.Add(new ContactPickerWindow.ContactRow(row.Item2, row.Item1));
+
             if (contacts.Count == 0)
             {
-                SetStatus("No contacts available to share with.");
+                SetStatus(_unreachableContactCount > 0
+                    ? $"No contacts can be reached right now ({_unreachableContactCount} known but "
+                      + "with no route). Check the server connection."
+                    : "No contacts available to share with.");
                 return;
             }
 
@@ -1163,6 +1281,510 @@ namespace FeatureLink.ViewModels
                 // in %TEMP% forever on a shared workstation.
                 TryDeleteLater(filePath);
             }
+        }
+
+        // -------------------------------------------------------------------------
+        // Data package (multi-layer, multi-contact)
+        // -------------------------------------------------------------------------
+
+        /// <summary>Every layer the operator could put in a package, in the order the panel shows
+        /// them. Browse-list entries are excluded: a layer that has never been downloaded has no
+        /// symbology derived and no icons generated, so packaging it would ship a bare URL and a
+        /// recipient who cannot reach ArcGIS would get nothing at all.</summary>
+        private List<ArcGisLayer> PackageableLayers()
+        {
+            return SharedPrivateLayers.Concat(PublicLayers)
+                .Where(l => l != null && !string.IsNullOrEmpty(l.Url) && l.LastSyncTicks > 0)
+                .ToList();
+        }
+
+        /// <summary>Turns a layer into the planner's view of it.</summary>
+        private DataPackageBuilder.LayerPlanInput ToPlanInput(ArcGisLayer layer)
+        {
+            // Both the explicit and the auto-derived configs can carry icon references, and a layer
+            // can have either. They are wrapped in an array so one parse covers both.
+            var configs = new JArray();
+            foreach (string json in new[] { layer.SymJson, layer.AutoSymJson })
+            {
+                if (string.IsNullOrWhiteSpace(json)) continue;
+                try { configs.Add(JToken.Parse(json)); }
+                catch (Exception ex)
+                {
+                    Log.Warn($"Ignoring unparseable display config on \"{layer.Name}\": {ex.Message}");
+                }
+            }
+
+            return new DataPackageBuilder.LayerPlanInput
+            {
+                Name = layer.Name,
+                Url = layer.Url,
+                ConfigJson = BuildShareConfigJson(layer),
+                DisplayConfigJson = configs.Count > 0
+                    ? configs.ToString(Newtonsoft.Json.Formatting.None) : null,
+                IconsetUids = (layer.IconsetUids ?? string.Empty)
+                    .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries),
+            };
+        }
+
+        private DataPackageBuilder.PackagePlan PlanFor(IEnumerable<string> layerUrls)
+        {
+            var byUrl = new Dictionary<string, ArcGisLayer>(StringComparer.Ordinal);
+            foreach (var layer in PackageableLayers()) byUrl[layer.Url] = layer;
+
+            var inputs = new List<DataPackageBuilder.LayerPlanInput>();
+            foreach (string url in layerUrls ?? Enumerable.Empty<string>())
+            {
+                ArcGisLayer layer;
+                if (byUrl.TryGetValue(url, out layer)) inputs.Add(ToPlanInput(layer));
+            }
+            return DataPackageBuilder.Plan(inputs, null);
+        }
+
+        private void OnCreateDataPackage()
+        {
+            var layers = PackageableLayers();
+            if (layers.Count == 0)
+            {
+                SetStatus("No downloaded layers to package — sync a layer first.");
+                return;
+            }
+
+            var layerRows = layers
+                .Select(l => new DataPackageWindow.SelectableRow(l.Url, l.Name, l.FeatureCountText))
+                .ToList();
+
+            var contactRows = new List<DataPackageWindow.SelectableRow>();
+            foreach (var row in ContactRows())
+                contactRows.Add(new DataPackageWindow.SelectableRow(row.Item1, row.Item2));
+
+            var dialog = new DataPackageWindow(layerRows, contactRows,
+                urls => DataPackageBuilder.Describe(PlanFor(urls)));
+            var owner = Application.Current?.MainWindow;
+            if (owner != null) dialog.Owner = owner;
+
+            if (dialog.ShowDialog() != true) return;
+
+            var plan = PlanFor(dialog.SelectedLayerKeys);
+            if (plan.Entries.Count == 0)
+            {
+                SetStatus("Nothing could be packaged from that selection.");
+                return;
+            }
+
+            // Same delivery path as the PACKAGE tab, so both write to WinTAK's Data Packages
+            // folder, both register with the host, and neither can drift from the other in where
+            // a package ends up or what the operator is told.
+            var result = DeliverPackage(plan, dialog.PackageName,
+                dialog.SelectedContactUids, !dialog.SaveToFileRequested);
+
+            if (result != null && !string.IsNullOrEmpty(result.Message)) SetStatus(result.Message);
+        }
+
+        /// <summary>Deletes a staged package immediately, for the path where no send was started.</summary>
+        private static void TryDelete(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            try { if (File.Exists(path)) File.Delete(path); }
+            catch (Exception ex) { Log.Warn("Could not delete the unsent package file: " + ex.Message); }
+        }
+
+        /// <summary>This machine's callsign, for the package record's "who made it" field.
+        /// Falls back to the self UID and then to a literal, because a package with a blank
+        /// creator reads as corrupt in the host's list.</summary>
+        private string SelfCallsign()
+        {
+            try
+            {
+                var self = _locationService?.GetSelfCotEvent();
+                string callsign = self?.Detail?.GetDetailAttribute("contact", "callsign");
+                if (!string.IsNullOrWhiteSpace(callsign)) return callsign;
+                if (!string.IsNullOrWhiteSpace(self?.Uid)) return self.Uid;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not read this machine's callsign: " + ex.Message);
+            }
+            return "FeatureLink";
+        }
+
+        /// <summary>Asks where to save a package. Returns null when the operator cancels.</summary>
+        private static string AskWhereToSave(string packageName)
+        {
+            string folder = MissionPackageRegistrar.PackagesFolder;
+            try { if (!string.IsNullOrEmpty(folder)) Directory.CreateDirectory(folder); }
+            catch (Exception ex) { Log.Warn("Could not prepare the packages folder: " + ex.Message); }
+
+            var save = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save data package",
+                // Opens where WinTAK keeps packages, so the default action also produces a listed
+                // one; the operator can still navigate anywhere.
+                InitialDirectory = folder,
+                FileName = DataPackageBuilder.Sanitize(packageName, 96) + ".zip",
+                DefaultExt = ".zip",
+                Filter = "TAK data package (*.zip)|*.zip|All files (*.*)|*.*",
+                OverwritePrompt = true,
+            };
+            return save.ShowDialog() == true ? save.FileName : null;
+        }
+
+        // -------------------------------------------------------------------------
+        // Data package workflow (select features on the map, then send)
+        // -------------------------------------------------------------------------
+
+        /// <summary>Drives the PACKAGE tab. Constructed here rather than injected because its
+        /// whole dependency set is delegates onto this pane.</summary>
+        public DataPackageWorkflow Package { get; }
+
+        /// <summary>The "Built packages" listing on the PACKAGES tab.</summary>
+        public PackageLibraryViewModel PackageLibrary { get; }
+
+        private readonly MapAreaSelector _mapSelector;
+
+        private DataPackageWorkflow CreatePackageWorkflow()
+        {
+            var host = new DataPackageWorkflow.Host
+            {
+                PackageableLayers = () => PackageableLayers(),
+                Contacts = () => ContactRows(),
+                BuildFeatureCot = BuildFeatureCotXml,
+                BuildShareConfig = BuildShareConfigJson,
+                Deliver = DeliverPackage,
+                SetStatus = SetStatus,
+                LookAt = (lat, lon) => LookAt(lat, lon, DefaultFeatureResolution, "feature"),
+            };
+            return new DataPackageWorkflow(host, _mapSelector);
+        }
+
+        private PackageLibraryViewModel CreatePackageLibrary()
+        {
+            return new PackageLibraryViewModel(new PackageLibraryViewModel.Host
+            {
+                PackagesFolder = () => MissionPackageRegistrar.PackagesFolder,
+                Send = SendExistingPackage,
+                Reveal = RevealPackage,
+                Delete = DeletePackage,
+                SetStatus = SetStatus,
+            });
+        }
+
+        /// <summary>Sends a package that already exists, without rebuilding it — the reason to keep
+        /// a list of them at all.</summary>
+        private void SendExistingPackage(Services.PackageLibrary.BuiltPackage package)
+        {
+            if (package == null) return;
+
+            if (!File.Exists(package.Path))
+            {
+                SetStatus($"\"{package.Name}\" is no longer on disk.");
+                PackageLibrary.Refresh();
+                return;
+            }
+
+            var contacts = new List<DataPackageWindow.SelectableRow>();
+            foreach (var row in ContactRows())
+                contacts.Add(new DataPackageWindow.SelectableRow(row.Item1, row.Item2));
+
+            if (contacts.Count == 0)
+            {
+                SetStatus(_unreachableContactCount > 0
+                    ? $"No contacts can be reached right now ({_unreachableContactCount} known but "
+                      + "with no route). Check the server connection."
+                    : "No contacts are available to send that package to.");
+                return;
+            }
+
+            var dialog = new ContactMultiPickerWindow(
+                package.Name, contacts, _unreachableContactCount);
+            var owner = Application.Current?.MainWindow;
+            if (owner != null) dialog.Owner = owner;
+
+            if (dialog.ShowDialog() != true) return;
+
+            var picked = dialog.SelectedUids;
+            if (picked.Count == 0) return;
+
+            try
+            {
+                _communicationService.SendMissionPackage(
+                    picked, new FileInfo(package.Path), package.Name, false);
+
+                string who = picked.Count == 1 ? "1 contact" : picked.Count + " contacts";
+                SetStatus($"Sending \"{package.Name}\" to {who}…");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not send an existing data package.", ex);
+                SetStatus("Could not send that package: " + Describe(ex));
+            }
+        }
+
+        private void RevealPackage(Services.PackageLibrary.BuiltPackage package)
+        {
+            if (package == null || string.IsNullOrEmpty(package.Path)) return;
+
+            if (!File.Exists(package.Path))
+            {
+                SetStatus($"\"{package.Name}\" is no longer on disk.");
+                PackageLibrary.Refresh();
+                return;
+            }
+
+            try
+            {
+                // /select opens Explorer with the file highlighted rather than just the folder.
+                System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + package.Path + "\"");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not open Explorer: " + ex.Message);
+                SetStatus("Could not open that folder: " + Describe(ex));
+            }
+        }
+
+        private bool DeletePackage(Services.PackageLibrary.BuiltPackage package)
+        {
+            if (package == null) return false;
+
+            // Deleting removes the file AND the only record of what went into it, so it is
+            // confirmed rather than instant.
+            bool confirmed = DialogService.Confirm(
+                $"Delete the data package \"{package.Name}\"?\n\n{package.Contents}\n{package.Path}"
+                + "\n\nThis cannot be undone.",
+                "Delete data package");
+            if (!confirmed) return false;
+
+            try
+            {
+                if (File.Exists(package.Path)) File.Delete(package.Path);
+                SetStatus($"Deleted \"{package.Name}\".");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Could not delete the data package \"{package.Name}\".", ex);
+                SetStatus("Could not delete that package: " + Describe(ex));
+                return false;
+            }
+        }
+
+        /// <summary>Metres per pixel used when centring on a single reviewed feature — close
+        /// enough to see it in context without guessing at a layer-wide extent.</summary>
+        private const double DefaultFeatureResolution = 20.0;
+
+        /// <summary>How many contacts were left out of the last <see cref="ContactRows"/> call for
+        /// having no route. Reported to the operator so a missing name is explained.</summary>
+        private int _unreachableContactCount;
+
+        /// <summary>
+        /// Contacts that can actually receive a package.
+        ///
+        /// <para>This used to list <c>AllContacts</c>, which is every contact the client has ever
+        /// seen — including ones long gone. Offering those produced a send that failed with
+        /// <c>CommoIllegalArgument</c> and a bare "Failed to send Data Package", because Commo
+        /// refuses the whole transfer when it cannot find a usable endpoint for ANY of the
+        /// destinations: <c>MP Send init failed to find usable endpoints for any of the given
+        /// destination contacts</c>. One stale contact in the selection was enough.</para>
+        ///
+        /// <para>Two filters, both needed. <c>Contacts</c> rather than <c>AllContacts</c> is the
+        /// host's own live set. <c>CurrentConnector</c> is then the literal expression of the thing
+        /// Commo was looking for — a contact with no connector has no endpoint to send to, whatever
+        /// its presence says.</para>
+        /// </summary>
+        private IReadOnlyList<Tuple<string, string>> ContactRows()
+        {
+            var rows = new List<Tuple<string, string>>();
+            int unreachable = 0;
+
+            var candidates = _contactService?.Contacts
+                ?? _contactService?.AllContacts
+                ?? Enumerable.Empty<Contact>();
+
+            foreach (var c in candidates)
+            {
+                if (c == null || string.IsNullOrEmpty(c.Uid)) continue;
+
+                if (!CanReceive(c)) { unreachable++; continue; }
+                rows.Add(Tuple.Create(c.Uid, c.Name ?? c.Uid));
+            }
+
+            _unreachableContactCount = unreachable;
+            if (unreachable > 0)
+                Log.Info($"{unreachable} contact(s) omitted from the send list: no usable endpoint.");
+
+            return rows;
+        }
+
+        /// <summary>Whether a package can be sent to this contact at all.</summary>
+        private static bool CanReceive(Contact contact)
+        {
+            if (contact == null) return false;
+
+            try
+            {
+                // Gone and Offline are exactly the states with no route.
+                if (contact.PresenceLevel == ContactStatus.Gone
+                    || contact.PresenceLevel == ContactStatus.Offline) return false;
+
+                // The endpoint itself. Checked last and treated as decisive: presence describes
+                // whether we have heard from them, this describes whether we can reach them.
+                if (contact.CurrentConnector != null) return true;
+                return contact.Connectors != null && contact.Connectors.Count > 0;
+            }
+            catch (Exception ex)
+            {
+                // A contact mid-teardown can throw from these. Excluding it is the safe answer:
+                // including it risks failing the whole multi-recipient transfer.
+                Log.Info("Treating a contact as unreachable after an error reading it: " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Serializes one plotted feature to CoT XML for a package.
+        ///
+        /// <para>Rebuilt through <see cref="BuildFeatureCotEvent"/> — the same call the map is
+        /// drawn from — using the style captured when the feature was plotted. The recipient
+        /// therefore gets the marker the sender is looking at, not an approximation of it.</para>
+        /// </summary>
+        private string BuildFeatureCotXml(ArcGisLayer layer, LayerFeature feature)
+        {
+            if (layer == null || feature == null) return null;
+
+            try
+            {
+                var downloaded = new DownloadedFeature(
+                    uid: feature.Uid,
+                    cotType: feature.CotType,
+                    callsign: feature.Callsign,
+                    remarks: feature.Remarks,
+                    lat: feature.Lat,
+                    lon: feature.Lon,
+                    hae: feature.Hae,
+                    attributes: null);
+
+                Color? color = feature.ColorArgb.HasValue
+                    ? Color.FromArgb(feature.ColorArgb.Value)
+                    : (Color?)null;
+
+                bool iconApplied;
+                var cot = BuildFeatureCotEvent(
+                    downloaded,
+                    StalenessFor(layer),
+                    out iconApplied,
+                    feature.IconsetPath,
+                    color,
+                    feature.Label,
+                    feature.Remarks);
+
+                if (cot == null) return null;
+
+                var xml = cot.ToXml();
+                return xml?.OuterXml;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Could not build CoT for feature {feature.Uid}: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Writes the planned package and, when asked, sends it.
+        /// </summary>
+        /// <param name="send">False to only write the package to a location the operator picks.
+        /// This is a first-class outcome, not a fallback: on a disconnected network, handing over
+        /// a file is often the only way to move data at all.</param>
+        private DataPackageWorkflow.DeliveryResult DeliverPackage(
+            DataPackageBuilder.PackagePlan plan, string packageName,
+            IReadOnlyList<string> recipients, bool send)
+        {
+            if (plan == null || plan.Entries.Count == 0)
+                return DataPackageWorkflow.DeliveryResult.Failed("Nothing to package.");
+
+            // Both paths now default to WinTAK's Data Packages folder. A package has to live
+            // somewhere durable to be listed in the host, and that is where every other package on
+            // the machine already lives.
+            string destination = send
+                ? DataPackageWriter.PathIn(packageName, MissionPackageRegistrar.PackagesFolder)
+                : AskWhereToSave(packageName);
+
+            // Backing out of the file dialog is not a failure — say nothing and change nothing,
+            // so the selection is still there when they try again.
+            if (string.IsNullOrEmpty(destination))
+                return DataPackageWorkflow.DeliveryResult.Cancelled();
+
+            DataPackageWriter.WriteResult written;
+            try
+            {
+                written = DataPackageWriter.Write(plan, packageName, destination);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not build the data package.", ex);
+                return DataPackageWorkflow.DeliveryResult.Failed(
+                    "Could not build the data package: " + Describe(ex));
+            }
+
+            string detail = DataPackageBuilder.Describe(plan);
+            if (written.Skipped.Count > 0)
+                detail += $"; {written.Skipped.Count} file(s) could not be read and were left out";
+
+            bool listed = MissionPackageRegistrar.Register(
+                MissionPackageService, written.Path, packageName, written.Uid, SelfCallsign());
+
+            // The new package should appear in the tab's own listing immediately, not on the next
+            // manual refresh.
+            RunOnUi(() => PackageLibrary.Refresh());
+
+            if (!send)
+            {
+                string where = listed
+                    ? $"Saved \"{packageName}\" ({detail}) to {written.Path} and listed it in Data Packages."
+                    : $"Saved \"{packageName}\" ({detail}) to {written.Path}.";
+                return DataPackageWorkflow.DeliveryResult.Ok(where);
+            }
+
+            try
+            {
+                _communicationService.SendMissionPackage(
+                    recipients.ToList(), new FileInfo(written.Path), packageName, false);
+
+                // Deliberately NOT deleted after sending any more. It used to go to %TEMP% and be
+                // removed two minutes later, which kept a file holding layer URLs and display
+                // configs off a shared workstation. It now lives in WinTAK's Data Packages folder
+                // and is listed there, which is the behaviour asked for and the behaviour every
+                // other package on the machine already has — a sent package the sender cannot find
+                // again is the thing that made this feel broken. Removing it is the operator's call
+                // now, from the same list.
+                // "Sending", not "Sent". SendMissionPackage returns as soon as the transfer is
+                // QUEUED and fails asynchronously inside Commo, so claiming success here was a
+                // lie the operator could see through: the panel said "Sent" while WinTAK's own
+                // notification said "Failed to send Data Package". The MissionPackageSent and
+                // MissionPackageTransferFailed handlers above report what actually happened.
+                string who = recipients.Count == 1 ? "1 contact" : recipients.Count + " contacts";
+                return DataPackageWorkflow.DeliveryResult.Ok(
+                    $"Sending \"{packageName}\" ({detail}) to {who}…");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not send the data package.", ex);
+                TryDelete(written.Path);
+                return DataPackageWorkflow.DeliveryResult.Failed(
+                    "Could not send the data package: " + Describe(ex));
+            }
+        }
+
+        /// <summary>The staleness a layer's markers were plotted with, so a packaged CoT carries
+        /// the same lifetime as the marker it was built from. Same expression as the download
+        /// path — a package whose markers expired on a different schedule to the sender's would
+        /// be a confusing thing to receive.</summary>
+        private static TimeSpan StalenessFor(ArcGisLayer layer)
+        {
+            if (layer == null) return DefaultFeatureStaleness;
+            return layer.RecurrenceTimeSpan() > TimeSpan.Zero
+                ? TimeSpan.FromTicks(layer.RecurrenceTimeSpan().Ticks * StaleIntervalMultiplier)
+                : DefaultFeatureStaleness;
         }
 
         private static void TryDeleteLater(string path)
@@ -1483,6 +2105,12 @@ namespace FeatureLink.ViewModels
                 var uids = new List<string>(download.Features.Count);
                 int shapeStyled = 0;
                 var tally = new PostTally();
+
+                // Resolved style per feature, captured as it is applied, so a data package can
+                // rebuild exactly the CoT the map was drawn from. See LayerFeature's remarks for
+                // why this is retained instead of the raw attributes.
+                var styleByUid = new Dictionary<string, PlottedStyle>(
+                    download.Features.Count, StringComparer.Ordinal);
                 foreach (var f in download.Features)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -1509,6 +2137,16 @@ namespace FeatureLink.ViewModels
                             if (!color.HasValue) color = shape.StrokeColor;
                         }
                     }
+
+                    styleByUid[f.Uid] = new PlottedStyle
+                    {
+                        Hae = f.Hae,
+                        CotType = f.CotType,
+                        IconsetPath = iconsetPath,
+                        ColorArgb = color.HasValue ? ToArgbSigned(color.Value) : (int?)null,
+                        Label = label,
+                        Remarks = remarks,
+                    };
 
                     await PostFeatureAsCotAsync(f, layer.Visible, staleness, iconsetPath, color, label,
                         remarks, tally).ConfigureAwait(false);
@@ -1557,20 +2195,42 @@ namespace FeatureLink.ViewModels
                 var extent = LayerExtent.FromPoints(
                     plotted.Select(f => Tuple.Create(f.Lat, f.Lon)));
 
-                var listed = plotted
-                    .Take(ArcGisLayer.MaxListedFeatures)
-                    .Select(f => new LayerFeature
+                Func<DownloadedFeature, LayerFeature> toLayerFeature = f =>
+                {
+                    var lf = new LayerFeature
                     {
                         Uid = f.Uid,
                         Callsign = f.Callsign,
                         Lat = f.Lat,
                         Lon = f.Lon,
-                    })
+                        Hae = f.Hae,
+                        CotType = f.CotType,
+                    };
+                    PlottedStyle style;
+                    if (styleByUid.TryGetValue(f.Uid ?? string.Empty, out style) && style != null)
+                    {
+                        lf.Hae = style.Hae;
+                        lf.CotType = style.CotType ?? lf.CotType;
+                        lf.IconsetPath = style.IconsetPath;
+                        lf.ColorArgb = style.ColorArgb;
+                        lf.Label = style.Label;
+                        lf.Remarks = style.Remarks;
+                    }
+                    return lf;
+                };
+
+                var listed = plotted
+                    .Take(ArcGisLayer.MaxListedFeatures)
+                    .Select(toLayerFeature)
                     .ToList();
+
+                // Uncapped pool for package selection; the bound list stays capped.
+                var selectable = plotted.Select(toLayerFeature).ToList();
 
                 RunOnUi(() =>
                 {
                     layer.Extent = extent;
+                    layer.AllFeatures = selectable;
                     layer.Features.Clear();
                     foreach (var f in listed) layer.Features.Add(f);
                     layer.RaiseFeaturesChanged();
@@ -1675,6 +2335,10 @@ namespace FeatureLink.ViewModels
                 // merged per value.
                 IconsetResult icons = TryResolveIconset(layer, meta);
                 IconsetWasReplaced = icons != null && icons.ReplacedExisting;
+
+                // Remember which iconsets exist on disk for this layer, so a data package built in
+                // a later session can still bundle them (AutoSymJson is deliberately not persisted).
+                if (icons != null && layer.RecordIconsetUid(icons.Uid)) RunOnUi(SaveSettings);
                 var extracted = AutoSymbology.Extract(meta.Renderer);
 
                 if (icons == null && extracted.IsEmpty)
@@ -2013,6 +2677,18 @@ namespace FeatureLink.ViewModels
         /// engineer than a single line saying how many. Counted here, reported once by
         /// <see cref="DownloadLayerAsync"/>.
         /// </summary>
+        /// <summary>The style actually applied to one plotted feature, kept so a data package can
+        /// rebuild its CoT without re-resolving against a config that may since have changed.</summary>
+        private sealed class PlottedStyle
+        {
+            public double Hae;
+            public string CotType;
+            public string IconsetPath;
+            public int? ColorArgb;
+            public string Label;
+            public string Remarks;
+        }
+
         private sealed class PostTally
         {
             public int OutOfRange;
@@ -2035,15 +2711,29 @@ namespace FeatureLink.ViewModels
             }
         }
 
-        private async Task PostFeatureAsCotAsync(DownloadedFeature f, bool visible, TimeSpan staleness,
+        /// <summary>
+        /// Builds the CoT event for a downloaded feature — everything the marker is, short of
+        /// sending it.
+        ///
+        /// <para>Split out of <see cref="PostFeatureAsCotAsync"/> so a data package can carry the
+        /// SAME event that plotting would create. Rebuilding an equivalent-looking event for the
+        /// package would be two implementations of the styling rules, and they would drift: the
+        /// icon-forces-white-colour rule and the iconset-path safety check both live here, and a
+        /// package built from a second copy would be the one that quietly stopped matching.</para>
+        ///
+        /// <para>Returns null when the feature cannot be plotted at all.</para>
+        /// </summary>
+        private CotEvent BuildFeatureCotEvent(DownloadedFeature f, TimeSpan staleness,
+            out bool iconApplied,
             string iconsetPath = null, Color? color = null, string label = null, string remarks = null,
             PostTally tally = null)
         {
+            iconApplied = false;
             if (!ArcGisFeatureService.IsPlottable(f.Lat, f.Lon))
             {
                 if (tally != null) tally.OutOfRange++;
                 else Log.Warn($"Refusing to plot feature {f.Uid}: coordinates out of range.");
-                return;
+                return null;
             }
 
             var now = DateTime.UtcNow;
@@ -2069,7 +2759,6 @@ namespace FeatureLink.ViewModels
                 detail.AddChild(remarksItem);
             }
 
-            bool iconApplied = false;
             if (!string.IsNullOrEmpty(iconsetPath))
             {
                 // A peer controls this string via a received share and it is broadcast to the whole
@@ -2123,6 +2812,18 @@ namespace FeatureLink.ViewModels
                 opex: null,
                 qos: null,
                 access: null);
+
+            return cotEvent;
+        }
+
+        private async Task PostFeatureAsCotAsync(DownloadedFeature f, bool visible, TimeSpan staleness,
+            string iconsetPath = null, Color? color = null, string label = null, string remarks = null,
+            PostTally tally = null)
+        {
+            bool iconApplied;
+            var cotEvent = BuildFeatureCotEvent(
+                f, staleness, out iconApplied, iconsetPath, color, label, remarks, tally);
+            if (cotEvent == null) return;
 
             // Post (create) the marker and WAIT for the host to have processed it, then set its
             // live Visible/Color via IMapItemFinderService.

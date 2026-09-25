@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Xml.Linq;
@@ -136,6 +136,34 @@ namespace FeatureLink.Models
         public string Callsign { get; set; }
         public double Lat { get; set; }
         public double Lon { get; set; }
+
+        // ── Style resolved at plot time, retained so a data package can rebuild this feature's
+        //    CoT exactly as the map drew it.
+        //
+        //    The alternative was keeping each feature's full ArcGIS attribute dictionary and
+        //    re-resolving at package time. That is the same answer at many times the memory — a
+        //    50,000-feature layer would hold 50,000 dictionaries — and it would re-run resolution
+        //    against a display config that may have been refreshed since, so a package could
+        //    disagree with the markers the operator is looking at. These five fields ARE the
+        //    resolution result, captured when it was applied.
+
+        /// <summary>Altitude in metres HAE, or NaN when the source had none.</summary>
+        public double Hae { get; set; } = double.NaN;
+
+        /// <summary>CoT type as plotted.</summary>
+        public string CotType { get; set; }
+
+        /// <summary>Resolved <c>uid/group/file.png</c> iconset path, or null for no custom icon.</summary>
+        public string IconsetPath { get; set; }
+
+        /// <summary>Resolved marker colour as a 32-bit ARGB value, or null when unstyled.</summary>
+        public int? ColorArgb { get; set; }
+
+        /// <summary>Resolved label, which is the marker's callsign on the map.</summary>
+        public string Label { get; set; }
+
+        /// <summary>Resolved remarks, from the popup config.</summary>
+        public string Remarks { get; set; }
 
         /// <summary>Position shown beside the name, in the degrees-and-minutes form the rest of
         /// WinTAK uses for a readout.</summary>

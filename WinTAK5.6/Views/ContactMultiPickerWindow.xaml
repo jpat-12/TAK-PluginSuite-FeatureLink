@@ -1,0 +1,55 @@
+<Window x:Class="FeatureLink.Views.ContactMultiPickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Send package" Height="420" Width="360"
+        WindowStartupLocation="CenterOwner"
+        Background="#FF0A0A0A" ResizeMode="CanResize" MinHeight="320" MinWidth="300">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="HeadingText" Grid.Row="0" Foreground="White" FontSize="14"
+                   FontWeight="Bold" Margin="0,0,0,4" TextWrapping="Wrap"/>
+
+        <DockPanel Grid.Row="1" LastChildFill="False" Margin="0,0,0,6">
+            <TextBlock DockPanel.Dock="Left" Text="Send to" Foreground="#FF9A9A9A"
+                       FontSize="11" VerticalAlignment="Center"/>
+            <Button DockPanel.Dock="Right" Content="None" Width="52" Padding="0,1"
+                    Click="SelectNone_Click"/>
+            <Button DockPanel.Dock="Right" Content="All" Width="44" Padding="0,1"
+                    Margin="0,0,6,0" Click="SelectAll_Click"/>
+        </DockPanel>
+
+        <ListBox x:Name="ContactList" Grid.Row="2" Background="#FF161616"
+                 BorderBrush="#FF2A2A2A"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                              Content="{Binding Name}" Foreground="White"
+                              Margin="4,3" Checked="Selection_Changed" Unchecked="Selection_Changed"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <TextBlock x:Name="HintText" Grid.Row="3" Foreground="#FF9A9A9A" FontSize="11"
+                   TextWrapping="Wrap" Margin="0,6,0,0"/>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="0,10,0,0">
+            <Button Content="Cancel" Width="80" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button x:Name="SendButton" Content="Send" Width="80" IsDefault="True"
+                    Click="Send_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

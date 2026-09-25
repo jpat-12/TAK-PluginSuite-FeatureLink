@@ -1,6 +1,7 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.IO;
+using TAKEngine.Core;
 
 namespace FeatureLink.Services
 {
@@ -176,6 +177,14 @@ namespace FeatureLink.Services
         /// re-uploads what it needs over the next frames — so it runs ONLY when an iconset was
         /// actually replaced, which is rare.</para>
         /// </summary>
+        /// <summary>
+        /// The host's map view controller, supplied by the dock pane. Used ONLY to reach the
+        /// render thread — see <see cref="PurgeRendererTextures"/>. Held as <c>object</c> so this
+        /// file gains no new SDK reference; the cast to <c>RenderContext</c> is against
+        /// TAK.Engine, which is already referenced.
+        /// </summary>
+        public static object RenderHost { get; set; }
+
         private static void PurgeRendererTextures()
         {
             try
@@ -196,7 +205,43 @@ namespace FeatureLink.Services
                 var purge = cacheType.GetMethod("Purge", Type.EmptyTypes);
                 if (purge == null) return;
 
-                purge.Invoke(instance, null);
+                // MUST run on the render thread. This is called from the layer-download worker,
+                // and purging the GPU texture cache off-thread tears textures out from under
+                // markers the renderer is still drawing — the host then dereferences a texture
+                // that is gone. The observed symptom was a NullReferenceException inside
+                // WinTak.CursorOnTarget.Graphics.CotMapMarker.OnHoverChanged when the operator
+                // moved the mouse over a marker after a re-sync. RenderContext documents the
+                // affinity ("graphics resources may be shared ... only in a thread-safe manner")
+                // and offers both the test and the marshal.
+                var context = RenderHost as RenderContext;
+                if (context == null)
+                {
+                    // Without a way onto the render thread, DO NOT purge. Stale icons for a
+                    // session are a cosmetic defect; crashing the host is not.
+                    Log.Info("Skipping the texture-cache purge: no render context is available, "
+                             + "and purging off the render thread can crash the map. The new icons "
+                             + "will be drawn after a restart.");
+                    return;
+                }
+
+                if (context.IsRenderThread)
+                {
+                    purge.Invoke(instance, null);
+                }
+                else
+                {
+                    context.QueueEvent(_ =>
+                    {
+                        try { purge.Invoke(instance, null); }
+                        catch (Exception ex)
+                        {
+                            // On the render thread: swallowing beats propagating into the host's
+                            // frame loop, which would take the map down rather than one icon.
+                            Log.Info("Texture-cache purge failed on the render thread: " + ex.Message);
+                        }
+                    }, null);
+                }
+
                 Log.Info("Asked the map renderer to drop its cached textures so the new icons are drawn.");
             }
             catch (Exception ex)

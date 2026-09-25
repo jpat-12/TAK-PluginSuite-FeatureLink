@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Net.Http;
 using System.Net.Sockets;
 using FeatureLink.Services;
@@ -195,5 +195,69 @@ namespace FeatureLink.Tests
         {
             Assert.False(string.IsNullOrWhiteSpace(ErrorText.ForOperator(null)));
         }
-    }
+    
+        // ── package transfer failures ───────────────────────────────────────────
+
+        /// <summary>The failure seen in the field. The operator was shown only "Failed to send
+        /// Data Package"; the log underneath said Commo could not find a usable endpoint for any
+        /// destination, which is a connection problem and not a problem with the package.</summary>
+        [Fact]
+        public void An_endpoint_failure_says_there_is_no_route_and_that_the_package_is_kept()
+        {
+            string text = ErrorText.ForPackageTransfer("CommoIllegalArgument", null);
+
+            Assert.Contains("no route", text, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("saved", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("CommoIllegalArgument", text, StringComparison.Ordinal);
+        }
+
+        [Theory]
+        [InlineData("TransferFinishedContactGone", "offline")]
+        [InlineData("TransferFinishedTimedOut", "timed out")]
+        [InlineData("TransferServerUploadFailed", "server")]
+        [InlineData("TransferFinishedFileExists", "already has")]
+        [InlineData("TransferFinishedDisabledLocally", "disabled")]
+        public void Each_known_transfer_status_gets_its_own_explanation(string status, string expected)
+        {
+            Assert.Contains(expected, ErrorText.ForPackageTransfer(status, null),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>An unknown code is shown rather than explained away, but still paired with
+        /// something the operator can do.</summary>
+        [Fact]
+        public void An_unknown_failure_keeps_the_code_and_still_suggests_an_action()
+        {
+            string text = ErrorText.ForPackageTransfer("SomethingNew", "with detail");
+
+            Assert.Contains("SomethingNew", text, StringComparison.Ordinal);
+            Assert.Contains("saved", text, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void An_empty_failure_still_says_the_package_is_kept()
+        {
+            foreach (string empty in new[] { null, "", "   " })
+                Assert.Contains("saved", ErrorText.ForPackageTransfer(empty, empty),
+                    StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Never leaves the operator with only a status code and no next step.</summary>
+        [Theory]
+        [InlineData("CommoIllegalArgument")]
+        [InlineData("TransferFinishedFailed")]
+        [InlineData("TransferAttemptFailed")]
+        [InlineData("")]
+        public void Every_transfer_failure_message_tells_the_operator_what_to_do(string status)
+        {
+            string text = ErrorText.ForPackageTransfer(status, null);
+
+            Assert.True(text.Length > 20, "too terse to act on: " + text);
+            Assert.True(
+                text.IndexOf("saved", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("try again", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("check", StringComparison.OrdinalIgnoreCase) >= 0,
+                "no next step offered: " + text);
+        }
+}
 }
