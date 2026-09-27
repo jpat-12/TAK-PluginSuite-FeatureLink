@@ -106,6 +106,54 @@ namespace FeatureLink.Tests
             Assert.Equal(2, result.Features.Count);
         }
 
+        // ── Feature cap (owner decision 4, matching ATAK) ──────────────────────────
+
+        private const int Half = ArcGisFeatureService.MaxTotalFeatures / 2;
+
+        [Fact]
+        public async Task Download_OvershootingTheCap_IsTrimmedAndMarkedTruncated()
+        {
+            var stub = new StubHandler();
+            stub.Enqueue(MetaBody(Half + 100));
+            stub.Enqueue(Page(Half + 100, exceeded: true, startOid: 1));
+            stub.Enqueue(Page(Half + 100, exceeded: true, startOid: Half + 101));
+
+            var result = await new ArcGisFeatureService(stub).DownloadLayerAsCotAsync(Url, null);
+
+            Assert.Equal(ArcGisFeatureService.MaxTotalFeatures, result.Features.Count);
+            Assert.True(result.Truncated);
+            Assert.Equal(2, result.PagesFetched);
+        }
+
+        [Fact]
+        public async Task Download_ReachingTheCapWithMoreRemaining_StopsAndIsTruncated()
+        {
+            var stub = new StubHandler();
+            stub.Enqueue(MetaBody(Half));
+            stub.Enqueue(Page(Half, exceeded: true, startOid: 1));
+            stub.Enqueue(Page(Half, exceeded: true, startOid: Half + 1));
+
+            var result = await new ArcGisFeatureService(stub).DownloadLayerAsCotAsync(Url, null);
+
+            Assert.Equal(ArcGisFeatureService.MaxTotalFeatures, result.Features.Count);
+            Assert.True(result.Truncated);
+            Assert.Equal(2, result.PagesFetched);   // no third request past the cap
+        }
+
+        [Fact]
+        public async Task Download_LayerOfExactlyTheCap_IsCompleteNotTruncated()
+        {
+            var stub = new StubHandler();
+            stub.Enqueue(MetaBody(Half));
+            stub.Enqueue(Page(Half, exceeded: true, startOid: 1));
+            stub.Enqueue(Page(Half, exceeded: false, startOid: Half + 1));   // service: that's all
+
+            var result = await new ArcGisFeatureService(stub).DownloadLayerAsCotAsync(Url, null);
+
+            Assert.Equal(ArcGisFeatureService.MaxTotalFeatures, result.Features.Count);
+            Assert.False(result.Truncated);
+        }
+
         [Fact]
         public async Task Search_PagesOnNextStart()
         {

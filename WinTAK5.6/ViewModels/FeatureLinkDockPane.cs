@@ -82,17 +82,13 @@ namespace FeatureLink.ViewModels
         /// <summary>Schema version this build writes and is willing to read.</summary>
         private const int ShareSchemaVersion = 2;
 
-        /// <summary>Feature count above which the operator is asked to confirm a download, and the
-        /// count above which it is refused outright.
+        /// <summary>Feature count above which the operator is asked to confirm a download.
         ///
-        /// <para><b>SME-UNCONFIRMED.</b> These two numbers are engineering estimates, not values
-        /// anyone has validated against a fielded workstation or a CAP mission profile. They exist
-        /// because the previous behaviour — no ceiling at all, up to the client's own
-        /// 5,000-page × 1,000-row limit — froze the application with no warning. A wrong-but-stated
-        /// limit is recoverable; no limit is not. Confirm both with an operator who has run a large
-        /// layer on target hardware, then delete this paragraph.</para></summary>
-        private const long LargeDownloadPromptThreshold = 5000;
-        private const long MaxDownloadableFeatures = 50000;
+        /// <para>Owner decision 4 (2026-09-27), matching ATAK: ask above 10,000, and let a yes
+        /// through even past <see cref="ArcGisFeatureService.MaxTotalFeatures"/> — the download is
+        /// then truncated at that cap and reported as incomplete, rather than refused. (This was
+        /// 5,000 with an outright refusal above 50,000.)</para></summary>
+        private const long LargeDownloadPromptThreshold = 10000;
 
         // ── Injected services ────────────────────────────────────────────────────
 
@@ -2822,24 +2818,6 @@ namespace FeatureLink.ViewModels
             // declines still reports its real size rather than a dash.
             RunOnUi(() => layer.FeatureCount = count);
 
-            if (count > MaxDownloadableFeatures)
-            {
-                // Once per layer per session — an over-cap layer is over the cap on EVERY
-                // recurrence tick, so an ungated notice here would pop every 15 seconds forever.
-                if (!ShouldRaiseLargeLayerDialog(layer, interactive)) return false;
-
-                string refusal =
-                    $"\"{layer.Name}\" contains {count:N0} features, over this plugin's limit of "
-                    + $"{MaxDownloadableFeatures:N0}.\n\nPlotting that many markers would make the map "
-                    + "unusable. Filter the layer at the source, or publish a smaller view of it.";
-                Log.Warn($"Refused to download \"{layer.Name}\": {count} features exceeds the "
-                         + $"{MaxDownloadableFeatures} hard cap.");
-                SetStatus($"\"{layer.Name}\" has {count:N0} features — too many to plot (limit {MaxDownloadableFeatures:N0}).");
-                await RunOnUiAsync(() => { DialogService.Inform(refusal, "Layer too large"); return true; })
-                    .ConfigureAwait(false);
-                return false;
-            }
-
             if (count > LargeDownloadPromptThreshold)
             {
                 // Already approved on a previous run — the answer is persisted per layer.
@@ -2862,6 +2840,9 @@ namespace FeatureLink.ViewModels
                     $"\"{layer.Name}\" contains {count:N0} features.\n\n"
                     + "Each one is plotted as a separate marker, so a layer this size will take a "
                     + "while to sync and may slow the map down.\n\n"
+                    + (count > ArcGisFeatureService.MaxTotalFeatures
+                        ? $"Only the first {ArcGisFeatureService.MaxTotalFeatures:N0} will be loaded.\n\n"
+                        : "")
                     + (interactive
                         ? "Download it anyway?"
                         : "This layer is due for its scheduled refresh. Download it now?")

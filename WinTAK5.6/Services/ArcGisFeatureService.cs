@@ -78,6 +78,12 @@ namespace FeatureLink.Services
     {
         private const int DefaultPageSize = 1000;
         private const int MaxPages = 5000;         // 5M features at the default page size
+
+        /// <summary>Hard ceiling on features pulled for one layer, matching ATAK's
+        /// <c>MAX_TOTAL_FEATURES</c>. Past it the download stops and is marked
+        /// <see cref="LayerDownloadResult.Truncated"/> — the operator was already told, when
+        /// approving the size, that only this many would load.</summary>
+        public const int MaxTotalFeatures = 50000;
         private const int SearchPageSize = 100;
         private const int MaxSearchPages = 50;
 
@@ -551,8 +557,26 @@ namespace FeatureLink.Services
                 }
 
                 bool exceeded = (bool?)json["exceededTransferLimit"] ?? false;
-                if (!exceeded && features.Count < pageSize) break;
-                if (features.Count == 0) break;
+                bool moreRemain = features.Count > 0 && (exceeded || features.Count >= pageSize);
+
+                if (result.Features.Count >= MaxTotalFeatures)
+                {
+                    // Truncated only when this page overshot or the service says more remain —
+                    // a layer of exactly the cap is complete. At the cap, exceededTransferLimit is
+                    // trusted over the full-page heuristic below, which exists only for services
+                    // that omit the flag and would otherwise misreport such a layer.
+                    bool overshot = result.Features.Count > MaxTotalFeatures;
+                    if (overshot)
+                        result.Features.RemoveRange(MaxTotalFeatures, result.Features.Count - MaxTotalFeatures);
+                    if (overshot || exceeded)
+                    {
+                        result.Truncated = true;
+                        Log.Warn($"Layer download stopped at the {MaxTotalFeatures}-feature cap.");
+                    }
+                    break;
+                }
+
+                if (!moreRemain) break;
 
                 offset += features.Count;
             }
