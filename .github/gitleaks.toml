@@ -47,6 +47,12 @@ paths = [
   # The icon corpora are 14,900 binary files; scanning them is pure cost.
   '''TAKPortal/assets/featurelink-configurator/icons/.*''',
   '''Infra-TAK/featurelink_displayconfig_assets/icons/.*''',
+  # The OAuth relay's REGISTERED_ORIGINS allowlist must name the real CloudTAK origin(s) or
+  # sign-in fails closed ("no registered FeatureLink origins"). The page is served publicly on
+  # GitHub Pages, so any origin listed there is public regardless of git — redacting it here
+  # only breaks sign-in (as 26ac461 did). The featurelink-prod-host rule still guards all
+  # other files.
+  '''docs/featurelink-oauth-relay\.html''',
 ]
 
 regexes = [
