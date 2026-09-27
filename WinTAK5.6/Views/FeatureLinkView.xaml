@@ -644,14 +644,6 @@
                     </Button>
                 </Grid>
 
-                <!-- Data package: sits beside the account icon because it acts on everything
-                     the plugin holds, not on whichever tab happens to be open. -->
-                <Button Grid.Column="3" Style="{StaticResource IconGlyphButton}"
-                        Command="{Binding StartPackageWorkflowCommand}"
-                        ToolTip="Create a data package" Margin="8,0,0,0">
-                    <TextBlock Text="&#128230;" FontSize="14"/>
-                </Button>
-
                 <Button Grid.Column="4" Style="{StaticResource IconGlyphButton}"
                         Command="{Binding ShowAccountPageCommand}"
                         ToolTip="ArcGIS account" Margin="8,0,0,0">
@@ -896,19 +888,6 @@
                         <!-- Private Layers card — on-device layers not shared to Everyone (received
                              via a share, or moved here from "My ArcGIS Layers"); hidden entirely
                              when empty. -->
-                        <!-- Data package: bundles the selected layers' configs and the iconsets
-                             this machine generated for them, then sends to contacts. Sits above
-                             the layer lists because it acts on all of them, not on one row. -->
-                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
-                            <StackPanel>
-                                <TextBlock Text="Share a set of layers as a data package, with their icons included."
-                                           Style="{StaticResource BodyText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                                <Button Content="Create Data Package" Style="{StaticResource SecondaryButton}"
-                                        Command="{Binding CreateDataPackageCommand}" MinHeight="40"
-                                        ToolTip="Pick layers and contacts, then send a TAK data package"/>
-                            </StackPanel>
-                        </Border>
-
                         <Border Style="{StaticResource Card}" Margin="0,0,0,12"
                                 Visibility="{Binding ShowSharedPrivateLayersCard, Converter={StaticResource BoolToVis}}">
                             <StackPanel>
@@ -1072,7 +1051,7 @@
                                     </Button>
                                     <Button Content="Draw area" Command="{Binding SelectBoxCommand}"
                                             MinHeight="38" Margin="2,0,2,0"
-                                            ToolTip="Drag a rectangle; everything inside is added">
+                                            ToolTip="Click two opposite corners; everything inside is added">
                                         <Button.Style>
                                             <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
                                                 <Style.Triggers>
@@ -1085,7 +1064,7 @@
                                     </Button>
                                     <Button Content="Draw radius" Command="{Binding SelectRadiusCommand}"
                                             MinHeight="38" Margin="4,0,0,0"
-                                            ToolTip="Drag out from a centre point; everything inside the radius is added">
+                                            ToolTip="Click the centre, then the edge; everything inside the radius is added">
                                         <Button.Style>
                                             <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
                                                 <Style.Triggers>

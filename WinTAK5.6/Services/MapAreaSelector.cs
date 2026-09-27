@@ -17,8 +17,9 @@ namespace FeatureLink.Services
     /// shape lives and is tested.</para>
     ///
     /// <para><b>The map is left modal while a mode is active</b>, via
-    /// <c>PushMapEvents</c>/<c>PopMapEvents</c>: without it, a drag to draw a box also pans the
-    /// map underneath, and a click to pick a marker also opens WinTAK's wheel menu. The matching
+    /// <c>PushMapEvents</c>/<c>PopMapEvents</c>, so a click to pick a marker does not also open
+    /// WinTAK's wheel menu. It does NOT stop a drag from panning (observed on 5.6), which is why a
+    /// box or radius can also be placed with two clicks — see <see cref="_hasPendingAnchor"/>. The matching
     /// Pop is the dangerous half — miss it and the operator's map stays unresponsive with nothing
     /// on screen explaining why, which is worse than the feature not existing. Every exit path
     /// therefore runs through <see cref="Stop"/>, the class is <see cref="IDisposable"/>, and Pop
@@ -54,19 +55,39 @@ namespace FeatureLink.Services
 
         /// <summary>Where a box or radius drag began, in world coordinates. Null between drags.</summary>
         private double _anchorLat, _anchorLon;
+        private int _anchorX, _anchorY;
         private bool _dragging;
+
+        /// <summary>First corner (box) or centre (radius) placed by a click, waiting for the
+        /// second click. Observed on a live 5.6 map: <c>PushMapEvents</c> does not stop a drag from
+        /// panning, so the ground point under the cursor never changes and a drag arrives as a
+        /// zero-size shape. Two clicks do not pan, so they are the dependable path; a drag is
+        /// still honoured whenever it produces a real shape.</summary>
+        private bool _hasPendingAnchor;
+        private double _pendingLat, _pendingLon;
+
+        /// <summary>A press-and-release this close on screen, or this close on the ground, is a
+        /// click rather than a drag.</summary>
+        private const int ClickSlopPixels = 6;
+        private const double ClickSlopMetres = 0.5;
 
         public Mode Current { get; private set; }
 
         public bool IsActive { get { return Current != Mode.None; } }
 
-        /// <summary>Raised when the operator clicks a feature in <see cref="Mode.Points"/>. The
-        /// argument is the clicked map item's UID, which is the feature UID because the plugin
-        /// creates its markers with the feature UID.</summary>
-        public event Action<string> FeatureClicked;
+        /// <summary>Raised when the operator clicks in <see cref="Mode.Points"/>. The argument is
+        /// the UID of EVERY map item under the click, the host-resolved one first: the topmost item
+        /// is often not the feature marker (a label, the self marker, another overlay), so the
+        /// listener picks the first UID that is actually a feature. Feature UIDs are marker UIDs
+        /// because the plugin creates its markers with the feature UID.</summary>
+        public event Action<IList<string>> FeatureClicked;
 
-        /// <summary>Raised when a box or radius drag completes, with the shape drawn.</summary>
+        /// <summary>Raised when a box or radius completes, with the shape drawn.</summary>
         public event Action<ISelectionShape> ShapeDrawn;
+
+        /// <summary>Raised when a click places the first corner or centre and the mode is waiting
+        /// for the second click.</summary>
+        public event Action AnchorPlaced;
 
         /// <summary>Raised when a mode ends, for whatever reason, so the UI can un-press its
         /// button. Always fires exactly once per <see cref="Start"/>.</summary>
@@ -144,6 +165,7 @@ namespace FeatureLink.Services
             Mode was = Current;
             Current = Mode.None;
             _dragging = false;
+            _hasPendingAnchor = false;
 
             var controller = _controller;
 
@@ -191,8 +213,8 @@ namespace FeatureLink.Services
             // Host callback: an escaping exception crosses back into WinTAK's input pipeline.
             try
             {
-                string uid = UidOf(e);
-                if (!string.IsNullOrEmpty(uid)) Raise(FeatureClicked, uid);
+                var uids = UidsOf(e);
+                if (uids.Count > 0) Raise(FeatureClicked, uids);
             }
             catch (Exception ex) { Log.Warn("Map item click could not be handled: " + ex.Message); }
         }
@@ -203,28 +225,31 @@ namespace FeatureLink.Services
             // "clicked and nothing happened" case has an explanation in the log.
             try
             {
-                string uid = UidOf(e);
-                if (!string.IsNullOrEmpty(uid)) Raise(FeatureClicked, uid);
+                var uids = UidsOf(e);
+                if (uids.Count > 0) Raise(FeatureClicked, uids);
             }
             catch (Exception ex) { Log.Warn("Map click could not be handled: " + ex.Message); }
         }
 
-        /// <summary>The UID of whatever the click landed on, preferring the item the host resolved
-        /// and falling back to the first of any items under the cursor.</summary>
-        private static string UidOf(MapMouseEventArgs e)
+        /// <summary>The UIDs of everything the click landed on: the item the host resolved first,
+        /// then every other item under the cursor, without duplicates.</summary>
+        private static IList<string> UidsOf(MapMouseEventArgs e)
         {
-            if (e == null) return null;
+            var uids = new List<string>();
+            if (e == null) return uids;
 
             var item = e.Item as MapItem;
-            if (item != null && !item.IsDisposed && !string.IsNullOrEmpty(item.Uid)) return item.Uid;
+            if (item != null && !item.IsDisposed && !string.IsNullOrEmpty(item.Uid)) uids.Add(item.Uid);
 
             if (e.MapItems != null)
             {
-                var hit = e.MapItems.FirstOrDefault(
-                    i => i != null && !i.IsDisposed && !string.IsNullOrEmpty(i.Uid));
-                if (hit != null) return hit.Uid;
+                foreach (var i in e.MapItems)
+                {
+                    if (i == null || i.IsDisposed || string.IsNullOrEmpty(i.Uid)) continue;
+                    if (!uids.Contains(i.Uid)) uids.Add(i.Uid);
+                }
             }
-            return null;
+            return uids;
         }
 
         private void OnMouseDown(object sender, MapMouseEventArgs e)
@@ -236,6 +261,8 @@ namespace FeatureLink.Services
 
                 _anchorLat = world.Latitude;
                 _anchorLon = world.Longitude;
+                _anchorX = e.X;
+                _anchorY = e.Y;
                 _dragging = GeoMath.IsUsable(_anchorLat, _anchorLon);
             }
             catch (Exception ex) { Log.Warn("Could not start the selection drag: " + ex.Message); }
@@ -254,9 +281,36 @@ namespace FeatureLink.Services
                 double lat = world.Latitude, lon = world.Longitude;
                 if (!GeoMath.IsUsable(lat, lon)) return;
 
+                bool isClick =
+                    (Math.Abs(e.X - _anchorX) <= ClickSlopPixels && Math.Abs(e.Y - _anchorY) <= ClickSlopPixels)
+                    || GeoMath.DistanceMetres(_anchorLat, _anchorLon, lat, lon) < ClickSlopMetres;
+
+                double fromLat, fromLon;
+                if (!isClick)
+                {
+                    // A real drag.
+                    fromLat = _anchorLat;
+                    fromLon = _anchorLon;
+                }
+                else if (!_hasPendingAnchor)
+                {
+                    // First of two clicks: remember it and wait for the second.
+                    _hasPendingAnchor = true;
+                    _pendingLat = lat;
+                    _pendingLon = lon;
+                    Raise(AnchorPlaced);
+                    return;
+                }
+                else
+                {
+                    fromLat = _pendingLat;
+                    fromLon = _pendingLon;
+                    _hasPendingAnchor = false;
+                }
+
                 ISelectionShape shape = Current == Mode.Radius
-                    ? (ISelectionShape)GeoCircle.FromCenterAndEdge(_anchorLat, _anchorLon, lat, lon)
-                    : GeoBounds.FromCorners(_anchorLat, _anchorLon, lat, lon);
+                    ? (ISelectionShape)GeoCircle.FromCenterAndEdge(fromLat, fromLon, lat, lon)
+                    : GeoBounds.FromCorners(fromLat, fromLon, lat, lon);
 
                 if (shape == null) return;
 
@@ -293,6 +347,7 @@ namespace FeatureLink.Services
             Stop();
             FeatureClicked = null;
             ShapeDrawn = null;
+            AnchorPlaced = null;
             Stopped = null;
         }
     }

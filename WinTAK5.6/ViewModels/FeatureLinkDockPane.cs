@@ -154,12 +154,45 @@ namespace FeatureLink.ViewModels
             catch (Exception ex) { Log.Warn("Could not stop watching package transfers: " + ex.Message); }
         }
 
-        /// <summary>True when a transfer event is about a package this plugin built, so the panel
-        /// does not narrate other plugins' transfers.</summary>
-        private static bool IsOurs(WinTak.MissionPackages.MissionPackage package)
+        /// <summary>File paths and transfer names of everything this plugin handed to
+        /// <c>SendMissionPackage</c>. The uid prefix alone never matched in the field: WinTAK
+        /// assigns its own uid to the package it builds for a send, so every one of our
+        /// failures was filtered out as "not ours" and the panel stayed on "Sending…".</summary>
+        private readonly HashSet<string> _ourSends = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _ourSendsLock = new object();
+
+        private void TrackSend(string path, string name)
         {
-            return package != null && package.Uid != null
-                && package.Uid.StartsWith(Services.PackageLibrary.UidPrefix, StringComparison.Ordinal);
+            lock (_ourSendsLock)
+            {
+                if (!string.IsNullOrEmpty(path)) _ourSends.Add(Path.GetFullPath(path));
+                if (!string.IsNullOrEmpty(name)) _ourSends.Add(name);
+            }
+        }
+
+        /// <summary>True when a transfer event is about a package this plugin sent, so the panel
+        /// does not narrate other plugins' transfers.</summary>
+        private bool IsOurs(WinTak.MissionPackages.MissionPackage package)
+        {
+            if (package == null) return false;
+            if (package.Uid != null
+                && package.Uid.StartsWith(Services.PackageLibrary.UidPrefix, StringComparison.Ordinal))
+                return true;
+
+            lock (_ourSendsLock)
+            {
+                if (!string.IsNullOrEmpty(package.Name) && _ourSends.Contains(package.Name)) return true;
+                if (string.IsNullOrEmpty(package.Path)) return false;
+                try { return _ourSends.Contains(Path.GetFullPath(package.Path)); }
+                catch (Exception) { return _ourSends.Contains(package.Path); }   // unparseable path: compare raw
+            }
+        }
+
+        private static string Describe(WinTak.MissionPackages.MissionPackage package)
+        {
+            return package == null
+                ? "(no package)"
+                : $"\"{package.Name}\" uid={package.Uid} path={package.Path}";
         }
 
         private void OnMissionPackageSent(object sender,
@@ -167,7 +200,9 @@ namespace FeatureLink.ViewModels
         {
             try
             {
-                if (!IsOurs(e?.Package)) return;
+                bool ours = IsOurs(e?.Package);
+                Log.Info($"Package transfer completed ({(ours ? "ours" : "not ours")}): {Describe(e?.Package)}.");
+                if (!ours) return;
                 RunOnUi(() => SetStatus($"Sent \"{e.Package.Name}\"."));
             }
             catch (Exception ex) { Log.Warn("Could not report a completed send: " + ex.Message); }
@@ -178,7 +213,12 @@ namespace FeatureLink.ViewModels
         {
             try
             {
-                if (!IsOurs(e?.Package)) return;
+                bool ours = IsOurs(e?.Package);
+                // Logged whether or not it is ours: when a send fails and the panel says nothing,
+                // this line is what shows whether WinTAK raised the event at all.
+                Log.Info($"Package transfer failed ({(ours ? "ours" : "not ours")}): {Describe(e?.Package)} "
+                         + $"error={e?.Error} message={e?.Message}.");
+                if (!ours) return;
 
                 string name = e.Package.Name;
                 string reason = ErrorText.ForPackageTransfer(e.Error, e.Message);
@@ -541,8 +581,6 @@ namespace FeatureLink.ViewModels
         public ICommand RemoveLayerCommand { get; }
         public ICommand ShareLayerCommand { get; }
 
-        /// <summary>Opens the data-package dialog: pick layers, pick contacts, send.</summary>
-        public ICommand CreateDataPackageCommand { get; }
 
         /// <summary>Opens the PACKAGE tab and begins the workflow. A non-null layer pre-selects
         /// everything in it, which is what the per-layer button does.</summary>
@@ -625,8 +663,6 @@ namespace FeatureLink.ViewModels
                 layer => Guard(() => OnRemoveLayer(layer), "remove layer"));
             ShareLayerCommand = new DelegateCommand<ArcGisLayer>(
                 layer => Guard(() => OnShareLayer(layer), "share layer"));
-            CreateDataPackageCommand = new DelegateCommand(
-                () => Guard(OnCreateDataPackage, "create data package"));
             ToggleLayerVisibilityCommand = new DelegateCommand<ArcGisLayer>(
                 layer => Guard(() => OnToggleLayerVisibility(layer), "toggle layer visibility"));
             PliActionCommand = new DelegateCommand(() =>
@@ -914,6 +950,194 @@ namespace FeatureLink.ViewModels
             });
         }
 
+        /// <summary>Why an add did or did not work. Distinguished so the single-layer path can
+        /// give its precise wording while the batch path just counts.</summary>
+        private enum AddLayerOutcome
+        {
+            Added,
+
+            /// <summary>The service wanted a token and nobody is signed in.</summary>
+            NotPublic,
+
+            /// <summary>Signed in, but the session no longer yields a token.</summary>
+            SessionExpired,
+
+            /// <summary>Anything else; already logged and reported.</summary>
+            Failed,
+        }
+
+        /// <summary>
+        /// Fetches, classifies, downloads and files ONE layer.
+        ///
+        /// <para>Shared by the single-layer paste and the multi-sublayer batch, so the two cannot
+        /// drift. It deliberately does not touch navigation or the URL box — those happen once per
+        /// operator action, not once per layer.</para>
+        /// </summary>
+        private async Task<AddLayerOutcome> AddOneLayerAsync(string url, CancellationToken ct)
+        {
+            // Try anonymously FIRST, because that is what actually determines whether the layer is
+            // public — not what the operator believes about it.
+            //
+            // This used to pass a null token unconditionally, so "Add Layer" was permanently
+            // anonymous even while the operator was signed in. Pasting the URL of a layer in your
+            // OWN ArcGIS organisation therefore failed with ArcGIS 499 "Token Required", reported
+            // as the bare "Could not load layer from URL: Token Required" — which reads as a broken
+            // URL, not as "you need to be signed in for this one".
+            ArcGisLayer layer;
+            bool neededAuth = false;
+            try
+            {
+                layer = await _restClient.FetchLayerInfoAsync(url, null, ct).ConfigureAwait(false);
+            }
+            catch (ArcGisServiceException ex) when (ex.IsAuthFailure)
+            {
+                if (!IsAuthenticated) return AddLayerOutcome.NotPublic;
+
+                string token = await _authService.GetTokenAsync(ct).ConfigureAwait(false);
+                if (token == null) return AddLayerOutcome.SessionExpired;
+
+                Log.Info("Add Layer: anonymous fetch was refused; retrying with the signed-in token.");
+                layer = await _restClient.FetchLayerInfoAsync(url, token, ct).ConfigureAwait(false);
+                neededAuth = true;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Error("Add layer failed for " + Log.Redact(url), ex);
+                SetStatus(ErrorText.WithContext("Could not add that layer", ex, IsAuthenticated));
+                return AddLayerOutcome.Failed;
+            }
+
+            // Classify by what the service actually required. A layer that only loads with a token
+            // is not a public layer, and filing it as one would make every later sync fetch it
+            // anonymously and fail exactly the same way. (IsPrivate is computed from Type, and it
+            // is what DownloadLayerAsync consults to decide whether to attach a token — so this
+            // assignment is what makes recurring syncs keep working.)
+            layer.Type = neededAuth ? "private" : "public";
+
+            await DownloadLayerAsync(layer).ConfigureAwait(false);
+
+            // Persist only after the first download succeeded, so a broken URL does not leave a
+            // permanently marker-less layer in the operator's list.
+            RunOnUi(() =>
+            {
+                // A layer that needed a token belongs with the other on-device non-public layers,
+                // not in the Public list where it would be fetched anonymously.
+                if (neededAuth) SharedPrivateLayers.Add(layer);
+                else PublicLayers.Add(layer);
+            });
+
+            return AddLayerOutcome.Added;
+        }
+
+        /// <summary>
+        /// Works out which sublayers of a pasted URL to add.
+        /// </summary>
+        /// <returns>The chosen sublayers; an EMPTY list when enumeration found nothing and the
+        /// caller should fall back to the legacy single-layer path; or NULL when the operator
+        /// cancelled the picker.</returns>
+        private async Task<List<ArcGisFeatureService.SubLayerRef>> ChooseSubLayersAsync(
+            string url, CancellationToken ct)
+        {
+            // Enumeration needs the same credentials the layer itself will: anonymous first,
+            // then the signed-in token, mirroring the fetch below it.
+            List<ArcGisFeatureService.SubLayerRef> layers;
+            try
+            {
+                layers = await _restClient.ListSubLayersAsync(url, null, ct).ConfigureAwait(false);
+                if (layers.Count == 0 && IsAuthenticated)
+                {
+                    string token = await _authService.GetTokenAsync(ct).ConfigureAwait(false);
+                    if (token != null)
+                        layers = await _restClient.ListSubLayersAsync(url, token, ct).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                // Enumeration is an improvement on the old behaviour, not a precondition for it.
+                Log.Warn("Could not enumerate sublayers; falling back to the single-layer path: "
+                         + ex.Message);
+                return new List<ArcGisFeatureService.SubLayerRef>();
+            }
+
+            if (layers.Count <= 1) return layers;
+
+            Log.Info($"Service advertises {layers.Count} queryable sublayers.");
+
+            var picked = await RunOnUiAsync(() =>
+            {
+                var dialog = new SubLayerPickerWindow(ServiceNameFor(url), layers);
+                var owner = Application.Current?.MainWindow;
+                if (owner != null) dialog.Owner = owner;
+                return dialog.ShowDialog() == true ? dialog.Selected : null;
+            }).ConfigureAwait(false);
+
+            return picked;
+        }
+
+        /// <summary>Adds several sublayers, continuing past any that fail. One bad layer in a
+        /// service must not cost the operator the others.</summary>
+        private async Task AddSubLayersAsync(
+            List<ArcGisFeatureService.SubLayerRef> layers, CancellationToken ct)
+        {
+            int added = 0;
+            var failed = new List<string>();
+
+            foreach (var sub in layers)
+            {
+                ct.ThrowIfCancellationRequested();
+                SetStatus($"Adding \"{sub.Display}\" ({added + failed.Count + 1} of {layers.Count})…");
+
+                try
+                {
+                    if (await AddOneLayerAsync(sub.Url, ct).ConfigureAwait(false)
+                            == AddLayerOutcome.Added) added++;
+                    else failed.Add(sub.Display);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    Log.Warn($"Could not add sublayer \"{sub.Display}\": {ex.Message}");
+                    failed.Add(sub.Display);
+                }
+            }
+
+            RunOnUi(() =>
+            {
+                NewPublicLayerUrl = string.Empty;
+                RaisePropertyChanged(nameof(StatusLayersText));
+            });
+
+            SetStatus(failed.Count == 0
+                ? $"Added {added} layer(s) from the service."
+                : $"Added {added} of {layers.Count} layers; {failed.Count} could not be added "
+                  + $"({string.Join(", ", failed.Take(3))}{(failed.Count > 3 ? ", …" : "")}).");
+        }
+
+        /// <summary>The service's own name, for the picker heading. Best-effort: the heading falls
+        /// back to a plain count when the URL is not shaped as expected.</summary>
+        private static string ServiceNameFor(string url)
+        {
+            try
+            {
+                string canonical = (url ?? string.Empty).Trim().TrimEnd('/');
+                int query = canonical.IndexOf('?');
+                if (query >= 0) canonical = canonical.Substring(0, query).TrimEnd('/');
+
+                var parts = canonical.Split('/');
+                // ".../services/<Name>/FeatureServer" — the name sits before the server segment.
+                for (int i = parts.Length - 1; i > 0; i--)
+                {
+                    if (parts[i].Equals("FeatureServer", StringComparison.OrdinalIgnoreCase)
+                        || parts[i].Equals("MapServer", StringComparison.OrdinalIgnoreCase))
+                        return parts[i - 1];
+                }
+            }
+            catch (Exception ex) { Log.Info("Could not derive a service name: " + ex.Message); }
+            return null;
+        }
+
         private async Task OnAddPublicLayerAsync()
         {
             string url = (NewPublicLayerUrl ?? string.Empty).Trim();
@@ -929,60 +1153,35 @@ namespace FeatureLink.ViewModels
             {
                 var ct = LinkedToken(OperationTimeout, out cts);
 
-                // Try anonymously FIRST, because that is what actually determines whether the
-                // layer is public — not what the operator believes about it.
-                //
-                // This used to pass a null token unconditionally, so "Add Layer" was permanently
-                // anonymous even while the operator was signed in. Pasting the URL of a layer in
-                // your OWN ArcGIS organisation therefore failed with ArcGIS 499 "Token Required",
-                // reported as the bare "Could not load layer from URL: Token Required" — which
-                // reads as a broken URL, not as "you need to be signed in for this one". The
-                // operator's only recourse was the browse list, and nothing said so.
-                ArcGisLayer layer;
-                bool neededAuth = false;
-                try
+                // C-08: a FeatureServer can hold many layers. Until this, a bare service root had
+                // "/0" appended and the rest were silently dropped — the operator added a
+                // five-layer service and got one, with no error and nothing in the log. Enumerate
+                // first, and add every layer the operator picks.
+                var chosen = await ChooseSubLayersAsync(url, ct).ConfigureAwait(false);
+                if (chosen == null) return;                 // operator cancelled the picker
+                if (chosen.Count > 1)
                 {
-                    layer = await _restClient.FetchLayerInfoAsync(url, null, ct).ConfigureAwait(false);
+                    await AddSubLayersAsync(chosen, ct).ConfigureAwait(false);
+                    return;
                 }
-                catch (ArcGisServiceException ex) when (ex.IsAuthFailure)
+                if (chosen.Count == 1) url = chosen[0].Url; // one layer: carry on with its own url
+
+                var outcome = await AddOneLayerAsync(url, ct).ConfigureAwait(false);
+
+                switch (outcome)
                 {
-                    if (!IsAuthenticated)
-                    {
-                        // Not signed in and the service wants a token: say precisely that, rather
-                        // than letting the raw ArcGIS wording stand.
+                    case AddLayerOutcome.NotPublic:
                         SetStatus("That layer is not public — sign in to ArcGIS first, then add it.");
                         return;
-                    }
-
-                    string token = await _authService.GetTokenAsync(ct).ConfigureAwait(false);
-                    if (token == null)
-                    {
+                    case AddLayerOutcome.SessionExpired:
                         SetStatus("That layer requires sign-in, and the ArcGIS session has expired — sign in again.");
                         return;
-                    }
-
-                    Log.Info("Add Layer: anonymous fetch was refused; retrying with the signed-in token.");
-                    layer = await _restClient.FetchLayerInfoAsync(url, token, ct).ConfigureAwait(false);
-                    neededAuth = true;
+                    case AddLayerOutcome.Failed:
+                        return;             // AddOneLayerAsync already reported it
                 }
 
-                // Classify by what the service actually required. A layer that only loads with a
-                // token is not a public layer, and filing it as one would make every later sync
-                // fetch it anonymously and fail exactly the same way. (IsPrivate is computed from
-                // Type, and it is what DownloadLayerAsync consults to decide whether to attach a
-                // token — so this assignment is what makes recurring syncs keep working.)
-                layer.Type = neededAuth ? "private" : "public";
-
-                await DownloadLayerAsync(layer).ConfigureAwait(false);
-
-                // Persist only after the first download succeeded, so a broken URL does not leave
-                // a permanently marker-less layer in the operator's list.
                 RunOnUi(() =>
                 {
-                    // A layer that needed a token belongs with the other on-device non-public
-                    // layers, not in the Public list where it would be fetched anonymously.
-                    if (neededAuth) SharedPrivateLayers.Add(layer);
-                    else PublicLayers.Add(layer);
                     NewPublicLayerUrl = string.Empty;
                     RaisePropertyChanged(nameof(StatusLayersText));
                     HideOverlay();
@@ -1262,13 +1461,17 @@ namespace FeatureLink.ViewModels
                 filePath = Path.Combine(dir, safeName + ".featurelinkshare");
                 File.WriteAllText(filePath, json);
 
+                string transferName = "FeatureLink - " + safeName;
+                TrackSend(filePath, transferName);
                 _communicationService.SendMissionPackage(
                     new List<string> { picker.SelectedUid },
                     new FileInfo(filePath),
-                    "FeatureLink - " + safeName,
+                    transferName,
                     false);
 
-                SetStatus($"Sent \"{layer.Name}\" to contact.");
+                // "Sending", not "Sent": the call only queues the transfer. The transfer handlers
+                // report the real outcome.
+                SetStatus($"Sending \"{layer.Name}\" to contact…");
             }
             catch (Exception ex)
             {
@@ -1296,88 +1499,6 @@ namespace FeatureLink.ViewModels
             return SharedPrivateLayers.Concat(PublicLayers)
                 .Where(l => l != null && !string.IsNullOrEmpty(l.Url) && l.LastSyncTicks > 0)
                 .ToList();
-        }
-
-        /// <summary>Turns a layer into the planner's view of it.</summary>
-        private DataPackageBuilder.LayerPlanInput ToPlanInput(ArcGisLayer layer)
-        {
-            // Both the explicit and the auto-derived configs can carry icon references, and a layer
-            // can have either. They are wrapped in an array so one parse covers both.
-            var configs = new JArray();
-            foreach (string json in new[] { layer.SymJson, layer.AutoSymJson })
-            {
-                if (string.IsNullOrWhiteSpace(json)) continue;
-                try { configs.Add(JToken.Parse(json)); }
-                catch (Exception ex)
-                {
-                    Log.Warn($"Ignoring unparseable display config on \"{layer.Name}\": {ex.Message}");
-                }
-            }
-
-            return new DataPackageBuilder.LayerPlanInput
-            {
-                Name = layer.Name,
-                Url = layer.Url,
-                ConfigJson = BuildShareConfigJson(layer),
-                DisplayConfigJson = configs.Count > 0
-                    ? configs.ToString(Newtonsoft.Json.Formatting.None) : null,
-                IconsetUids = (layer.IconsetUids ?? string.Empty)
-                    .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries),
-            };
-        }
-
-        private DataPackageBuilder.PackagePlan PlanFor(IEnumerable<string> layerUrls)
-        {
-            var byUrl = new Dictionary<string, ArcGisLayer>(StringComparer.Ordinal);
-            foreach (var layer in PackageableLayers()) byUrl[layer.Url] = layer;
-
-            var inputs = new List<DataPackageBuilder.LayerPlanInput>();
-            foreach (string url in layerUrls ?? Enumerable.Empty<string>())
-            {
-                ArcGisLayer layer;
-                if (byUrl.TryGetValue(url, out layer)) inputs.Add(ToPlanInput(layer));
-            }
-            return DataPackageBuilder.Plan(inputs, null);
-        }
-
-        private void OnCreateDataPackage()
-        {
-            var layers = PackageableLayers();
-            if (layers.Count == 0)
-            {
-                SetStatus("No downloaded layers to package — sync a layer first.");
-                return;
-            }
-
-            var layerRows = layers
-                .Select(l => new DataPackageWindow.SelectableRow(l.Url, l.Name, l.FeatureCountText))
-                .ToList();
-
-            var contactRows = new List<DataPackageWindow.SelectableRow>();
-            foreach (var row in ContactRows())
-                contactRows.Add(new DataPackageWindow.SelectableRow(row.Item1, row.Item2));
-
-            var dialog = new DataPackageWindow(layerRows, contactRows,
-                urls => DataPackageBuilder.Describe(PlanFor(urls)));
-            var owner = Application.Current?.MainWindow;
-            if (owner != null) dialog.Owner = owner;
-
-            if (dialog.ShowDialog() != true) return;
-
-            var plan = PlanFor(dialog.SelectedLayerKeys);
-            if (plan.Entries.Count == 0)
-            {
-                SetStatus("Nothing could be packaged from that selection.");
-                return;
-            }
-
-            // Same delivery path as the PACKAGE tab, so both write to WinTAK's Data Packages
-            // folder, both register with the host, and neither can drift from the other in where
-            // a package ends up or what the operator is told.
-            var result = DeliverPackage(plan, dialog.PackageName,
-                dialog.SelectedContactUids, !dialog.SaveToFileRequested);
-
-            if (result != null && !string.IsNullOrEmpty(result.Message)) SetStatus(result.Message);
         }
 
         /// <summary>Deletes a staged package immediately, for the path where no send was started.</summary>
@@ -1506,6 +1627,7 @@ namespace FeatureLink.ViewModels
 
             try
             {
+                TrackSend(package.Path, package.Name);
                 _communicationService.SendMissionPackage(
                     picked, new FileInfo(package.Path), package.Name, false);
 
@@ -1747,6 +1869,7 @@ namespace FeatureLink.ViewModels
 
             try
             {
+                TrackSend(written.Path, packageName);
                 _communicationService.SendMissionPackage(
                     recipients.ToList(), new FileInfo(written.Path), packageName, false);
 
@@ -2010,8 +2133,120 @@ namespace FeatureLink.ViewModels
         private async Task OnDownloadLayerAsync(ArcGisLayer layer)
         {
             if (layer == null) return;
-            if (PrivateLayers.Contains(layer)) MoveMyArcGisLayerOnDownload(layer);
+
+            // C-08, the browse-list half. A portal item's "url" is the SERVICE ROOT, so every row
+            // in "My ArcGIS Layers" arrives pointing at the whole service and would have "/0"
+            // appended at download time — the same silent data loss the Add Layer path had, on the
+            // path operators actually use for their own org's content. Resolve it before the first
+            // download, while the row can still be expanded into one row per layer.
+            if (!await ResolveServiceRootAsync(layer).ConfigureAwait(false)) return;
+
+            // Must marshal: after the ConfigureAwait(false) above this is a pool thread whenever the
+            // row was a service root, and the move mutates ObservableCollections bound to the view.
+            RunOnUi(() =>
+            {
+                if (PrivateLayers.Contains(layer)) MoveMyArcGisLayerOnDownload(layer);
+            });
             await DownloadLayerAsync(layer).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Turns a layer still pointing at a service root into one pointing at a real sublayer,
+        /// expanding into extra rows when the service holds more than one.
+        /// </summary>
+        /// <returns>False when the caller should stop — the operator cancelled, or the row was
+        /// replaced by the expansion and must not also be downloaded.</returns>
+        private async Task<bool> ResolveServiceRootAsync(ArcGisLayer layer)
+        {
+            if (layer == null || !ArcGisFeatureService.IsServiceRoot(layer.Url)) return true;
+
+            CancellationTokenSource cts = null;
+            List<ArcGisFeatureService.SubLayerRef> layers;
+            try
+            {
+                var ct = LinkedToken(OperationTimeout, out cts);
+                string token = layer.IsPrivate && IsAuthenticated
+                    ? await _authService.GetTokenAsync(ct).ConfigureAwait(false)
+                    : null;
+
+                layers = await _restClient.ListSubLayersAsync(layer.Url, token, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { return false; }
+            catch (Exception ex)
+            {
+                // Enumeration is an improvement on the legacy path, not a precondition for it.
+                Log.Warn("Could not enumerate sublayers before download: " + ex.Message);
+                return true;
+            }
+            finally { cts?.Dispose(); }
+
+            if (layers.Count == 0) return true;             // legacy "/0" fallback still applies
+
+            if (layers.Count == 1)
+            {
+                // One layer: just point the existing row at it. No dialog for a choice of one.
+                RunOnUi(() =>
+                {
+                    layer.Url = layers[0].Url;
+                    SaveSettings();
+                });
+                return true;
+            }
+
+            var picked = await RunOnUiAsync(() =>
+            {
+                var dialog = new SubLayerPickerWindow(layer.Name, layers);
+                var owner = Application.Current?.MainWindow;
+                if (owner != null) dialog.Owner = owner;
+                return dialog.ShowDialog() == true ? dialog.Selected : null;
+            }).ConfigureAwait(false);
+
+            if (picked == null || picked.Count == 0) return false;   // cancelled
+
+            // Re-point the original row at the first choice so the operator keeps the row they
+            // clicked, then add the rest beside it. Re-pointing rather than removing-and-adding
+            // means whatever list the row already lives in, and its place in it, are preserved.
+            var first = picked[0];
+            RunOnUi(() =>
+            {
+                layer.Url = first.Url;
+                if (!string.IsNullOrWhiteSpace(first.Name)) layer.Name = first.Name;
+            });
+
+            foreach (var extra in picked.Skip(1))
+            {
+                var sibling = new ArcGisLayer(
+                    string.IsNullOrWhiteSpace(extra.Name) ? layer.Name + " " + extra.Id : extra.Name,
+                    extra.Url,
+                    layer.Type)
+                {
+                    Access = layer.Access,
+                    OwnerAccountKey = layer.OwnerAccountKey,
+                    ItemId = layer.ItemId,
+                    RecurrenceInterval = layer.RecurrenceInterval,
+                    RecurrenceUnit = layer.RecurrenceUnit,
+                };
+
+                RunOnUi(() =>
+                {
+                    if (string.Equals(sibling.Type, "public", StringComparison.OrdinalIgnoreCase))
+                        PublicLayers.Add(sibling);
+                    else
+                        SharedPrivateLayers.Add(sibling);
+                });
+
+                await DownloadLayerAsync(sibling).ConfigureAwait(false);
+            }
+
+            RunOnUi(() =>
+            {
+                RaisePropertyChanged(nameof(StatusLayersText));
+                RaisePropertyChanged(nameof(ShowSharedPrivateLayersCard));
+                SaveSettings();
+            });
+
+            SetStatus($"\"{layer.Name}\" is a service with {layers.Count} layers; added {picked.Count}.");
+            return true;
         }
 
         private void MoveMyArcGisLayerOnDownload(ArcGisLayer layer)
