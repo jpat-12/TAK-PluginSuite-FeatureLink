@@ -154,12 +154,45 @@ namespace FeatureLink.ViewModels
             catch (Exception ex) { Log.Warn("Could not stop watching package transfers: " + ex.Message); }
         }
 
-        /// <summary>True when a transfer event is about a package this plugin built, so the panel
-        /// does not narrate other plugins' transfers.</summary>
-        private static bool IsOurs(WinTak.MissionPackages.MissionPackage package)
+        /// <summary>File paths and transfer names of everything this plugin handed to
+        /// <c>SendMissionPackage</c>. The uid prefix alone never matched in the field: WinTAK
+        /// assigns its own uid to the package it builds for a send, so every one of our
+        /// failures was filtered out as "not ours" and the panel stayed on "Sending…".</summary>
+        private readonly HashSet<string> _ourSends = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _ourSendsLock = new object();
+
+        private void TrackSend(string path, string name)
         {
-            return package != null && package.Uid != null
-                && package.Uid.StartsWith(Services.PackageLibrary.UidPrefix, StringComparison.Ordinal);
+            lock (_ourSendsLock)
+            {
+                if (!string.IsNullOrEmpty(path)) _ourSends.Add(Path.GetFullPath(path));
+                if (!string.IsNullOrEmpty(name)) _ourSends.Add(name);
+            }
+        }
+
+        /// <summary>True when a transfer event is about a package this plugin sent, so the panel
+        /// does not narrate other plugins' transfers.</summary>
+        private bool IsOurs(WinTak.MissionPackages.MissionPackage package)
+        {
+            if (package == null) return false;
+            if (package.Uid != null
+                && package.Uid.StartsWith(Services.PackageLibrary.UidPrefix, StringComparison.Ordinal))
+                return true;
+
+            lock (_ourSendsLock)
+            {
+                if (!string.IsNullOrEmpty(package.Name) && _ourSends.Contains(package.Name)) return true;
+                if (string.IsNullOrEmpty(package.Path)) return false;
+                try { return _ourSends.Contains(Path.GetFullPath(package.Path)); }
+                catch (Exception) { return _ourSends.Contains(package.Path); }   // unparseable path: compare raw
+            }
+        }
+
+        private static string Describe(WinTak.MissionPackages.MissionPackage package)
+        {
+            return package == null
+                ? "(no package)"
+                : $"\"{package.Name}\" uid={package.Uid} path={package.Path}";
         }
 
         private void OnMissionPackageSent(object sender,
@@ -167,7 +200,9 @@ namespace FeatureLink.ViewModels
         {
             try
             {
-                if (!IsOurs(e?.Package)) return;
+                bool ours = IsOurs(e?.Package);
+                Log.Info($"Package transfer completed ({(ours ? "ours" : "not ours")}): {Describe(e?.Package)}.");
+                if (!ours) return;
                 RunOnUi(() => SetStatus($"Sent \"{e.Package.Name}\"."));
             }
             catch (Exception ex) { Log.Warn("Could not report a completed send: " + ex.Message); }
@@ -178,7 +213,12 @@ namespace FeatureLink.ViewModels
         {
             try
             {
-                if (!IsOurs(e?.Package)) return;
+                bool ours = IsOurs(e?.Package);
+                // Logged whether or not it is ours: when a send fails and the panel says nothing,
+                // this line is what shows whether WinTAK raised the event at all.
+                Log.Info($"Package transfer failed ({(ours ? "ours" : "not ours")}): {Describe(e?.Package)} "
+                         + $"error={e?.Error} message={e?.Message}.");
+                if (!ours) return;
 
                 string name = e.Package.Name;
                 string reason = ErrorText.ForPackageTransfer(e.Error, e.Message);
@@ -541,8 +581,6 @@ namespace FeatureLink.ViewModels
         public ICommand RemoveLayerCommand { get; }
         public ICommand ShareLayerCommand { get; }
 
-        /// <summary>Opens the data-package dialog: pick layers, pick contacts, send.</summary>
-        public ICommand CreateDataPackageCommand { get; }
 
         /// <summary>Opens the PACKAGE tab and begins the workflow. A non-null layer pre-selects
         /// everything in it, which is what the per-layer button does.</summary>
@@ -625,8 +663,6 @@ namespace FeatureLink.ViewModels
                 layer => Guard(() => OnRemoveLayer(layer), "remove layer"));
             ShareLayerCommand = new DelegateCommand<ArcGisLayer>(
                 layer => Guard(() => OnShareLayer(layer), "share layer"));
-            CreateDataPackageCommand = new DelegateCommand(
-                () => Guard(OnCreateDataPackage, "create data package"));
             ToggleLayerVisibilityCommand = new DelegateCommand<ArcGisLayer>(
                 layer => Guard(() => OnToggleLayerVisibility(layer), "toggle layer visibility"));
             PliActionCommand = new DelegateCommand(() =>
@@ -1425,13 +1461,17 @@ namespace FeatureLink.ViewModels
                 filePath = Path.Combine(dir, safeName + ".featurelinkshare");
                 File.WriteAllText(filePath, json);
 
+                string transferName = "FeatureLink - " + safeName;
+                TrackSend(filePath, transferName);
                 _communicationService.SendMissionPackage(
                     new List<string> { picker.SelectedUid },
                     new FileInfo(filePath),
-                    "FeatureLink - " + safeName,
+                    transferName,
                     false);
 
-                SetStatus($"Sent \"{layer.Name}\" to contact.");
+                // "Sending", not "Sent": the call only queues the transfer. The transfer handlers
+                // report the real outcome.
+                SetStatus($"Sending \"{layer.Name}\" to contact…");
             }
             catch (Exception ex)
             {
@@ -1459,88 +1499,6 @@ namespace FeatureLink.ViewModels
             return SharedPrivateLayers.Concat(PublicLayers)
                 .Where(l => l != null && !string.IsNullOrEmpty(l.Url) && l.LastSyncTicks > 0)
                 .ToList();
-        }
-
-        /// <summary>Turns a layer into the planner's view of it.</summary>
-        private DataPackageBuilder.LayerPlanInput ToPlanInput(ArcGisLayer layer)
-        {
-            // Both the explicit and the auto-derived configs can carry icon references, and a layer
-            // can have either. They are wrapped in an array so one parse covers both.
-            var configs = new JArray();
-            foreach (string json in new[] { layer.SymJson, layer.AutoSymJson })
-            {
-                if (string.IsNullOrWhiteSpace(json)) continue;
-                try { configs.Add(JToken.Parse(json)); }
-                catch (Exception ex)
-                {
-                    Log.Warn($"Ignoring unparseable display config on \"{layer.Name}\": {ex.Message}");
-                }
-            }
-
-            return new DataPackageBuilder.LayerPlanInput
-            {
-                Name = layer.Name,
-                Url = layer.Url,
-                ConfigJson = BuildShareConfigJson(layer),
-                DisplayConfigJson = configs.Count > 0
-                    ? configs.ToString(Newtonsoft.Json.Formatting.None) : null,
-                IconsetUids = (layer.IconsetUids ?? string.Empty)
-                    .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries),
-            };
-        }
-
-        private DataPackageBuilder.PackagePlan PlanFor(IEnumerable<string> layerUrls)
-        {
-            var byUrl = new Dictionary<string, ArcGisLayer>(StringComparer.Ordinal);
-            foreach (var layer in PackageableLayers()) byUrl[layer.Url] = layer;
-
-            var inputs = new List<DataPackageBuilder.LayerPlanInput>();
-            foreach (string url in layerUrls ?? Enumerable.Empty<string>())
-            {
-                ArcGisLayer layer;
-                if (byUrl.TryGetValue(url, out layer)) inputs.Add(ToPlanInput(layer));
-            }
-            return DataPackageBuilder.Plan(inputs, null);
-        }
-
-        private void OnCreateDataPackage()
-        {
-            var layers = PackageableLayers();
-            if (layers.Count == 0)
-            {
-                SetStatus("No downloaded layers to package — sync a layer first.");
-                return;
-            }
-
-            var layerRows = layers
-                .Select(l => new DataPackageWindow.SelectableRow(l.Url, l.Name, l.FeatureCountText))
-                .ToList();
-
-            var contactRows = new List<DataPackageWindow.SelectableRow>();
-            foreach (var row in ContactRows())
-                contactRows.Add(new DataPackageWindow.SelectableRow(row.Item1, row.Item2));
-
-            var dialog = new DataPackageWindow(layerRows, contactRows,
-                urls => DataPackageBuilder.Describe(PlanFor(urls)));
-            var owner = Application.Current?.MainWindow;
-            if (owner != null) dialog.Owner = owner;
-
-            if (dialog.ShowDialog() != true) return;
-
-            var plan = PlanFor(dialog.SelectedLayerKeys);
-            if (plan.Entries.Count == 0)
-            {
-                SetStatus("Nothing could be packaged from that selection.");
-                return;
-            }
-
-            // Same delivery path as the PACKAGE tab, so both write to WinTAK's Data Packages
-            // folder, both register with the host, and neither can drift from the other in where
-            // a package ends up or what the operator is told.
-            var result = DeliverPackage(plan, dialog.PackageName,
-                dialog.SelectedContactUids, !dialog.SaveToFileRequested);
-
-            if (result != null && !string.IsNullOrEmpty(result.Message)) SetStatus(result.Message);
         }
 
         /// <summary>Deletes a staged package immediately, for the path where no send was started.</summary>
@@ -1669,6 +1627,7 @@ namespace FeatureLink.ViewModels
 
             try
             {
+                TrackSend(package.Path, package.Name);
                 _communicationService.SendMissionPackage(
                     picked, new FileInfo(package.Path), package.Name, false);
 
@@ -1910,6 +1869,7 @@ namespace FeatureLink.ViewModels
 
             try
             {
+                TrackSend(written.Path, packageName);
                 _communicationService.SendMissionPackage(
                     recipients.ToList(), new FileInfo(written.Path), packageName, false);
 
@@ -2181,7 +2141,12 @@ namespace FeatureLink.ViewModels
             // download, while the row can still be expanded into one row per layer.
             if (!await ResolveServiceRootAsync(layer).ConfigureAwait(false)) return;
 
-            if (PrivateLayers.Contains(layer)) MoveMyArcGisLayerOnDownload(layer);
+            // Must marshal: after the ConfigureAwait(false) above this is a pool thread whenever the
+            // row was a service root, and the move mutates ObservableCollections bound to the view.
+            RunOnUi(() =>
+            {
+                if (PrivateLayers.Contains(layer)) MoveMyArcGisLayerOnDownload(layer);
+            });
             await DownloadLayerAsync(layer).ConfigureAwait(false);
         }
 

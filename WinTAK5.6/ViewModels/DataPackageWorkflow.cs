@@ -111,6 +111,7 @@ namespace FeatureLink.ViewModels
                 _selector.FeatureClicked += OnFeatureClicked;
                 _selector.ShapeDrawn += OnShapeDrawn;
                 _selector.Stopped += OnSelectorStopped;
+                _selector.AnchorPlaced += OnAnchorPlaced;
             }
 
             StartCommand = new DelegateCommand<ArcGisLayer>(Start);
@@ -458,12 +459,19 @@ namespace FeatureLink.ViewModels
                     ModeHint = "Click features on the map to add or remove them. Click the button again to stop.";
                     break;
                 case MapAreaSelector.Mode.Box:
-                    ModeHint = "Drag a rectangle on the map. Everything inside it is added.";
+                    ModeHint = "Click one corner of the area on the map, then the opposite corner. Everything inside it is added.";
                     break;
                 case MapAreaSelector.Mode.Radius:
-                    ModeHint = "Drag out from a centre point. Everything inside the radius is added.";
+                    ModeHint = "Click the centre on the map, then click the edge of the radius. Everything inside it is added.";
                     break;
             }
+        }
+
+        private void OnAnchorPlaced()
+        {
+            ModeHint = ActiveMode == MapAreaSelector.Mode.Radius
+                ? "Centre placed — now click the edge of the radius."
+                : "First corner placed — now click the opposite corner.";
         }
 
         private void StopMapMode()
@@ -477,13 +485,25 @@ namespace FeatureLink.ViewModels
             ActiveMode = MapAreaSelector.Mode.None;
         }
 
-        private void OnFeatureClicked(string uid)
+        private void OnFeatureClicked(IList<string> uids)
         {
-            var found = FindFeature(uid);
+            SelectableFeature found = null;
+            if (uids != null)
+            {
+                foreach (var uid in uids)
+                {
+                    found = FindFeature(uid);
+                    if (found != null) break;
+                }
+            }
+
             if (found == null)
             {
                 // Clicking someone else's marker, or a host item, is not an error — just say why
-                // nothing happened rather than appearing to ignore the click.
+                // nothing happened rather than appearing to ignore the click. The uids go to the
+                // log so a marker that SHOULD have matched can be diagnosed.
+                Log.Info("Selection click matched no feature; items under the cursor: "
+                         + (uids == null || uids.Count == 0 ? "(none)" : string.Join(", ", uids)) + ".");
                 Status("That map item is not part of a downloaded FeatureLink layer.");
                 return;
             }
