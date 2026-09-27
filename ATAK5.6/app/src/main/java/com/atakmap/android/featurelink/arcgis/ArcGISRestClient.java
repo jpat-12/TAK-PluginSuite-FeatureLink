@@ -48,7 +48,7 @@ public class ArcGISRestClient {
     private static final int DEFAULT_PAGE_SIZE = 1000;
     /** Hard ceiling on features pulled for one layer, so a runaway service cannot OOM the device.
      * Exceeding it sets {@link DownloadResult#truncated}, which the UI must surface. */
-    static final int MAX_TOTAL_FEATURES = 50_000;
+    public static final int MAX_TOTAL_FEATURES = 50_000;
     /** Defence against a server that ignores {@code resultOffset} and re-serves page 1 forever. */
     private static final int MAX_PAGES = 200;
     /** Portal search page size, and the ceiling on total portal items enumerated. */

@@ -76,6 +76,7 @@ public class ArcGISLayer {
         featureCount = 0;
         downloadEnabled = false;
         lastDownloadTruncated = false;
+        largeDownloadAccepted = false;
         visible = true;
         browseOrigin = "";
     }
@@ -85,6 +86,10 @@ public class ArcGISLayer {
     /** True when the last download hit the pagination cap and the on-map picture is incomplete
      * (C-06). Never present a truncated download as a complete one. */
     public boolean lastDownloadTruncated = false;
+    /** The operator said yes to downloading this layer despite its size (owner decision 4:
+     * layers over the large-layer threshold prompt first). Persisted so a scheduled refresh does
+     * not ask again; cleared with the on-device copy so a re-added layer asks afresh. */
+    public boolean largeDownloadAccepted = false;
 
     public ArcGISLayer(String name, String url, String type) {
         this.name = name;
@@ -161,6 +166,7 @@ public class ArcGISLayer {
         obj.put("maxRecordCount",     maxRecordCount);
         obj.put("itemId",             itemId);
         obj.put("browseOrigin",       browseOrigin);
+        obj.put("largeDownloadAccepted", largeDownloadAccepted);
         return obj;
     }
 
@@ -181,6 +187,7 @@ public class ArcGISLayer {
         layer.maxRecordCount  = obj.optInt("maxRecordCount", 0);
         layer.itemId          = obj.optString("itemId", "");
         layer.browseOrigin    = obj.optString("browseOrigin", "");
+        layer.largeDownloadAccepted = obj.optBoolean("largeDownloadAccepted", false);
 
         if (obj.has("recurrenceInterval")) {
             layer.recurrenceInterval = obj.optInt("recurrenceInterval", 0);

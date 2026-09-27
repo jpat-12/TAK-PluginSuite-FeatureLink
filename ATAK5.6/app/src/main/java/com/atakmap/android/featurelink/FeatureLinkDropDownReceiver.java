@@ -148,6 +148,21 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
      * phase, so a tab-switching operator may never actually send — Appendix A §5). */
     private boolean suppressAutoSendListener = false;
 
+    /**
+     * Owner decision 4 (2026-09-27): a layer with more features than this asks before it
+     * downloads. Every feature becomes its own map item, and phones slow down well before the
+     * {@link ArcGISRestClient#MAX_TOTAL_FEATURES} hard cap, which stays as the backstop.
+     */
+    private static final long LARGE_LAYER_PROMPT_THRESHOLD = 10_000;
+
+    /**
+     * Canonical URLs of large layers already asked about this session. Only the scheduled
+     * refresh consults it: an over-threshold layer is over it on every tick, so without this a
+     * declined layer would re-prompt every recurrence. A "no" lives only here, so restarting ATAK
+     * offers again; a "yes" is persisted on the layer instead.
+     */
+    private final Set<String> largeLayerAsked = Collections.synchronizedSet(new HashSet<>());
+
     private static java.util.concurrent.ThreadFactory namedThreads(String prefix) {
         final java.util.concurrent.atomic.AtomicInteger n =
                 new java.util.concurrent.atomic.AtomicInteger();
@@ -1937,6 +1952,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         // ArcGISLayer off-thread (Appendix A §5).
         final String layerUrl = layer.url;
         final String layerName = layer.name;
+        final boolean largeAccepted = layer.largeDownloadAccepted;
+        // Only the interactive pool carries operator-initiated single downloads; bgExecutor
+        // with no outcome sink is the recurrence refresh.
+        final boolean interactive = pool == executor;
 
         return submit(pool, () -> {
             try {
@@ -1946,6 +1965,15 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 // then went out unauthenticated and came back 499 "Token Required" — presented to
                 // the operator as an expired session that signing in again did not fix.
                 final String token = needsToken ? authManager.getToken() : null;
+
+                if (!largeAccepted) {
+                    long count = preflightFeatureCount(layerUrl, layerName, token);
+                    if (count > LARGE_LAYER_PROMPT_THRESHOLD) {
+                        holdLargeLayer(layer, layerName, count, pool, outcome, interactive);
+                        return;
+                    }
+                }
+
                 // One-time lazy backfill for layers added before geometryType existed, or whose
                 // browse-list search result (a portal item, not layer metadata) never carried it.
                 String geometryType = layer.geometryType;
@@ -2055,6 +2083,72 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                             .show();
                 });
             }
+        });
+    }
+
+    /**
+     * The layer's feature count, or -1 when the service would not say. Fails OPEN: some valid
+     * services do not answer {@code returnCountOnly}, and refusing them would break working
+     * layers; the download's own truncation path remains the backstop. Background thread only.
+     */
+    private long preflightFeatureCount(String layerUrl, String layerName, String token) {
+        try {
+            return restClient.queryFeatureCount(layerUrl, token);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not pre-check the feature count for " + layerName
+                    + "; proceeding with the download", e);
+            return -1;
+        }
+    }
+
+    /**
+     * Stops an over-threshold download and asks the operator instead (owner decision 4). A yes
+     * is persisted on the layer and re-dispatches the download on the same pool.
+     *
+     * <p>A bulk sweep never prompts — it exists to fold N results into one summary rather than a
+     * stack of dialogs — so the layer is reported back as needing its own download. A scheduled
+     * refresh prompts once per session; a single operator-initiated download always prompts,
+     * because they just asked for it and silence would read as Sync being broken.
+     */
+    private void holdLargeLayer(ArcGISLayer layer, String layerName, long count,
+            ExecutorService pool, DownloadOutcome outcome, boolean interactive) {
+        final String countText = String.format(java.util.Locale.ROOT, "%,d", count);
+        if (outcome != null) {
+            postToUi(() -> outcome.onFinished(layerName, false, false, countText
+                    + " features — download this layer on its own to approve its size"));
+            return;
+        }
+        boolean firstAsk = largeLayerAsked.add(layer.canonicalUrl());
+        if (!interactive && !firstAsk) return;   // declined earlier this session; stay quiet
+
+        final boolean overCap = count > ArcGISRestClient.MAX_TOTAL_FEATURES;
+        postToUi(() -> {
+            String message = "\"" + layerName + "\" contains " + countText + " features.\n\n"
+                    + "Each one is plotted as a separate map item, so a layer this size will take "
+                    + "a while to sync and may slow the map down."
+                    + (overCap
+                        ? "\n\nOnly the first " + String.format(java.util.Locale.ROOT, "%,d",
+                                ArcGISRestClient.MAX_TOTAL_FEATURES) + " will be loaded."
+                        : "")
+                    + "\n\n" + (interactive
+                        ? "Download it anyway?"
+                        : "This layer is due for its scheduled refresh. Download it now?")
+                    + "\n\nYes is remembered for this layer.";
+            new AlertDialog.Builder(getMapView().getContext())
+                    .setTitle("Large layer")
+                    .setMessage(message)
+                    .setPositiveButton("Download", (d, w) -> {
+                        layer.largeDownloadAccepted = true;
+                        saveLayerOfSection(layer);
+                        downloadLayer(layer, pool);
+                    })
+                    .setNegativeButton("Cancel", (d, w) -> {
+                        Log.i(TAG, "Operator declined the " + count + "-feature download of "
+                                + layerName);
+                        Toast.makeText(pluginContext, "Sync of " + layerName + " cancelled",
+                                Toast.LENGTH_SHORT).show();
+                    })
+                    .show();
         });
     }
 
