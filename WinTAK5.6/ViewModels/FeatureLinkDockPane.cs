@@ -1623,9 +1623,7 @@ namespace FeatureLink.ViewModels
 
             try
             {
-                TrackSend(package.Path, package.Name);
-                _communicationService.SendMissionPackage(
-                    picked, new FileInfo(package.Path), package.Name, false);
+                SendDataPackage(package.Path, package.Name, picked);
 
                 string who = picked.Count == 1 ? "1 contact" : picked.Count + " contacts";
                 SetStatus($"Sending \"{package.Name}\" to {who}…");
@@ -1865,9 +1863,7 @@ namespace FeatureLink.ViewModels
 
             try
             {
-                TrackSend(written.Path, packageName);
-                _communicationService.SendMissionPackage(
-                    recipients.ToList(), new FileInfo(written.Path), packageName, false);
+                SendDataPackage(written.Path, packageName, recipients);
 
                 // Deliberately NOT deleted after sending any more. It used to go to %TEMP% and be
                 // removed two minutes later, which kept a file holding layer URLs and display
@@ -1891,6 +1887,63 @@ namespace FeatureLink.ViewModels
                 TryDelete(written.Path);
                 return DataPackageWorkflow.DeliveryResult.Failed(
                     "Could not send the data package: " + Describe(ex));
+            }
+        }
+
+        /// <summary>
+        /// Sends a built package, giving CloudTAK recipients the CloudTAK-shaped copy
+        /// (<see cref="CloudTakPackage"/>) and everyone else the standard package. Throws when
+        /// either send cannot be queued, like <c>SendMissionPackage</c> itself.
+        /// </summary>
+        private void SendDataPackage(string packagePath, string packageName, IEnumerable<string> recipients)
+        {
+            var cloudTak = new List<string>();
+            var others = new List<string>();
+            foreach (string uid in recipients ?? Enumerable.Empty<string>())
+                (IsCloudTakContact(uid) ? cloudTak : others).Add(uid);
+
+            if (others.Count > 0)
+            {
+                TrackSend(packagePath, packageName);
+                _communicationService.SendMissionPackage(others, new FileInfo(packagePath), packageName, false);
+            }
+
+            if (cloudTak.Count == 0) return;
+
+            // Staged outside WinTAK's Data Packages folder so it is never listed as a second copy of
+            // the package there. Kept rather than deleted after sending: Commo uploads it
+            // asynchronously, and the next conversion of the same package overwrites it.
+            string cloudTakPath = Path.Combine(DataPackageWriter.FallbackDirectory, "cloudtak",
+                Path.GetFileName(packagePath));
+            var converted = CloudTakPackage.Convert(packagePath, cloudTakPath);
+
+            Log.Info($"Sending the CloudTAK form of \"{packageName}\" to {cloudTak.Count} CloudTAK "
+                     + $"contact(s): {converted.IconsetCount} iconset(s) expanded for CloudTAK's importer.");
+            if (converted.RepeatedIconNames.Count > 0)
+                Log.Warn("CloudTAK matches iconset images by file name, and these names appear in more "
+                         + "than one iconset in this package: " + string.Join(", ", converted.RepeatedIconNames)
+                         + ". A CloudTAK recipient without the FeatureLink plugin may see the wrong symbol "
+                         + "for them.");
+
+            TrackSend(cloudTakPath, packageName);
+            _communicationService.SendMissionPackage(cloudTak, new FileInfo(cloudTakPath), packageName, false);
+        }
+
+        /// <summary>Whether a contact uid belongs to a CloudTAK session. A contact that cannot be
+        /// read is treated as not CloudTAK: it gets the standard package, which every client
+        /// accepts, rather than a reshaped one.</summary>
+        private bool IsCloudTakContact(string uid)
+        {
+            try
+            {
+                var contact = (_contactService?.Contacts ?? _contactService?.AllContacts)?
+                    .FirstOrDefault(c => c != null && string.Equals(c.Uid, uid, StringComparison.Ordinal));
+                return CloudTakPackage.IsCloudTakClient(contact?.ClientPlatform, uid);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("Could not read contact " + uid + " to check its platform: " + ex.Message);
+                return CloudTakPackage.IsCloudTakClient(null, uid);
             }
         }
 

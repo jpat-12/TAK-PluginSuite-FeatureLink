@@ -149,6 +149,7 @@
     <Compile Include="Services\AutoSymbology.cs" />
     <Compile Include="Services\DataPackageBuilder.cs" />
     <Compile Include="Services\DataPackageWriter.cs" />
+    <Compile Include="Services\CloudTakPackage.cs" />
     <Compile Include="Services\DialogService.cs" />
     <Compile Include="Services\FeatureSelection.cs" />
     <Compile Include="Services\MapAreaSelector.cs" />
