@@ -47,6 +47,13 @@ share convention (`FeatureLink - <layer>`), downloads the raw zip, extracts that
 applies it the same way **Add Layer → Import Config** does. Success/failure surfaces as an
 **Auto-Import** row on the Home tab.
 
+**Data packages** (`FeatureLink-<name>-<stamp>`, see `docs/DATA-PACKAGE-FORMAT.md`) go through the
+same poll. `lib/packageContents.ts` reads **every** layer config in the package (not just the
+first) and every iconset, zipped or expanded; the iconsets are registered with CloudTAK — spritesheet
+regenerated — *before* the layers are applied, once per import. CloudTAK's own importer already
+turns the package's `cot/` features into saved features when WinTAK sends the CloudTAK-shaped
+package; this plugin adds the layers and the working icons on top.
+
 This reaches past `PluginAPI`'s documented surface to call `/api/import` directly with a token
 read out of `localStorage` (`lib/cloudtakInternals.ts`), so it's inherently fragile against
 future CloudTAK changes — every failure path is caught and shown rather than failing silently.
@@ -183,7 +190,8 @@ plugin/
     layerActions.ts              shared layer CRUD/download; feature counts on sign-in (count-only, no download)
     layerShare.ts                share-config JSON builder + clipboard/file-download helpers
     importConfig.ts              paste/upload/auto-ingested config JSON → apply (QR-scan replacement)
-    importIngest.ts              polls /api/import for ATAK-shared packages, applies them (see Receiving section)
+    importIngest.ts              polls /api/import for FeatureLink shares and data packages, applies them (see Receiving section)
+    packageContents.ts           reads a received package's layer configs + iconsets (standard and CloudTAK shapes)
     zipReader.ts                 hand-rolled ZIP central-directory parse + DecompressionStream (no zip dep)
     cloudtakInternals.ts         reach-in: reads CloudTAK's session token from localStorage for /api/import
     cot.ts                       map marker reach-in, PLI breadcrumbs, on-screen marker listing

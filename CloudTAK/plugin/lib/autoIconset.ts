@@ -206,7 +206,7 @@ export function extractPmsEntries(renderer: EsriRendererJson | undefined, fieldO
 
 // ── CloudTAK iconset registration (the fragile, unofficial part) ───────────────
 
-interface IconToUpload { name: string; imageData: string }
+export interface IconToUpload { name: string; imageData: string }
 
 async function apiPost(path: string, body: unknown, token: string): Promise<number> {
     const res = await fetch(path, {
@@ -279,7 +279,8 @@ function isPlausiblePng(base64: string): boolean {
 // deterministic UID is worse than none, because every other platform resolves {uid}/{group}/{file}
 // against it and gets a 404 (§10.3). Failures are collected and reported rather than aborting
 // mid-set on the first one.
-async function registerIconset(uid: string, group: string, icons: IconToUpload[], token: string): Promise<{ uploaded: number; failed: string[] }> {
+// Also used by importIngest.ts to install the iconsets a received data package carries.
+export async function registerIconset(uid: string, group: string, icons: IconToUpload[], token: string): Promise<{ uploaded: number; failed: string[] }> {
     // The body must satisfy CloudTAK's TypeBox schema at api/routes/icons.ts's POST /iconset.
     // Every field below was rejected with a bare HTTP 400 in production until it matched:
     //

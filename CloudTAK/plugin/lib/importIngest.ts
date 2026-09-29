@@ -19,8 +19,9 @@
 
 import { reactive } from 'vue';
 import { getCloudTakToken } from './cloudtakInternals.ts';
-import { findZipEntryText, listZipEntryNames } from './zipReader.ts';
 import { applyConfigText } from './importConfig.ts';
+import { readPackageContents, CONFIG_SUFFIX } from './packageContents.ts';
+import { registerIconset } from './autoIconset.ts';
 
 const POLL_MS = 60_000;
 const HANDLED_KEY = 'cloudtak-featurelink:handled-imports';
@@ -30,7 +31,9 @@ const HANDLED_KEY = 'cloudtak-featurelink:handled-imports';
 // client-side instead, which is robust regardless of the filter param's exact server semantics.
 // Matches LayerShareHelper.java's "FeatureLink - <layer>.zip" package naming.
 const NAME_PREFIX = 'FeatureLink';
-const ENTRY_SUFFIX = '.featurelinkshare';
+// Imports whose iconsets have already been installed. Unlike configs (idempotent, re-applied every
+// poll), installing an iconset deletes and re-uploads every icon, so it runs once per import.
+const ICONSETS_DONE_KEY = 'cloudtak-featurelink:package-iconsets-installed';
 
 export const ingestState = reactive<{ status: 'idle' | 'ok' | 'error'; message: string }>({
     status: 'idle',
@@ -53,6 +56,19 @@ function saveHandled(handled: Set<string>): void {
     catch { /* quota */ }
 }
 
+function loadIconsetsDone(): Set<string> {
+    try {
+        const raw = localStorage.getItem(ICONSETS_DONE_KEY);
+        if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch { /* ignore */ }
+    return new Set();
+}
+
+function saveIconsetsDone(done: Set<string>): void {
+    try { localStorage.setItem(ICONSETS_DONE_KEY, JSON.stringify(Array.from(done).slice(-200))); }
+    catch { /* quota */ }
+}
+
 async function apiGet<T>(path: string, token: string): Promise<T> {
     const res = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
@@ -66,28 +82,64 @@ async function processPackage(item: ImportListItem, token: string): Promise<void
     if (!rawRes.ok) throw new Error(`raw fetch → HTTP ${rawRes.status}`);
     const zipBuf = await rawRes.arrayBuffer();
 
-    const text = await findZipEntryText(zipBuf, ENTRY_SUFFIX);
-    if (text === null) {
+    const pkg = await readPackageContents(zipBuf);
+    if (!pkg || (pkg.configs.length === 0 && pkg.iconsets.length === 0)) {
         // A package named like a FeatureLink share that does not contain one. This used to be a
         // bare `return` — no log, no status, no trace anywhere — so a share that arrived with an
         // unexpected entry name looked identical to one that never arrived at all, and there was
         // no way to tell which from inside CloudTAK. Say what was actually in the zip.
-        const names = listZipEntryNames(zipBuf);
+        const names = pkg?.entryNames ?? [];
         ingestState.status = 'error';
         ingestState.message = names.length
-            ? `"${item.name}" has no ${ENTRY_SUFFIX} file — it contains: ${names.join(', ')}`
+            ? `"${item.name}" has no ${CONFIG_SUFFIX} file — it contains: ${names.join(', ')}`
             : `"${item.name}" could not be read as a ZIP package`;
-        console.warn('[featurelink] import', item.name, 'contained no', ENTRY_SUFFIX, '— entries:', names);
+        console.warn('[featurelink] import', item.name, 'contained no', CONFIG_SUFFIX, '— entries:', names);
         return;
     }
 
+    // Iconsets BEFORE configs: applying a config downloads the layer, and its markers resolve their
+    // icons as they are created. A data package (DATA-PACKAGE-FORMAT.md) carries the iconsets so a
+    // recipient who cannot reach ArcGIS still gets the right symbols. CloudTAK's own importer cannot
+    // install a zipped iconset at all, and for an expanded one it never regenerates the spritesheet
+    // the map draws from — so they are registered here in both cases.
+    const iconsetNotes: string[] = [];
+    const iconsetsDone = loadIconsetsDone();
+    if (pkg.iconsets.length && !iconsetsDone.has(item.id)) {
+        for (const set of pkg.iconsets) {
+            if (!set.icons.length) continue;
+            try {
+                const { uploaded, failed } = await registerIconset(set.uid, set.group, set.icons, token);
+                if (failed.length) {
+                    iconsetNotes.push(`${set.group}: ${failed.length} icon(s) failed`);
+                    console.warn('[featurelink] package iconset', set.uid, 'partial:', failed);
+                } else {
+                    console.debug('[featurelink] package iconset', set.uid, 'installed,', uploaded, 'icons');
+                }
+            } catch (e) {
+                iconsetNotes.push(`${set.group}: ${e instanceof Error ? e.message : String(e)}`);
+                console.warn('[featurelink] package iconset', set.uid, 'could not be installed', e);
+            }
+        }
+        iconsetsDone.add(item.id);
+        saveIconsetsDone(iconsetsDone);
+    }
+
+    // Every layer in the package, not just the first — a data package can carry several.
     // 'auto': a background poll must respect a deliberate removal. Without this the package sitting
     // in CloudTAK's Import Manager re-added the layer within 60 seconds of every delete, forever.
-    const result = await applyConfigText(text, 'auto');
-    ingestState.status = result.ok ? 'ok' : 'error';
-    ingestState.message = result.ok
-        ? `Auto-imported "${item.name}": ${result.message}`
-        : `"${item.name}" failed to apply: ${result.message}`;
+    const applied: string[] = [];
+    const failures: string[] = [];
+    for (const text of pkg.configs) {
+        const result = await applyConfigText(text, 'auto');
+        (result.ok ? applied : failures).push(result.message);
+    }
+
+    const iconsets = pkg.iconsets.length ? `${pkg.iconsets.length} iconset(s)` : '';
+    const parts = [...applied, iconsets].filter(Boolean);
+    ingestState.status = failures.length || iconsetNotes.length ? 'error' : 'ok';
+    ingestState.message = failures.length || iconsetNotes.length
+        ? `"${item.name}": ${[...failures, ...iconsetNotes].join('; ')}`
+        : `Auto-imported "${item.name}": ${parts.join('; ')}`;
 }
 
 async function checkOnce(): Promise<void> {

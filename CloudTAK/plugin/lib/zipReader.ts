@@ -48,7 +48,7 @@ function listEntries(buf: ArrayBuffer): ZipEntry[] {
     return entries;
 }
 
-async function readEntryText(buf: ArrayBuffer, entry: ZipEntry): Promise<string> {
+async function readEntryBytes(buf: ArrayBuffer, entry: ZipEntry): Promise<ArrayBuffer> {
     const view = new DataView(buf);
     // The local file header's own name/extra-field lengths can differ slightly from the Central
     // Directory's copy — read them fresh to find exactly where compressed data starts.
@@ -57,12 +57,44 @@ async function readEntryText(buf: ArrayBuffer, entry: ZipEntry): Promise<string>
     const dataStart = entry.localHeaderOffset + 30 + localNameLen + localExtraLen;
     const compressed = new Uint8Array(buf, dataStart, entry.compressedSize);
 
-    if (entry.method === 0) return new TextDecoder().decode(compressed); // stored, no compression
+    if (entry.method === 0) return compressed.slice().buffer; // stored, no compression
     if (entry.method === 8) {
         const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-        return await new Response(stream).text();
+        return await new Response(stream).arrayBuffer();
     }
     throw new Error(`Unsupported ZIP compression method: ${entry.method}`);
+}
+
+async function readEntryText(buf: ArrayBuffer, entry: ZipEntry): Promise<string> {
+    return new TextDecoder().decode(await readEntryBytes(buf, entry));
+}
+
+/** A ZIP opened once, so a package's entries can be read by name without re-parsing it. */
+export interface ZipArchive {
+    names: string[];
+    text(name: string): Promise<string>;
+    bytes(name: string): Promise<ArrayBuffer>;
+}
+
+/** Opens a ZIP for reading by entry name, or returns null when the buffer is not a ZIP. */
+export function openZip(zipBuf: ArrayBuffer): ZipArchive | null {
+    let entries: ZipEntry[];
+    try {
+        entries = listEntries(zipBuf);
+    } catch {
+        return null;
+    }
+    const byName = new Map(entries.map(e => [e.name, e]));
+    const get = (name: string): ZipEntry => {
+        const entry = byName.get(name);
+        if (!entry) throw new Error(`No "${name}" in the ZIP`);
+        return entry;
+    };
+    return {
+        names: entries.map(e => e.name),
+        text: name => readEntryText(zipBuf, get(name)),
+        bytes: name => readEntryBytes(zipBuf, get(name)),
+    };
 }
 
 // Returns the text content of the first entry whose name ends with `suffix`, or null if none
