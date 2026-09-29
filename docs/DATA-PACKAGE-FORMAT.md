@@ -1,7 +1,9 @@
 # FeatureLink Data Packages
 
-**Status:** implemented in WinTAK 5.6 as of 2.12.8. Not yet implemented in ATAK, CloudTAK or
-TAK Portal — this document is the contract those ports should follow.
+**Status:** produced by WinTAK 5.6 (2.12.8+). **Received by CloudTAK** as of 2.12.14: WinTAK
+sends CloudTAK contacts a CloudTAK-shaped copy (see "CloudTAK recipients"), and the FeatureLink
+CloudTAK plugin ingests either shape. Not yet produced by ATAK, CloudTAK or TAK Portal — this
+document is the contract those ports should follow.
 
 ---
 
@@ -301,15 +303,17 @@ duplicates in the recipient's list; different contents produce a different UID.
 ## The selection workflow
 
 The **PACKAGES** tab (between LAYERS and PLI) has two halves: the four-step **create** workflow below, and a **Built packages** listing under it. It is also reachable from
-a button on each layer row — which pre-selects that layer's features — and from the package button
-beside the account icon in the header.
+a button on each layer row, which pre-selects that layer's features.
 
 1. **Name** — pre-filled automatically, and the automatic name stops overwriting the box the
    moment the operator types in it.
 2. **Select** — three ways, which compose rather than replace each other:
    - *Click points* — click features on the map to add or remove them individually.
-   - *Draw area* — drag a rectangle; everything inside is added.
-   - *Draw radius* — drag out from a centre; everything inside is added.
+   - *Draw area* — click two opposite corners; everything inside is added.
+   - *Draw radius* — click the centre, then the edge; everything inside is added.
+   A drag still works where it produces a real shape, but on a live 5.6 map `PushMapEvents` does
+   not stop a drag from panning, so the ground under the cursor never changes and a drag arrives
+   as a zero-size shape. Two clicks do not pan.
    - *Add a whole layer* — for when the map is not the convenient way to say it.
 3. **Review** — the selection, with Find (centres the map on it) and Remove per row. **Back**
    returns to step 2 with everything still selected: the selection is keyed by feature UID, so
@@ -436,6 +440,64 @@ recipient who cannot reach ArcGIS would get nothing at all.
 
 ---
 
+## CloudTAK recipients
+
+CloudTAK imports a received package in its events task (`tasks/events/src/worker.ts`,
+CloudTAK 13.100), and that importer and ATAK's want **opposite** things from the same manifest
+entry, so no single package serves both:
+
+| | ATAK | CloudTAK |
+|---|---|---|
+| Iconset zipped at the root | **installs it** | no converter for `.zip` → **the whole import fails** |
+| Iconset expanded (`iconset.xml` + PNGs listed) | offers each PNG as an image to place | **installs it** |
+| `.featurelinkshare` listed | imported by the FeatureLink plugin | no converter → **the whole import fails** |
+
+The CloudTAK failure is the worst kind: the `cot/` features import first, *then* the import dies on
+the first unsupported file, before iconsets are ever processed. Replayed against a real package:
+28 features in, import failed at `CoT-Vis Icons.zip`, no iconset.
+
+So WinTAK sends **CloudTAK contacts** (`Contact.ClientPlatform` contains "CloudTAK", or the uid
+starts `ANDROID-CloudTAK-`) a copy re-shaped by `CloudTakPackage.Convert`; everyone else gets the
+standard package above, unchanged. The CloudTAK shape:
+
+```
+FeatureLink-Ground_Teams-20260920-1234.zip
+├── MANIFEST/manifest.xml            ← same Configuration (uid, name, onReceive*)
+├── iconsets/<uid>.xml               ← the iconset.xml, listed, ignore="false"
+├── Incident Icons/Active.png        ← PNGs at <Group>/<file>, listed, ignore="false"
+├── featurelink/<stem>.featurelinkshare   ← kept, but listed ignore="true"
+└── cot/<feature-uid>.cot            ← unchanged
+```
+
+- **PNGs sit at `<Group>/<file>`** because CloudTAK stores an icon under `<uid>/<its package
+  path>`, and that has to equal the `<uid>/<Group>/<file>` a marker's usericon names. Replayed:
+  5 of 5 usericons resolved.
+- **The config is `ignore="true"`**: node-cot's `files()` honours `ignore`, so CloudTAK's importer
+  skips it, while the FeatureLink CloudTAK plugin reads the raw zip and still applies it.
+- The CloudTAK copy is staged in `%TEMP%\FeatureLinkPackages\cloudtak\` and is not listed in
+  WinTAK's Data Packages.
+
+### What a CloudTAK user gets
+
+| | Without the FeatureLink plugin | With it |
+|---|---|---|
+| Selected features (`cot/`) | saved features, in a folder named for the package | same |
+| Iconset | installed, but **default markers until the spritesheet is regenerated** (CloudTAK's importer never regenerates it — use the iconset's *Regenerate* action) | installed and regenerated automatically |
+| Layers | — | every layer in the package added and downloaded |
+
+**Two CloudTAK limitations, both handled only by the plugin:**
+
+- The importer matches an iconset's icons to package files by **bare file name**, across the whole
+  package. Two iconsets that both contain `Active.png` can be given each other's image. WinTAK logs
+  a warning naming any repeated file names when it builds the CloudTAK copy.
+- The spritesheet (above).
+
+The plugin re-registers every iconset in a received package itself — once per import — which fixes
+both, and it reads the **standard** shape too, so a package from ATAK still gets its layers and
+icons on CloudTAK even though CloudTAK's own import of it fails.
+
+---
+
 ## Not yet verified
 
 **Read this before relying on the feature in the field.**
@@ -445,8 +507,10 @@ recipient who cannot reach ArcGIS would get nothing at all.
 2. **`onReceiveImport` behaviour on the recipient side is assumed, not observed** — specifically,
    whether ATAK and WinTAK both route a bundled iconset zip into the icon database on import, or
    whether the `.featurelinkshare` import path needs to install it explicitly.
-3. **Cross-platform:** ATAK, CloudTAK and TAK Portal neither produce nor consume these packages
-   yet.
+3. **Cross-platform:** ATAK and TAK Portal neither produce nor consume these packages yet.
+   CloudTAK consumes them (below); the CloudTAK shape was checked against CloudTAK's own parser
+   (`@tak-ps/node-cot` 14.52, replaying `worker.ts`) with a real package, but has not yet been
+   received on a live CloudTAK server.
 
 5. **Host registration is unverified.** `IMissionPackageService.AddPackage` is undocumented beyond
    its signature, so whether a package added this way appears in the Data Packages list
