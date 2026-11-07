@@ -1501,8 +1501,8 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
 
     private void startQrScan() {
         QrScanDialog dialog = new QrScanDialog(getMapView().getContext(), payload -> {
-            // Mode 4 — "Saved Dataset Link": a bare URL, not JSON. Fetch it and treat the
-            // response body as the real (Mode 1/2/3) config payload.
+            // Mode 5 "Config Download Link" / Mode 4 "Saved Dataset Link": a bare URL, not
+            // JSON. Download the config it points to and apply that body as a Mode 1/2/3 payload.
             if (QrHelper.isSavedDatasetLink(payload)) {
                 resolveSavedDatasetLink(payload.trim());
                 return;
@@ -1517,22 +1517,27 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         dialog.show();
     }
 
-    /** Fetches a Mode 4 link's response body and applies it as a normal scanned payload. */
+    /** Downloads the config a scanned link points to and applies it as a normal scanned payload. */
     private void resolveSavedDatasetLink(String url) {
+        mainHandler.post(() -> Toast.makeText(pluginContext, "Downloading config…",
+                Toast.LENGTH_SHORT).show());
         executor.submit(() -> {
-            String body;
+            String body = null;
+            String error = null;
             try {
                 body = QrHelper.fetchSavedDatasetLink(url);
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to fetch saved dataset link: " + url, e);
-                body = null;
+            } catch (QrHelper.LinkFetchException e) {
+                Log.e(TAG, "Failed to fetch config link: " + url, e);
+                error = e.getMessage();
             }
             final String fetched = body;
+            final String err = error;
             mainHandler.post(() -> {
                 hideOverlay();
                 if (fetched == null || fetched.isEmpty()) {
-                    Toast.makeText(pluginContext, "Could not load config from link",
-                            Toast.LENGTH_SHORT).show();
+                    Toast.makeText(pluginContext,
+                            err != null ? err : "Could not load config from link",
+                            Toast.LENGTH_LONG).show();
                     return;
                 }
                 applyScannedPayload(fetched);

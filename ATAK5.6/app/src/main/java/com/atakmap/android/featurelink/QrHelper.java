@@ -11,8 +11,6 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -108,38 +106,126 @@ final class QrHelper {
                 .toString();
     }
 
-    /** True if the scanned payload is a Mode 4 "Saved Dataset Link" — a bare URL, not JSON. */
+    /** True if the scanned payload is a bare URL (Mode 5 Config Download Link or Mode 4 Saved Dataset Link), not JSON. */
     static boolean isSavedDatasetLink(String payload) {
         String trimmed = payload.trim();
         return trimmed.startsWith("http://") || trimmed.startsWith("https://");
     }
 
+    /** Max config body we'll read from a scanned link — real configs are a few KB. */
+    private static final int MAX_LINK_BODY_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_REDIRECTS = 5;
+
+    /** "?load=<id>" on either configurator page (infra-TAK or TAK Portal). */
+    private static final java.util.regex.Pattern LOAD_LINK = java.util.regex.Pattern.compile(
+            "^(https?://[^/?#]+)/(?:featurelink/featurelink-display-config|featurelink-display-config"
+                    + "|featurelink-configs/configurator)/?\\?(?:.*&)?load=([a-fA-F0-9]{32})(?:[&#].*)?$");
+
     /**
-     * Fetches a Mode 4 "Saved Dataset Link" URL and returns the response body, which is
-     * expected to be a Mode 1/2/3 JSON config. Blocking — must be called off the main thread.
+     * Maps a scanned link to the URL that actually serves the config JSON.
+     *
+     * A Mode 5 "Config Download Link" (".../public/featurelink/<id>.json") is returned as-is.
+     * A Mode 4 "Saved Dataset Link" ("...configurator?load=<id>") points at the configurator's
+     * HTML page, which also sits behind a login — so it's rewritten to the same server's public
+     * download URL for that dataset. That makes older Saved Dataset Link QRs scannable in ATAK too
+     * (as long as the dataset has been re-saved since the server gained the download route).
      */
-    static String fetchSavedDatasetLink(String url) throws Exception {
-        HttpURLConnection conn = null;
-        try {
-            conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(HTTP_TIMEOUT_MS);
-            conn.setReadTimeout(HTTP_TIMEOUT_MS);
-            conn.setRequestProperty("Accept", "application/json");
-            int code = conn.getResponseCode();
-            java.io.InputStream is = (code >= 200 && code < 300)
-                    ? conn.getInputStream() : conn.getErrorStream();
-            if (is == null) return null;
-            StringBuilder sb = new StringBuilder();
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(is, StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = br.readLine()) != null) sb.append(line);
-            }
-            return sb.toString();
-        } finally {
-            if (conn != null) conn.disconnect();
+    static String toConfigDownloadUrl(String scanned) {
+        String url = scanned.trim();
+        java.util.regex.Matcher m = LOAD_LINK.matcher(url);
+        if (m.matches()) {
+            return m.group(1) + "/public/featurelink/" + m.group(2).toLowerCase(java.util.Locale.US) + ".json";
         }
+        return url;
+    }
+
+    /** A scanned link that couldn't be turned into a config — message is user-facing. */
+    static final class LinkFetchException extends Exception {
+        LinkFetchException(String message) { super(message); }
+        LinkFetchException(String message, Throwable cause) { super(message, cause); }
+    }
+
+    /**
+     * Downloads the config a scanned link points to (Mode 5 Config Download Link, or a Mode 4
+     * Saved Dataset Link via {@link #toConfigDownloadUrl}) and returns the JSON body. Follows
+     * redirects itself, including http→https, which HttpURLConnection won't do on its own.
+     * Blocking — must be called off the main thread.
+     *
+     * @throws LinkFetchException with a message suitable for a Toast when the server answers
+     *         with an error, a login/HTML page, or something that isn't JSON.
+     */
+    static String fetchSavedDatasetLink(String scanned) throws LinkFetchException {
+        String target = toConfigDownloadUrl(scanned);
+        for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
+            HttpURLConnection conn = null;
+            try {
+                java.net.URL u = new java.net.URL(target);
+                conn = (HttpURLConnection) u.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setInstanceFollowRedirects(false);
+                conn.setConnectTimeout(HTTP_TIMEOUT_MS);
+                conn.setReadTimeout(HTTP_TIMEOUT_MS);
+                conn.setRequestProperty("Accept", "application/json");
+                int code = conn.getResponseCode();
+
+                if (code >= 300 && code < 400) {
+                    String loc = conn.getHeaderField("Location");
+                    if (loc == null || loc.isEmpty()) {
+                        throw new LinkFetchException("Config link redirected nowhere (HTTP " + code + ")");
+                    }
+                    target = new java.net.URL(u, loc).toString();
+                    continue;
+                }
+                if (code == 404) {
+                    throw new LinkFetchException("Config not found on server — re-Save it in the configurator");
+                }
+                if (code == 401 || code == 403) {
+                    throw new LinkFetchException("Server wants a login for this link — use a Config Download Link QR");
+                }
+                if (code < 200 || code >= 300) {
+                    throw new LinkFetchException("Config download failed (HTTP " + code + ")");
+                }
+
+                String body = readCapped(conn.getInputStream());
+                String trimmed = body.trim();
+                String ctype = conn.getContentType() != null ? conn.getContentType().toLowerCase(java.util.Locale.US) : "";
+                if (ctype.contains("text/html") || trimmed.startsWith("<")) {
+                    // Typically an SSO/login page (Authentik forward_auth) or the configurator itself.
+                    throw new LinkFetchException("Link opened a web page, not a config — use a Config Download Link QR");
+                }
+                if (!trimmed.startsWith("{")) {
+                    throw new LinkFetchException("Link didn't return a FeatureLink config");
+                }
+                return trimmed;
+            } catch (LinkFetchException e) {
+                throw e;
+            } catch (java.net.SocketTimeoutException e) {
+                throw new LinkFetchException("Config download timed out", e);
+            } catch (java.net.UnknownHostException e) {
+                throw new LinkFetchException("Can't reach " + e.getMessage() + " — check network", e);
+            } catch (Exception e) {
+                throw new LinkFetchException("Could not download config: " + e.getMessage(), e);
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }
+        throw new LinkFetchException("Too many redirects on config link");
+    }
+
+    private static String readCapped(java.io.InputStream is) throws Exception {
+        if (is == null) return "";
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        try (java.io.InputStream in = is) {
+            while ((n = in.read(buf)) != -1) {
+                if (out.size() + n > MAX_LINK_BODY_BYTES) {
+                    throw new LinkFetchException("Config download is too large");
+                }
+                out.write(buf, 0, n);
+            }
+        }
+        return new String(out.toByteArray(), StandardCharsets.UTF_8);
     }
 
     /** Returns the parsed object if this is a valid FeatureLink QR payload, null otherwise. */

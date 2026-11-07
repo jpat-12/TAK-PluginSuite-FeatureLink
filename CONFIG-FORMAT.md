@@ -253,16 +253,14 @@ configurator?load=<id>` — produced by the QR panel's **Saved Dataset Link**
 option (only enabled after Save) and the hub page's **QR**/**Copy link**
 buttons.
 
-This is **for a browser, not the plugin**: scanning it with an ordinary
-camera app opens the configurator with that dataset preloaded, so a person
-can review or keep tweaking it. It is not meant to be fetched directly by
-`QrHelper.fetchSavedDatasetLink()` — TAK Portal's `/featurelink-configs/
-configurator` page sits behind Authentik forward_auth and TAK Portal's own
-admin permission gate, so a raw HTTP GET from the plugin (no session cookie)
-would hit a login redirect, not JSON, even though the plugin's QR-scan code
-path does attempt exactly that fetch for any bare URL it scans. In practice:
-don't scan a Saved Dataset Link with ATAK's in-app QR scanner — only with a
-phone's regular camera/browser.
+This is **meant for a browser**: scanning it with an ordinary camera app
+opens the configurator with that dataset preloaded, so a person can review
+or keep tweaking it. The page itself sits behind a login, so the plugin
+can't use it directly. Instead, ATAK's scanner rewrites any `...?load=<id>`
+link on either configurator page to the same server's Mode 5 download URL
+(`QrHelper.toConfigDownloadUrl()`), so a Saved Dataset Link QR also works in
+ATAK, provided the dataset has been Saved since the server gained the
+download route (older records have no `share_config` yet and return 404).
 
 ## Mode 5 — Config Download Link
 
@@ -276,9 +274,11 @@ however large the config is.
   `buildShareConfig()` — Mode 2 for a FeatureLayer URL source, Mode 1 compact
   for an uploaded file. Edits after Save aren't served until you Save again
   (the QR panel shows an "Unsaved changes" pill when that's the case).
-- **Who reads it:** the ATAK plugin, unchanged — `QrHelper.isSavedDatasetLink()`
-  / `fetchSavedDatasetLink()` already GET any bare-URL QR (with
-  `Accept: application/json`) and feed the body to `applyScannedPayload()`.
+- **Who reads it:** the ATAK plugin's in-app QR scanner. `QrHelper.isSavedDatasetLink()`
+  spots a bare-URL QR, and `fetchSavedDatasetLink()` downloads it (following
+  redirects itself, including http→https, with a 2 MB cap) and hands the JSON to
+  `applyScannedPayload()`. A 404, a login/HTML page or a non-JSON body becomes a
+  specific Toast instead of "Not a valid FeatureLink QR code".
 - **Auth:** none. Path is under `/public/*`, which infra-TAK's Caddy already
   serves without Authentik forward_auth for TAK Portal; TAK Portal's
   `install.sh` adds it to `isPublicPortalBypass()` + the permissions registry,
