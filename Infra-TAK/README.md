@@ -45,7 +45,10 @@ code export, plus a save/admin layer:
   another instance of the configurator to import, URL+Config to also encode
   a FeatureLayer source, or (once saved) a **Saved Dataset Link** — a plain
   URL that opens this exact dataset + config in a browser with a single
-  camera scan, no app needed
+  camera scan, no app needed, or (also once saved, and the default after
+  Save) a **Config Download Link** — a short URL the FeatureLink plugin
+  downloads the full config from over HTTP, so the QR stays small however
+  big the config gets
 - **Save** — click **💾 Save** (top right, once data is loaded) to persist
   the dataset (the uploaded file, or the FeatureLayer URL) and its display
   config to the console. Saving again with the same session updates the
@@ -149,6 +152,21 @@ Scanning it should open that URL in a browser (or an in-app WebView) —
 there's nothing to parse. It only works for datasets that have been
 **Saved** first (the QR option is disabled otherwise), and `<dataset-id>`
 is a 32-char lowercase hex string.
+
+### 6. QR "Config Download Link" mode — **not JSON**
+
+Also a plain URL string, but one that serves JSON:
+
+```
+https://<console-host>/public/featurelink/<dataset-id>.json
+```
+
+`GET` returns the dataset's `share_config` — payload #4 (`v:2`) for a
+FeatureLayer URL source, payload #3 (`v:1`) for an uploaded file — with no
+login (the plugin has no console session; the random dataset id is the only
+gate). The JSON is snapshotted at **Save**, so the QR panel flags unsaved
+edits. ATAK's QR scanner already follows any bare `http(s)://` QR and applies
+the response body, so nothing changed on the plugin side.
 
 ### `sym` object (used in payloads #3 and #4)
 

@@ -91,7 +91,7 @@ function loadDataset(id) {
 }
 
 /**
- * payload: { id?, name, source_type, source_url, file_name, state, exported_config?, file_content_b64? }
+ * payload: { id?, name, source_type, source_url, file_name, state, exported_config?, share_config?, file_content_b64? }
  * actorUsername: the caller's identity (server-determined — never trust a client-supplied
  * "created_by"), recorded as owner on first create only; preserved as-is on update.
  */
@@ -116,6 +116,9 @@ function saveDataset(payload, actorUsername) {
     feature_count: payload.feature_count !== undefined ? Number(payload.feature_count) || 0 : existing.feature_count || 0,
     state: payload.state || {},
     exported_config: payload.exported_config || existing.exported_config || null,
+    // Plugin-ready JSON served without login at /public/featurelink/<id>.json (the
+    // configurator's "Config Download Link" QR target) — see featurelinkPublic.routes.js.
+    share_config: payload.share_config || existing.share_config || null,
     created_by: existing.created_by || actorUsername || null,
     created_at: existing.created_at || now,
     updated_at: now,

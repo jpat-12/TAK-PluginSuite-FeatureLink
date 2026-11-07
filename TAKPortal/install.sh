@@ -74,6 +74,7 @@ cp -f "$SRC_DIR/routes/featurelinkDatasetsAdmin.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/routes/featurelinkConfigurator.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/routes/featurelinkCustomIcons.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/routes/featurelinkBrowse.routes.js" "$PORTAL_DIR/routes/"
+cp -f "$SRC_DIR/routes/featurelinkPublic.routes.js" "$PORTAL_DIR/routes/"
 cp -f "$SRC_DIR/services/featurelinkDatasets.service.js" "$PORTAL_DIR/services/"
 cp -f "$SRC_DIR/services/featurelinkCustomIcons.service.js" "$PORTAL_DIR/services/"
 cp -f "$SRC_DIR/services/featurelinkArcgisIconset.service.js" "$PORTAL_DIR/services/"
@@ -195,6 +196,23 @@ if (!src.includes(CUSTOM_ICONS_CARVEOUT_MARKER)) {
   }
 } else {
   console.log('    = custom icon set carve-out already present');
+}
+
+// Public config download (/public/featurelink/<id>.json) — the configurator's "Config
+// Download Link" QR target, fetched by the ATAK plugin with no session. See
+// featurelinkPublic.routes.js.
+const PUBLIC_DL_CARVEOUT_MARKER = 'p.startsWith("/public/featurelink/")';
+if (!src.includes(PUBLIC_DL_CARVEOUT_MARKER)) {
+  const anchor = `  if (p.startsWith("/api/plugins/") && p.endsWith("/download") && m === "GET") return [];`;
+  if (src.includes(anchor)) {
+    src = src.replace(anchor, anchor + '\n  if (p.startsWith("/public/featurelink/") && m === "GET") return [];');
+    changed = true;
+    console.log('    + added public config download carve-out');
+  } else {
+    console.log('    ⚠ could not find plugin download carve-out anchor — public config download carve-out NOT added');
+  }
+} else {
+  console.log('    = public config download carve-out already present');
 }
 
 if (changed) fs.writeFileSync(path, src, 'utf-8');
@@ -366,6 +384,37 @@ app.get("/featurelink", (req, res) => res.render("featurelink"));
   console.log('    + added page routes');
 } else {
   console.log('    = page routes already present');
+}
+
+// Public config download (/public/featurelink/<id>.json): exempt it from portalAuth (no
+// Authentik session on a plugin fetch — Caddy's @public /public/* matcher already skips
+// forward_auth for it) and mount the route.
+const PUBLIC_BYPASS_MARKER = 'p.startsWith("/public/featurelink/")';
+if (!src.includes(PUBLIC_BYPASS_MARKER)) {
+  const anchor = '  if (p.startsWith("/api/public/locate/")) return true;';
+  if (src.includes(anchor)) {
+    src = src.replace(anchor, anchor + '\n  // FeatureLink Config Download Link QR target (featurelinkPublic.routes.js)\n  if (method === "GET" && p.startsWith("/public/featurelink/")) return true;');
+    changed = true;
+    console.log('    + added /public/featurelink to isPublicPortalBypass');
+  } else {
+    console.log('    ⚠ could not find isPublicPortalBypass anchor in server.js — Config Download Link QRs will hit the login gate');
+  }
+} else {
+  console.log('    = /public/featurelink already in isPublicPortalBypass');
+}
+const PUBLIC_MOUNT_MARKER = 'require("./routes/featurelinkPublic.routes")';
+if (!src.includes(PUBLIC_MOUNT_MARKER)) {
+  const anchor = 'app.use("/api/featurelink", require("./routes/featurelinkBrowse.routes"));';
+  if (src.includes(anchor)) {
+    src = src.replace(anchor, anchor + '\napp.use("/public/featurelink", require("./routes/featurelinkPublic.routes"));');
+    changed = true;
+    console.log('    + mounted public config download route');
+  } else {
+    console.error('ERROR: could not find featurelinkBrowse.routes mount in server.js — public config download NOT mounted');
+    process.exit(1);
+  }
+} else {
+  console.log('    = public config download route already mounted');
 }
 
 if (changed) fs.writeFileSync(path, src, 'utf-8');

@@ -59,6 +59,17 @@ own browser session (which already works fine — that's what forward_auth is
 for), and the plugin only ever deals with a file the user handed it, not a
 network call it has to authenticate on its own.
 
+**One exception: the Config Download Link QR.** So a QR doesn't have to
+carry the whole config JSON (which made it huge), the configurator's
+**Config Download Link** mode encodes just
+`https://takportal.<fqdn>/public/featurelink/<id>.json`, and the plugin
+downloads the config from there when it scans it. That path is deliberately
+public, with no token: `/public/*` is already outside Authentik forward_auth
+in infra-TAK's Caddy config (same as the hosted ATAK APK), and `install.sh`
+exempts it in `isPublicPortalBypass()` and the permissions registry. The
+unguessable dataset id is the only gate. See
+[`../CONFIG-FORMAT.md`](../CONFIG-FORMAT.md) "Mode 5".
+
 ## What it adds
 
 - **`assets/featurelink-configurator/`** — the ported Display Configurator:

@@ -114,6 +114,9 @@ def save_dataset(payload):
         'source_url': (payload.get('source_url') or '').strip(),
         'file_name': (payload.get('file_name') or '').strip(),
         'state': payload.get('state') or {},
+        # Plugin-ready JSON (Mode 2 for a URL source, Mode 1 compact otherwise) that the
+        # public download route below serves — what a "Config Download Link" QR points at.
+        'share_config': payload.get('share_config') or existing.get('share_config'),
         'created_at': existing.get('created_at') or now,
         'updated_at': now,
     }
@@ -398,6 +401,29 @@ def register_routes(app, login_required):
         if record is None:
             return jsonify({'ok': False, 'error': 'not found'}), 404
         return jsonify(record)
+
+    # Public (no login) download of a saved dataset's plugin-ready config — the target of
+    # the configurator's "Config Download Link" QR. The QR then only has to carry this short
+    # URL instead of the whole JSON; ATAK's scanner already fetches any bare-URL QR and
+    # applies the response body (QrHelper.fetchSavedDatasetLink). There's no session for
+    # the plugin to present, so the unguessable 128-bit dataset id is the only gate — the
+    # payload is display styling + the layer URL, nothing that isn't already in a QR.
+    @app.route('/public/featurelink/<dataset_id>.json')
+    @app.route('/public/featurelink/<dataset_id>')
+    def featurelink_displayconfig_public_config(dataset_id):
+        record = load_dataset(dataset_id)
+        cfg = (record or {}).get('share_config')
+        if not cfg:
+            resp = jsonify({'ok': False, 'error': 'not found'})
+            resp.status_code = 404
+        else:
+            resp = make_response(json.dumps(cfg))
+            resp.headers['Content-Type'] = 'application/json'
+            safe = re.sub(r'[^A-Za-z0-9._-]', '_', record.get('name') or 'featurelink-config')
+            resp.headers['Content-Disposition'] = f'attachment; filename="{safe}.json"'
+        resp.headers['Cache-Control'] = 'no-store'
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        return resp
 
     @app.route('/api/featurelink/datasets/<dataset_id>/file')
     @login_required

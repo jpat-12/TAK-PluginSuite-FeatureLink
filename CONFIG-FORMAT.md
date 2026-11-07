@@ -17,7 +17,8 @@ in `DisplayConfig.java`, applied in `FeatureLinkDropDownReceiver.
 applyScannedPayload()` → `applyScannedDisplayConfig()`, and (for CoT field
 mapping) `ArcGISRestClient.downloadLayerAsCoT()`.
 
-There are four distinct payload shapes, plus one cross-cutting piece (CoT
+There are four distinct payload shapes (plus Mode 5, a URL that downloads
+one of them), plus one cross-cutting piece (CoT
 field mapping) that only two of them carry.
 
 ## Mode 1 — compact, display-only (`v:1`)
@@ -262,6 +263,33 @@ would hit a login redirect, not JSON, even though the plugin's QR-scan code
 path does attempt exactly that fetch for any bare URL it scans. In practice:
 don't scan a Saved Dataset Link with ATAK's in-app QR scanner — only with a
 phone's regular camera/browser.
+
+## Mode 5 — Config Download Link
+
+A bare `https://` URL that **serves JSON**:
+`https://<host>/public/featurelink/<id>.json` — produced by the QR panel's
+**Config Download Link** option (enabled after Save, and auto-selected then).
+The QR only has to carry this short URL, so it stays small and easy to scan
+however large the config is.
+
+- **What it serves:** the record's `share_config`, snapshotted at Save time by
+  `buildShareConfig()` — Mode 2 for a FeatureLayer URL source, Mode 1 compact
+  for an uploaded file. Edits after Save aren't served until you Save again
+  (the QR panel shows an "Unsaved changes" pill when that's the case).
+- **Who reads it:** the ATAK plugin, unchanged — `QrHelper.isSavedDatasetLink()`
+  / `fetchSavedDatasetLink()` already GET any bare-URL QR (with
+  `Accept: application/json`) and feed the body to `applyScannedPayload()`.
+- **Auth:** none. Path is under `/public/*`, which infra-TAK's Caddy already
+  serves without Authentik forward_auth for TAK Portal; TAK Portal's
+  `install.sh` adds it to `isPublicPortalBypass()` + the permissions registry,
+  and infra-TAK's Flask route has no `login_required`. The random 128-bit
+  dataset id is the only gate, and what's served is display styling + the
+  layer URL, the same data a full-payload QR prints in plain sight. Not
+  suitable for configs whose layer URL itself must stay secret.
+- **Server side:** `featurelinkPublic.routes.js` (TAK Portal),
+  `featurelink_displayconfig_public_config()` (infra-TAK). Both send
+  `Content-Disposition: attachment; filename="<name>.json"`, so a phone camera
+  scan downloads the file rather than showing raw JSON.
 
 ## Which mode TAK Portal actually uses
 

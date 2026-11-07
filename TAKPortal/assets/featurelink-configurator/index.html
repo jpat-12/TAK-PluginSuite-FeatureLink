@@ -1009,7 +1009,9 @@
       encode the data source so the receiver auto-loads everything in one scan. Once you've
       <strong>Save</strong>d this dataset, use <strong>Saved Dataset Link</strong> mode to get a
       plain link — scanning it with any camera app opens this exact dataset + config straight in
-      the browser, no app required.
+      the browser, no app required. <strong>Config Download Link</strong> (also after Save) keeps the
+      QR tiny no matter how big the config is: it only holds a short URL, and the FeatureLink
+      plugin downloads the full config from this server over HTTP when it scans it.
     </p>
     <div class="qr-size-toggle">
       <label>Payload:</label>
@@ -1017,6 +1019,7 @@
         <option value="compact">Compact (symbology + labels + layer)</option>
         <option value="full">Full config (all settings)</option>
         <option value="urlcfg" id="qr-mode-urlcfg" disabled>URL + Config (load &amp; apply)</option>
+        <option value="download" id="qr-mode-download" disabled>Config Download Link (small QR, Save first)</option>
         <option value="link" id="qr-mode-link" disabled>Saved Dataset Link (scan to open)</option>
       </select>
       <label style="margin-left:12px">Size:</label>
@@ -1175,6 +1178,7 @@ let state = {
   rawFile: null,          // File object for the currently loaded local file, if any (re-sent on Save)
   savedDatasetId: null,   // set once this session is linked to a saved dataset (admin page)
   savedDatasetName: null,
+  savedShareConfig: null, // share_config as last saved/loaded — what the Config Download Link serves
   savedDatasetGroup: '',  // set when this session came from a "keep together" Web Map import
   pickerSymbologyMode: null, // 'with' | 'none' — set by the Add Data picker, consumed once in processRows()
   pickerRendererOverride: null, // Web Map per-layer style override, if any — read once in loadFromUrl()
@@ -1780,7 +1784,7 @@ function renderFileChip(name, count) {
 
 function clearFile() {
   state.rows = []; state.filtered = []; state.fields = []; state.fileName = null; state.featureLayerUrl = null; state.pendingConfig = null;
-  state.rawFile = null; state.savedDatasetId = null; state.savedDatasetName = null; state.savedDatasetGroup = '';
+  state.rawFile = null; state.savedDatasetId = null; state.savedDatasetName = null; state.savedShareConfig = null; state.savedDatasetGroup = '';
   state.rendererOverrideForExport = null;
   updateSavedBadge();
   document.getElementById('file-chip').style.display = 'none';
@@ -3278,6 +3282,9 @@ async function saveDatasetCore(name, group) {
     // symbology type (Mode 3's translation has gaps for Rule-Based/Advanced — see
     // cotMapping.md). Only meaningful for a live FeatureLayer URL source.
     exported_config: sourceType === 'url' ? buildUrlConfigExport() : null,
+    // Served as-is (no login) at /public/featurelink/<id>.json — the Config Download Link QR
+    // target. Unlike exported_config it also covers file sources (Mode 1 compact, display-only).
+    share_config: buildShareConfig(),
   };
 
   if (sourceType === 'file') {
@@ -3309,6 +3316,7 @@ async function saveDataset() {
     const saved = await saveDatasetCore(name, state.savedDatasetGroup);
     state.savedDatasetId = saved.id;
     state.savedDatasetName = saved.name;
+    state.savedShareConfig = saved.share_config || null;
     updateSavedBadge();
     generateQR();
     showToast('Saved! Find it under Saved Configs.');
@@ -3328,6 +3336,7 @@ async function loadSavedDataset(id) {
     state.savedDatasetId = rec.id;
     state.savedDatasetName = rec.name;
     state.savedDatasetGroup = rec.group || '';
+    state.savedShareConfig = rec.share_config || null;
     updateSavedBadge();
     state.pendingConfig = { _internal: true, cfg: (rec.state || {}).cfg || {} };
 
@@ -3429,7 +3438,22 @@ function buildFreqCompact() {
   return { iv: f.intervalValue, u: f.intervalUnit };
 }
 
+/** Plugin-ready config served by the public Config Download Link: Mode 2 (url + config) for a
+ * live FeatureLayer source, Mode 1 compact (display-only) for an uploaded file. */
+function buildShareConfig() {
+  return state.featureLayerUrl ? buildUrlConfigExport() : JSON.parse(buildQRPayload('compact'));
+}
+
+function shareDownloadUrl() {
+  return `${window.location.origin}/public/featurelink/${encodeURIComponent(state.savedDatasetId)}.json`;
+}
+
 function buildQRPayload(mode) {
+  if (mode === 'download') {
+    if (!state.savedDatasetId) return buildQRPayload('compact');
+    return shareDownloadUrl();
+  }
+
   if (mode === 'link') {
     if (!state.savedDatasetId) return buildQRPayload('compact');
     return `${window.location.origin}/featurelink-configs/configurator?load=${encodeURIComponent(state.savedDatasetId)}`;
@@ -3670,6 +3694,32 @@ function applyConfigPayload(p) {
 // added together in the first place.
 let qrModeUserTouched = false;
 
+const QR_USER_TOUCHED = () => typeof qrModeUserTouched !== 'undefined' && qrModeUserTouched;
+
+const QR_MODE_LABELS = {
+  compact: 'Compact mode', full: 'Full mode', urlcfg: 'URL + Config',
+  download: 'Download link', link: 'Saved Dataset Link',
+};
+
+/** Key-order-independent JSON (the server may re-sort keys on the way back). */
+function stableJson(v) {
+  const norm = x => Array.isArray(x) ? x.map(norm)
+    : (x && typeof x === 'object') ? Object.fromEntries(Object.keys(x).sort().map(k => [k, norm(x[k])]))
+    : x;
+  return JSON.stringify(norm(JSON.parse(JSON.stringify(v))));
+}
+
+/** In download mode the QR points at the config as last Saved — flag edits that aren't saved yet. */
+function shareStalePill() {
+  if (!state.savedDatasetId) return '';
+  let current;
+  try { current = stableJson(buildShareConfig()); } catch { return ''; }
+  if (state.savedShareConfig && stableJson(state.savedShareConfig) === current) {
+    return '<span class="qr-pill ok">✓ Download matches current settings</span>';
+  }
+  return '<span class="qr-pill warn">⚠ Unsaved changes — Save to update what this link downloads</span>';
+}
+
 function generateQR() {
   if (!state.rows.length) return;
 
@@ -3685,6 +3735,19 @@ function generateQR() {
     if (wasDisabled && !urlOpt.disabled && !qrModeUserTouched) {
       modeSelect.value = 'urlcfg';
     }
+  }
+  const dlOpt = document.getElementById('qr-mode-download');
+  if (dlOpt) {
+    const dlWasDisabled = dlOpt.disabled;
+    dlOpt.disabled = !state.savedDatasetId;
+    // Once saved, default to the download link — it's the one that stays small. Only on the
+    // disabled→enabled edge, so a mode the user picked afterwards sticks.
+    if (dlWasDisabled && !dlOpt.disabled && !QR_USER_TOUCHED()) {
+      document.getElementById('qr-mode').value = 'download';
+    }
+    dlOpt.textContent = state.savedDatasetId
+      ? 'Config Download Link (small QR) ✓'
+      : 'Config Download Link (small QR, Save first)';
   }
   const linkOpt = document.getElementById('qr-mode-link');
   if (linkOpt) {
@@ -3707,14 +3770,15 @@ function generateQR() {
   let sizeLabel = bytes < 1500 ? '✓ Small payload' : bytes < QR_BYTE_LIMIT ? '⚠ Large payload' : '✗ Too large';
   meta.innerHTML = `
     <span class="qr-pill ${sizeClass}">${sizeLabel} — ${bytes.toLocaleString()} bytes</span>
-    <span class="qr-pill">${mode === 'compact' ? 'Compact mode' : 'Full mode'}</span>
+    <span class="qr-pill">${QR_MODE_LABELS[mode] || mode}</span>
+    ${mode === 'download' ? shareStalePill() : ''}
     <span class="qr-pill">${px}px</span>
   `;
 
   if (bytes > QR_BYTE_LIMIT) {
     wrap.innerHTML = `<div class="qr-placeholder" style="color:#e57373">
       ⚠ Payload too large for QR<br>
-      <span style="font-size:11px">(${bytes.toLocaleString()} bytes — switch to Compact mode<br>or reduce unique values)</span>
+      <span style="font-size:11px">(${bytes.toLocaleString()} bytes — switch to Compact mode,<br>reduce unique values, or Save and use Config Download Link)</span>
     </div>`;
     return;
   }

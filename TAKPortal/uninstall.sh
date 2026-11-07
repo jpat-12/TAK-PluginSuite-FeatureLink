@@ -30,6 +30,10 @@ const fs = require('fs');
 const path = process.argv[2];
 let src = fs.readFileSync(path, 'utf-8');
 
+// Public Config Download Link route + its portalAuth bypass
+src = src.replace('\napp.use("/public/featurelink", require("./routes/featurelinkPublic.routes"));', '');
+src = src.replace('\n  // FeatureLink Config Download Link QR target (featurelinkPublic.routes.js)\n  if (method === "GET" && p.startsWith("/public/featurelink/")) return true;', '');
+
 // Old (pre-configurator-port) mount, in case uninstall runs against an older install.
 src = src.replace(`
 app.use("/api/featurelink/admin", requirePermission("page.featurelink_configs"), require("./routes/featurelinkConfigsAdmin.routes"));
@@ -68,6 +72,8 @@ node - "$PORTAL_DIR/services/permissions.registry.js" <<'NODEEOF'
 const fs = require('fs');
 const path = process.argv[2];
 let src = fs.readFileSync(path, 'utf-8');
+
+src = src.replace('\n  if (p.startsWith("/public/featurelink/") && m === "GET") return [];', '');
 
 src = src.replace(`
     featurelink_configs: {
@@ -183,6 +189,7 @@ rm -f "$PORTAL_DIR/routes/featurelinkConfigsAdmin.routes.js"
 rm -f "$PORTAL_DIR/routes/featurelinkDatasetsAdmin.routes.js"
 rm -f "$PORTAL_DIR/routes/featurelinkConfigurator.routes.js"
 rm -f "$PORTAL_DIR/routes/featurelinkBrowse.routes.js"
+rm -f "$PORTAL_DIR/routes/featurelinkPublic.routes.js"
 rm -f "$PORTAL_DIR/services/featurelinkConfigs.service.js"
 rm -f "$PORTAL_DIR/services/featurelinkDatasets.service.js"
 rm -f "$PORTAL_DIR/views/featurelink-configs.ejs"
