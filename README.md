@@ -105,6 +105,13 @@ Personal recommendation - TAK Portal Link & Map-Based Config are the easiest, es
 | 4 | **Map-Based Config** | Styling is read directly from a saved Web Map. | |
 | 5 | **Single FeatureLayer Import** | Styling is read directly from the feature layer, or the user is prompted for it. | Picture-marker (`esriPMS`) icons in the layer's renderer are auto-generated into a matching ATAK iconset **on-device, no server round-trip** — so custom marker icons render without any manual icon work, and match across platforms. *New; not yet field-tested. See [AUTO-ICONSET-SPEC.md](AUTO-ICONSET-SPEC.md).* |
 
+> **Finding public layers.** On ATAK, **Add Layer > Or browse an ArcGIS server** takes any
+> server's `…/rest/services` address and lets you drill into its folders and services to pick a
+> layer. Good places to start are in Joseph Elfelt's curated
+> [list of federal, state, county and city ArcGIS servers](https://mappingsupport.com/p/surf_gis/list-federal-state-county-city-GIS-servers.pdf)
+> (© Joseph Elfelt, mappingsupport.com). FeatureLink links to that list rather than bundling it:
+> its terms prohibit scraping the data, and commercial products based on it need his written permission.
+
 > **Auto-generated marker icons (federated, no server).** Methods 4/5 above now read a
 > layer's own picture-marker symbols and build a matching ATAK iconset locally on whichever
 > platform ingests the link — ATAK, TAK Portal, and (planned) CloudTAK/WinTAK each produce the

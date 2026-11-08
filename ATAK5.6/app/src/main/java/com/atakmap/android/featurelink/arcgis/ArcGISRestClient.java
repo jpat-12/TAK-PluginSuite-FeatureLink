@@ -408,6 +408,34 @@ public class ArcGISRestClient {
         return parseChecked(httpGet(appendQuery(url, "f=json"), token));
     }
 
+    // -------------------------------------------------------------------------
+    // Services Directory browsing
+    // -------------------------------------------------------------------------
+
+    /**
+     * Lists one level of an ArcGIS Server Services Directory ({@code …/rest/services} or a
+     * folder below it). Blocking — call from a background thread.
+     *
+     * <p>A server whose administrator disabled the HTML Services Directory usually still answers
+     * {@code ?f=json}, which is what this requests. A server that requires sign-in answers with an
+     * ArcGIS error body, surfaced as an {@link ArcGisException} (C-22) so the caller can say why.
+     */
+    public ServicesDirectory.Listing browseServicesDirectory(ServicesDirectory.Location location,
+                                                             String token) throws Exception {
+        if (location == null) throw new ArcGisException(-1, "Not an ArcGIS Services Directory address");
+        String body = httpGet(location.url() + "?f=json", token);
+        if (body == null) {
+            throw new ArcGisException(-1, "Server did not respond — check the address and your network");
+        }
+        String trimmed = body.trim();
+        if (!trimmed.startsWith("{")) {
+            // HTML login page, proxy interstitial, or a disabled directory without JSON support.
+            throw new ArcGisException(-1, "Server did not return a Services Directory "
+                    + "(it may be private, or the address is wrong)");
+        }
+        return ServicesDirectory.parse(location.root, location.folder, parseChecked(trimmed));
+    }
+
     /**
      * Fetches basic metadata about a Feature Service layer. Returns null only when the layer
      * genuinely cannot be described; the typed reason is available via
