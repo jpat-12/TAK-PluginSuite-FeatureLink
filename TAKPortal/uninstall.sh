@@ -69,13 +69,13 @@ const fs = require('fs');
 const path = process.argv[2];
 let src = fs.readFileSync(path, 'utf-8');
 
-src = src.replace(`
-    featurelink_configs: {
-      id: "page.featurelink_configs",
-      label: "FeatureLink Configs",
-      description: "Prep FeatureLink display configs for field devices to download.",
-      section: "administration",
-    },`, '');
+// The featurelink_configs entry, whatever section it was filed under ("administration" on
+// older installs, "operations" since the 2.0.32-compatible installer).
+{
+  const at = src.indexOf('\n    featurelink_configs: {');
+  const end = at < 0 ? -1 : src.indexOf('\n    },', at + 1);
+  if (at >= 0 && end >= 0) src = src.slice(0, at) + src.slice(end + '\n    },'.length);
+}
 
 src = src.replace(`
   // FeatureLink Configs module: /featurelink (browse/download) is open to any
@@ -110,51 +110,17 @@ const fs = require('fs');
 const path = process.argv[2];
 let src = fs.readFileSync(path, 'utf-8');
 
-const original = `      const isAllowedNonAdminPath =
-        normalizedPath === "/setup-my-device" ||
-        normalizedPath.startsWith("/api/setup-my-device") ||
-        normalizedPath === "/api/mou/user-agreement/accept" ||
-        normalizedPath === "/api/mou/user-agreement/decline" ||
-        normalizedPath === "/plugins" ||
-        isPluginDownloadApi;`;
-
-// Current (fully open + custom icon sets) state
-src = src.replace(`      const isAllowedNonAdminPath =
-        normalizedPath === "/setup-my-device" ||
-        normalizedPath.startsWith("/api/setup-my-device") ||
-        normalizedPath === "/api/mou/user-agreement/accept" ||
-        normalizedPath === "/api/mou/user-agreement/decline" ||
-        normalizedPath === "/plugins" ||
-        normalizedPath === "/featurelink" ||
-        normalizedPath.startsWith("/api/featurelink/configs") ||
-        normalizedPath.startsWith("/featurelink-configs/configurator") ||
-        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||
-        normalizedPath.startsWith("/api/featurelink/admin/custom-icons") ||
-        isPluginDownloadApi;`, original);
-
-// Fully open state, pre-custom-icon-sets
-src = src.replace(`      const isAllowedNonAdminPath =
-        normalizedPath === "/setup-my-device" ||
-        normalizedPath.startsWith("/api/setup-my-device") ||
-        normalizedPath === "/api/mou/user-agreement/accept" ||
-        normalizedPath === "/api/mou/user-agreement/decline" ||
-        normalizedPath === "/plugins" ||
-        normalizedPath === "/featurelink" ||
-        normalizedPath.startsWith("/api/featurelink/configs") ||
-        normalizedPath.startsWith("/featurelink-configs/configurator") ||
-        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||
-        isPluginDownloadApi;`, original);
-
-// Older (pre-configurator-open-access) state, in case uninstall runs against that
-src = src.replace(`      const isAllowedNonAdminPath =
-        normalizedPath === "/setup-my-device" ||
-        normalizedPath.startsWith("/api/setup-my-device") ||
-        normalizedPath === "/api/mou/user-agreement/accept" ||
-        normalizedPath === "/api/mou/user-agreement/decline" ||
-        normalizedPath === "/plugins" ||
-        normalizedPath === "/featurelink" ||
-        normalizedPath.startsWith("/api/featurelink/configs") ||
-        isPluginDownloadApi;`, original);
+// Remove exactly the lines install.sh inserts into isAllowedNonAdminPath. Line-based, so it
+// works on every upstream shape (2.0.32 added /map and isAtakApkDownloadApi to the expression,
+// which the old whole-expression replacements never matched) without touching upstream's lines.
+const FL_LINES = new Set([
+  'normalizedPath === "/featurelink" ||',
+  'normalizedPath.startsWith("/api/featurelink/configs") ||',
+  'normalizedPath.startsWith("/featurelink-configs/configurator") ||',
+  'normalizedPath.startsWith("/api/featurelink/admin/datasets") ||',
+  'normalizedPath.startsWith("/api/featurelink/admin/custom-icons") ||',
+]);
+src = src.split('\n').filter((l) => !FL_LINES.has(l.trim())).join('\n');
 
 fs.writeFileSync(path, src, 'utf-8');
 console.log('    - removed /featurelink from isAllowedNonAdminPath');
@@ -170,23 +136,21 @@ src = src.replace(`
               <a href="/featurelink-configs" class="<%= isActive('/featurelink-configs') ? 'active' : '' %>">FeatureLink Configs</a>
             <% } %>`, '');
 
-src = src.replace(`    _perm("page.featurelink_configs") ||\n    canSeeMouNav;`, `    canSeeMouNav;`);
-
-src = src.replace(`
-            <a href="/featurelink" class="<%= isActive('/featurelink') ? 'active' : '' %>">FeatureLink</a>`, '');
+// Every inserted Onboarding link (admins' section AND the non-admin else-branch), and the
+// section-visibility clause (canSeeAdminSection on older portals, canSeeOperationsSection now).
+const SIDEBAR_LINES = new Set([
+  `<a href="/featurelink" class="<%= isActive('/featurelink') ? 'active' : '' %>">FeatureLink</a>`,
+  '_perm("page.featurelink_configs") ||',
+]);
+src = src.split('\n').filter((l) => !SIDEBAR_LINES.has(l.trim())).join('\n');
 
 fs.writeFileSync(path, src, 'utf-8');
 console.log('    - removed FeatureLink nav links from sidebar.ejs');
 NODEEOF
 
-rm -f "$PORTAL_DIR/routes/featurelinkConfigsAdmin.routes.js"
-rm -f "$PORTAL_DIR/routes/featurelinkDatasetsAdmin.routes.js"
-rm -f "$PORTAL_DIR/routes/featurelinkConfigurator.routes.js"
-rm -f "$PORTAL_DIR/routes/featurelinkBrowse.routes.js"
-rm -f "$PORTAL_DIR/services/featurelinkConfigs.service.js"
-rm -f "$PORTAL_DIR/services/featurelinkDatasets.service.js"
-rm -f "$PORTAL_DIR/views/featurelink-configs.ejs"
-rm -f "$PORTAL_DIR/views/featurelink.ejs"
+# Every featurelink*-prefixed route/service/view install.sh copied (by pattern, matching
+# install.sh), plus the legacy featurelinkConfigs* files an older install may have left.
+rm -f "$PORTAL_DIR"/routes/featurelink*.js "$PORTAL_DIR"/services/featurelink*.js "$PORTAL_DIR"/views/featurelink*.ejs
 rm -rf "$PORTAL_DIR/assets/featurelink-configurator"
 echo "==> Removed module files"
 

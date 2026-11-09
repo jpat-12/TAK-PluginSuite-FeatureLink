@@ -1,12 +1,12 @@
 # TAK Portal Module — FeatureLink Configs
 
 Adds a **FeatureLink** entry under **Onboarding** and a **FeatureLink Configs**
-entry under **Administration** to an existing
+entry under **Operations** (called **Administration** before TAK Portal 2.0.2) to an existing
 [TAK Portal](https://github.com/AdventureSeeker423/TAK-Portal) install (as
 deployed by [infra-TAK](https://github.com/jpat-12/infra-TAK), default
 `~/TAK-Portal`, Docker Compose).
 
-**Administration → FeatureLink Configs** is the full FeatureLink Display
+**Operations → FeatureLink Configs** is the full FeatureLink Display
 Configurator — the same tool infra-TAK runs at `Infra-TAK/`
 (`featurelink_displayconfig_assets/index.html`), ported into TAK Portal as its
 own copy rather than a smaller hand-built form. Upload a dataset or point at a
@@ -32,6 +32,23 @@ time) or a true `page.featurelink_configs` admin — enforced in
 client. The Administration hub page (`/featurelink-configs` itself, the list
 view) still requires `page.featurelink_configs`; only the configurator tool
 and its dataset API are open-access.
+
+## Compatibility
+
+Verified against upstream TAK Portal **2.0.32** (latest release, 2026-11-06) and `main` at
+`9e8cdc0` (2026-11-09). For each, `install.sh` was run against a clean checkout, then run a
+second time (a no-op), then `uninstall.sh` (byte-for-byte back to upstream). Every copied route
+and service resolves its `require`s, and the module's own test suite passes under upstream's
+Express 5. The upgrade path was checked too: an old install on a pre-2.0.2 portal, then
+`./takportal update` (`git checkout --force`), then re-running `install.sh` gives exactly the
+same result as a fresh install.
+
+`install.sh` and `uninstall.sh` find upstream code by **structure**, not verbatim copies of whole
+blocks. They locate the `plugin_manager` permission entry by its opening line and closing brace,
+and insert after the `"/plugins"` clause inside `isAllowedNonAdminPath`. So an upstream field
+added to an existing entry no longer aborts the install. That exact breakage happened in 2.0.2,
+when `plugin_manager` gained `editorVisible` and moved to the `operations` section. A genuinely
+missing anchor still fails loudly with `ERROR: … NOT added`.
 
 ## Why a module instead of a fork
 
