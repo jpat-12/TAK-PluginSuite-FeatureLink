@@ -52,6 +52,13 @@ describe('on-device rows', () => {
     });
 
     it('Remove still confirms before emitting', async () => {
+        // happy-dom 21 no longer defines window.confirm (every real browser does), and
+        // vi.spyOn needs an existing function to wrap — so install a placeholder first.
+        if (typeof window.confirm !== 'function') {
+            Object.defineProperty(window, 'confirm', {
+                value: () => true, writable: true, configurable: true,
+            });
+        }
         const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
         const wrapper = mount(LayerRow, { props: { layer: layer({ type: 'public' }) } });
         await wrapper.findAll('button').filter(b => b.attributes('title') === 'Remove')[0]?.trigger('click');
