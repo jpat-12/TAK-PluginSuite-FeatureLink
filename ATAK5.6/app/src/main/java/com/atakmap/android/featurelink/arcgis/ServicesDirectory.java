@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -39,9 +38,10 @@ public final class ServicesDirectory {
     private static final List<String> SUPPORTED_TYPES =
             Collections.unmodifiableList(java.util.Arrays.asList("FeatureServer", "MapServer"));
 
-    /** {@code scheme://host[:port]/<prefix>/rest/services} followed by an optional folder path. */
-    private static final Pattern REST_SERVICES =
-            Pattern.compile("(?i)^(https?://[^/?#]+(?:/[^?#]*?)?/rest/services)(/[^?#]*)?$");
+    /** Path segment that marks the root of an ArcGIS Server Services Directory. Matched by plain
+     * string scanning, not a regex: an ambiguous {@code (/…)*?/rest/services} pattern backtracks
+     * polynomially on input with many slashes (CodeQL java/polynomial-redos). */
+    private static final String REST_SERVICES = "/rest/services";
 
     /** A URL that already names a service root or one of its sublayers. */
     private static final Pattern SERVICE_URL =
@@ -121,7 +121,7 @@ public final class ServicesDirectory {
         String u = raw.trim();
         int cut = indexOfAny(u, '?', '#');
         if (cut >= 0) u = u.substring(0, cut);
-        return u.replaceAll("/+$", "");
+        return stripTrailingSlashes(u);
     }
 
     /** True when {@code raw} already names a FeatureServer/MapServer (root or sublayer). */
@@ -139,12 +139,29 @@ public final class ServicesDirectory {
     public static Location parseLocation(String raw) {
         String u = clean(raw);
         if (u.isEmpty()) return null;
-        if (u.matches("(?i)^https?://[^/?#]+$")) u = u + "/arcgis/rest/services";
+        String lower = u.toLowerCase(Locale.ROOT);
+        int schemeLen = lower.startsWith("https://") ? 8 : lower.startsWith("http://") ? 7 : -1;
+        if (schemeLen < 0) return null;
+        int pathStart = u.indexOf('/', schemeLen);
+        if (pathStart == schemeLen) return null;                 // no host
+        if (pathStart < 0) {                                     // bare host
+            u = u + "/arcgis/rest/services";
+            lower = u.toLowerCase(Locale.ROOT);
+            pathStart = u.indexOf('/', schemeLen);
+        }
 
-        Matcher m = REST_SERVICES.matcher(u);
-        if (!m.matches()) return null;
-        String root = m.group(1);
-        String folder = m.group(2) == null ? "" : m.group(2).replaceAll("^/+", "");
+        // First "/rest/services" that is a whole path segment (followed by end or '/').
+        int idx = lower.indexOf(REST_SERVICES, pathStart);
+        while (idx >= 0) {
+            int end = idx + REST_SERVICES.length();
+            if (end == u.length() || u.charAt(end) == '/') break;
+            idx = lower.indexOf(REST_SERVICES, idx + 1);
+        }
+        if (idx < 0) return null;
+
+        int rootEnd = idx + REST_SERVICES.length();
+        String root = u.substring(0, rootEnd);
+        String folder = stripLeadingSlashes(u.substring(rootEnd));
         // A folder path never contains a service type segment; if it does, the caller should
         // have routed it as a service URL instead.
         if (SERVICE_URL.matcher(u).matches()) return null;
@@ -224,6 +241,18 @@ public final class ServicesDirectory {
         if (path == null) return "";
         int i = path.lastIndexOf('/');
         return i < 0 ? path : path.substring(i + 1);
+    }
+
+    private static String stripTrailingSlashes(String s) {
+        int end = s.length();
+        while (end > 0 && s.charAt(end - 1) == '/') end--;
+        return s.substring(0, end);
+    }
+
+    private static String stripLeadingSlashes(String s) {
+        int start = 0;
+        while (start < s.length() && s.charAt(start) == '/') start++;
+        return s.substring(start);
     }
 
     private static int indexOfAny(String s, char a, char b) {
