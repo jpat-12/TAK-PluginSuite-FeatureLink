@@ -122,10 +122,14 @@ public class ArcGISRestClient {
         throw new ArcGisException(code, msg.toString());
     }
 
-    /** C-21: strips credential-valued query parameters before any URL reaches a log sink. */
-    static String redact(String url) {
+    /** C-21: strips credential-valued query parameters before any URL reaches a log sink, and
+     * removes CR/LF so a URL the operator typed (or a public server's directory returned) cannot
+     * forge extra log lines (CodeQL java/log-injection). Public so the UI layer logs URLs the
+     * same way. */
+    public static String redact(String url) {
         if (url == null) return "";
-        return SECRET_PARAM.matcher(url).replaceAll("$1<redacted>");
+        String oneLine = url.replace('\r', ' ').replace('\n', ' ');
+        return SECRET_PARAM.matcher(oneLine).replaceAll("$1<redacted>");
     }
 
     // -------------------------------------------------------------------------
