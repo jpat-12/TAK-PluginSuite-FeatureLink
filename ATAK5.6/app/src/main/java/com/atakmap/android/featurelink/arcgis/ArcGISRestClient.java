@@ -128,7 +128,9 @@ public class ArcGISRestClient {
      * same way. */
     public static String redact(String url) {
         if (url == null) return "";
-        String oneLine = url.replace('\r', ' ').replace('\n', ' ');
+        // One replaceAll over [\r\n] (not chained char replaces): the form CodeQL's
+        // java/log-injection analysis recognises as a line-break sanitiser.
+        String oneLine = url.replaceAll("[\\r\\n]", " ");
         return SECRET_PARAM.matcher(oneLine).replaceAll("$1<redacted>");
     }
 
