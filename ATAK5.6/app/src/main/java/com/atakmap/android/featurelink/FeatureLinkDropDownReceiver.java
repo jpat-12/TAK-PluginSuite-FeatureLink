@@ -1862,7 +1862,7 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     error = e.getMessage();
                 }
             } catch (Exception e) {
-                Log.w(TAG, "browse failed for " + loc.url(), e);
+                Log.w(TAG, "browse failed for " + ArcGISRestClient.redact(loc.url()), e);
                 error = "Could not read the server: " + e.getMessage();
             }
             final ServicesDirectory.Listing result = listing;
