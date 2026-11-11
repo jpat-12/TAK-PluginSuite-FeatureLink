@@ -244,11 +244,11 @@ The takdev plugin finds `main.jar` and `atak.apk` via the `../../` relative path
 ## 9. TODO / Known Gaps
 
 - [ ] **PLI stale time UX** — currently hardcoded (30 s PLI, 7 days sent items); expose as settings
-- [ ] **Token refresh** — token is 60-min expiry; `ArcGISAuthManager` does not auto-refresh mid-session
+- [x] **Token refresh** — done: `ArcGISAuthManager.getToken()` refreshes under `refreshLock` (C-20); the refresh token is stored via `SecureTokenStore`
 - [ ] **Raw CoT XML** — `raw_cot_xml` field is always written as `""` empty string; wire up actual CoT serialisation
-- [ ] **Layer 0 assumption** — `ensureLayerIndex()` always appends `/0`; multi-layer services not supported
+- [x] **Layer 0 assumption** — done (C-08): `listSubLayers()` enumerates a service's sublayers and Add Layer offers a picker; `/0` is only a last-resort fallback
 - [ ] **Schema template row** — the `SCHEMA_TEMPLATE` row inserted during CSV publish is never deleted; add a cleanup call after layer creation
 - [ ] **`source_layer` / `source_objectid`** — always written as empty; intended to track which ATAK layer / objectid the feature originated from
-- [ ] **Upload display prefs** — `showPrefFileDialog()` opens a file picker but does not actually parse or upload the JSON; implementation is a stub
+- [x] **Upload display prefs** — done: `handlePrefFileSelected()` reads the picked file and applies it through `applyScannedPayload()`
 - [ ] **Release build signing** — `proguard-gradle.txt` / repackage config exists but release keystore management is not documented
 - [ ] **Mode 3 Esri renderer mapping unverified** — `SymConfig.fromEsriRenderer()` (`DisplayConfig.java`) translates `_v`-schema `symbology` JSON assuming the *standard* Esri REST renderer/symbol format (simple/uniqueValue/classBreaks over esriSMS/esriPMS, `color` as `[r,g,b,a]` 0-255 arrays). This was never checked against a real payload from the FeatureLink Display Configurator console — if it emits a custom shape instead, get a sample payload and correct the mapping.
