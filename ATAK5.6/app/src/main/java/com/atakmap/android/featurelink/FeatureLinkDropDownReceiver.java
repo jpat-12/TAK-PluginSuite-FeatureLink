@@ -1839,13 +1839,15 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                     Toast.LENGTH_LONG).show();
             return;
         }
-        // Only send the token to the portal the operator signed in to — an arbitrary server
-        // from a public list must never receive it.
-        final String token = (authManager.isAuthenticated() && authManager.holdsCredentialsFor(loc.root))
-                ? authManager.getToken() : null;
         if (browseServerBtn != null) browseServerBtn.setEnabled(false);
         Toast.makeText(pluginContext, "Loading " + loc.url() + " …", Toast.LENGTH_SHORT).show();
         boolean queued = submit(executor, () -> {
+            // Resolved HERE, on the worker: getToken() refuses to refresh on the main thread and
+            // hands back the cached (possibly expired) token, which would 498 on the operator's
+            // own portal. Only send the token to the portal the operator signed in to; an
+            // arbitrary server from a public list must never receive it.
+            final String token = (authManager.isAuthenticated() && authManager.holdsCredentialsFor(loc.root))
+                    ? authManager.getToken() : null;
             ServicesDirectory.Listing listing = null;
             String error = null;
             try {
