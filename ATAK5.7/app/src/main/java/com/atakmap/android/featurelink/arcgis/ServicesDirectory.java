@@ -244,15 +244,11 @@ public final class ServicesDirectory {
     }
 
     private static String stripTrailingSlashes(String s) {
-        int end = s.length();
-        while (end > 0 && s.charAt(end - 1) == '/') end--;
-        return s.substring(0, end);
+        return UrlUtil.stripTrailingSlashes(s);
     }
 
     private static String stripLeadingSlashes(String s) {
-        int start = 0;
-        while (start < s.length() && s.charAt(start) == '/') start++;
-        return s.substring(start);
+        return UrlUtil.stripLeadingSlashes(s);
     }
 
     private static int indexOfAny(String s, char a, char b) {

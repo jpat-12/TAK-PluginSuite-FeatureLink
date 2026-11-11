@@ -295,7 +295,7 @@ public class ArcGISRestClient {
     public List<SubLayerRef> listSubLayers(String serviceUrl, String token) {
         List<SubLayerRef> out = new ArrayList<>();
         if (serviceUrl == null) return out;
-        String url = serviceUrl.trim().replaceAll("/+$", "");
+        String url = UrlUtil.stripTrailingSlashes(serviceUrl.trim());
         if (url.isEmpty()) return out;
 
         if (LAYER_ADDRESSED.matcher(url).matches()) {
@@ -385,7 +385,7 @@ public class ArcGISRestClient {
     public JSONObject fetchItemRenderer(String portalUrl, String itemId, int layerId, String token) {
         if (itemId == null || itemId.isEmpty()) return null;
         String base = portalUrl == null || portalUrl.isEmpty() ? "https://www.arcgis.com" : portalUrl;
-        String url = base.replaceAll("/+$", "") + "/sharing/rest/content/items/"
+        String url = UrlUtil.stripTrailingSlashes(base) + "/sharing/rest/content/items/"
                 + itemId + "/data?f=json";
         try {
             JSONObject data = fetchJson(url, token);
@@ -980,7 +980,7 @@ public class ArcGISRestClient {
             String[] svcInfo = publishCsvItem(portal, username, token, itemId, displayName);
             if (svcInfo == null) { Log.e(TAG, "CSV publish failed"); return null; }
             String serviceItemId = svcInfo[0];
-            String serviceUrl    = svcInfo[1].replaceAll("/+$", "");
+            String serviceUrl    = UrlUtil.stripTrailingSlashes(svcInfo[1]);
             String jobId         = svcInfo[2];
 
             // Step 3 — wait for the async publish job
@@ -1319,7 +1319,7 @@ public class ArcGISRestClient {
         if (portalUrl == null || portalUrl.trim().isEmpty()) {
             return "https://www.arcgis.com";
         }
-        return portalUrl.trim().replaceAll("/+$", "");
+        return UrlUtil.stripTrailingSlashes(portalUrl.trim());
     }
 
     /**
@@ -1334,7 +1334,7 @@ public class ArcGISRestClient {
 
     static String ensureLayerIndex(String url, int layerId) {
         if (url == null) return "";
-        String u = url.trim().replaceAll("/+$", "");
+        String u = UrlUtil.stripTrailingSlashes(url.trim());
         if (SERVICE_ROOT.matcher(u).matches()) {
             return u + "/" + Math.max(0, layerId);
         }
@@ -1344,7 +1344,7 @@ public class ArcGISRestClient {
     /** True when {@code url} names a service root that may expose more than one sublayer. */
     public static boolean isServiceRoot(String url) {
         if (url == null) return false;
-        return SERVICE_ROOT.matcher(url.trim().replaceAll("/+$", "")).matches();
+        return SERVICE_ROOT.matcher(UrlUtil.stripTrailingSlashes(url.trim())).matches();
     }
 
     /** Lower-cases with {@link Locale#ROOT} — never the default locale (C-39 class of defect). */
