@@ -42,6 +42,7 @@ import com.atakmap.android.featurelink.arcgis.ArcGISLayer;
 import com.atakmap.android.featurelink.arcgis.ArcGISRestClient;
 import com.atakmap.android.featurelink.arcgis.AutoIconset;
 import com.atakmap.android.featurelink.arcgis.AutoSymbology;
+import com.atakmap.android.featurelink.arcgis.ServicesDirectory;
 import com.atakmap.android.featurelink.plugin.R;
 import com.atakmap.android.ipc.AtakBroadcast;
 import com.atakmap.android.maps.MapGroup;
@@ -97,6 +98,13 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private static final String PREF_SECTION_PRIVATE_EXPANDED = "section_private_expanded";
     private static final String PREF_SECTION_SHARED_PRIVATE_EXPANDED = "section_shared_private_expanded";
     private static final String PREF_SECTION_PUBLIC_EXPANDED = "section_public_expanded";
+    /** MRU list (JSON array of strings) of Services Directory addresses the operator browsed. */
+    private static final String PREF_RECENT_BROWSE_SERVERS = "recent_browse_servers_json";
+    private static final int MAX_RECENT_BROWSE_SERVERS = 10;
+    /** Joseph Elfelt's curated list of public ArcGIS servers. Linked, never bundled: the list's
+     * terms of use prohibit scraping its data. */
+    private static final String PUBLIC_SERVER_LIST_URL =
+            "https://mappingsupport.com/p/surf_gis/list-federal-state-county-city-GIS-servers.pdf";
 
     /** Request code for the "Upload Pref File" system file picker — matched against the
      * "requestCode" extra on ATAK's "com.atakmap.android.ACTIVITY_FINISHED" broadcast, which is
@@ -262,6 +270,10 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private LinearLayout publicLayersList;
     private TextView publicLayersCountBadge;
     private EditText publicLayerUrlEdit;
+
+    // Add Layer page — "Browse an ArcGIS server" card
+    private EditText browseServerUrlEdit;
+    private Button browseServerBtn;
 
     // Layers page — "My ArcGIS Layers" section (browse list of the signed-in user's own ArcGIS
     // content); the whole card is hidden while signed out, not just its content.
@@ -563,6 +575,14 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
         addPublicLayerBtn.setOnClickListener(v -> addPublicLayer());
         scanLayerQrBtn.setOnClickListener(v -> startQrScan());
         uploadPrefBtn.setOnClickListener(v -> showPrefFileDialog());
+
+        browseServerUrlEdit = addLayerPageView.findViewById(R.id.browse_server_url_edit);
+        browseServerBtn     = addLayerPageView.findViewById(R.id.browse_server_btn);
+        browseServerBtn.setOnClickListener(v -> browseServerFromInput());
+        addLayerPageView.findViewById(R.id.recent_servers_btn)
+                .setOnClickListener(v -> showRecentServers());
+        addLayerPageView.findViewById(R.id.public_server_list_link)
+                .setOnClickListener(v -> openPublicServerList());
 
         android.widget.ImageButton backBtn = addLayerPageView.findViewById(R.id.add_layer_back_btn);
         backBtn.setOnClickListener(v -> hideOverlay());
@@ -1646,7 +1666,15 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     }
 
     private void addPublicLayer() {
-        String url = publicLayerUrlEdit.getText().toString().trim();
+        addLayerFromUrl(publicLayerUrlEdit.getText().toString().trim());
+    }
+
+    /**
+     * Shared entry point for adding a layer by URL — the paste field and the Services Directory
+     * browser both land here, so both get the same https/duplicate checks and the same C-08
+     * sublayer picker. Main thread.
+     */
+    private void addLayerFromUrl(String url) {
         if (url.isEmpty()) {
             Toast.makeText(pluginContext, "Enter a service URL", Toast.LENGTH_SHORT).show();
             return;
@@ -1765,6 +1793,194 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    // -------------------------------------------------------------------------
+    // Browse an ArcGIS Server Services Directory (…/rest/services)
+    // -------------------------------------------------------------------------
+
+    /** Main thread. Reads the browse field and either browses it or, if it already names a
+     * service, hands it straight to the normal add flow. */
+    private void browseServerFromInput() {
+        String raw = browseServerUrlEdit.getText().toString().trim();
+        if (raw.isEmpty()) {
+            Toast.makeText(pluginContext, "Enter a server address", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        browseServerAddress(raw);
+    }
+
+    private void browseServerAddress(String raw) {
+        if (ServicesDirectory.isServiceUrl(raw)) {
+            addLayerFromUrl(ServicesDirectory.clean(raw));
+            return;
+        }
+        ServicesDirectory.Location loc = ServicesDirectory.parseLocation(raw);
+        if (loc == null) {
+            Toast.makeText(pluginContext,
+                    "Not a server address — it should contain \"/rest/services\"",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        browseLocation(loc, true);
+    }
+
+    /**
+     * Main thread. Fetches one directory level in the background and shows it.
+     *
+     * @param remember add this address to the Recent list once it lists successfully (only for
+     *                 the address the operator typed/picked, not every folder they click into).
+     */
+    private void browseLocation(ServicesDirectory.Location loc, boolean remember) {
+        // Same rule as addLayerFromUrl (C-06/§12.7): no cleartext requests.
+        if (!loc.root.toLowerCase(java.util.Locale.ROOT).startsWith("https://")) {
+            Toast.makeText(pluginContext,
+                    "Only https:// servers are supported — try the address with https://",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        // Only send the token to the portal the operator signed in to — an arbitrary server
+        // from a public list must never receive it.
+        final String token = (authManager.isAuthenticated() && authManager.holdsCredentialsFor(loc.root))
+                ? authManager.getToken() : null;
+        if (browseServerBtn != null) browseServerBtn.setEnabled(false);
+        Toast.makeText(pluginContext, "Loading " + loc.url() + " …", Toast.LENGTH_SHORT).show();
+        boolean queued = submit(executor, () -> {
+            ServicesDirectory.Listing listing = null;
+            String error = null;
+            try {
+                listing = restClient.browseServicesDirectory(loc, token);
+            } catch (ArcGISRestClient.ArcGisException e) {
+                // 498/499 = token required/invalid. 403 is ambiguous on ArcGIS Server (login
+                // required OR the directory listing is switched off), so keep its own message.
+                if (e.code == 498 || e.code == 499) {
+                    error = "This server requires a login — it is not open to the public";
+                } else if (e.code == 403) {
+                    error = "Server refused the listing (" + e.getMessage() + "). If you know a "
+                            + "service address on it, paste that into the Feature Service URL box.";
+                } else {
+                    error = e.getMessage();
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "browse failed for " + ArcGISRestClient.redact(loc.url()), e);
+                error = "Could not read the server: " + e.getMessage();
+            }
+            final ServicesDirectory.Listing result = listing;
+            final String err = error;
+            postToUi(() -> {
+                if (browseServerBtn != null) browseServerBtn.setEnabled(true);
+                if (result == null) {
+                    Toast.makeText(pluginContext, err != null ? err : "Could not read the server",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                if (remember) rememberBrowsedServer(loc.url());
+                showDirectoryListing(result);
+            });
+        });
+        if (!queued && browseServerBtn != null) browseServerBtn.setEnabled(true);
+    }
+
+    /** Main thread. One dialog per directory level: Up, folders, then usable services. */
+    private void showDirectoryListing(ServicesDirectory.Listing listing) {
+        final List<String> labels = new ArrayList<>();
+        final List<Runnable> actions = new ArrayList<>();
+
+        if (!listing.folder.isEmpty()) {
+            labels.add("⬆  Up");
+            final String parent = ServicesDirectory.parentFolder(listing.folder);
+            actions.add(() -> browseLocation(locationFor(listing.root, parent), false));
+        }
+        for (String folder : listing.folders) {
+            labels.add("📁  " + ServicesDirectory.folderLabel(folder));
+            actions.add(() -> browseLocation(locationFor(listing.root, folder), false));
+        }
+        for (ServicesDirectory.ServiceRef svc : listing.services) {
+            labels.add(svc.label + "  ·  " + svc.type);
+            actions.add(() -> addLayerFromUrl(svc.url));
+        }
+        if (listing.unsupportedCount > 0) {
+            labels.add("(" + listing.unsupportedCount + " image/tool service"
+                    + (listing.unsupportedCount == 1 ? "" : "s") + " hidden — not downloadable)");
+            actions.add(() -> showDirectoryListing(listing));
+        }
+        if (listing.isEmpty()) {
+            labels.add("(No folders or downloadable services here)");
+            actions.add(() -> showDirectoryListing(listing));
+        }
+
+        String title = listing.folder.isEmpty()
+                ? Uri.parse(listing.root).getHost()
+                : listing.folder;
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle(title)
+                .setItems(labels.toArray(new String[0]), (d, which) -> actions.get(which).run())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private static ServicesDirectory.Location locationFor(String root, String folder) {
+        // Round-trips through the parser so a folder Location is built exactly like a pasted one.
+        ServicesDirectory.Location loc = ServicesDirectory.parseLocation(
+                folder == null || folder.isEmpty() ? root : root + "/" + folder);
+        return loc != null ? loc : ServicesDirectory.parseLocation(root);
+    }
+
+    private List<String> loadRecentServers() {
+        List<String> out = new ArrayList<>();
+        try {
+            JSONArray arr = new JSONArray(prefs.getString(PREF_RECENT_BROWSE_SERVERS, "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                String s = arr.optString(i, "");
+                if (!s.isEmpty()) out.add(s);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "recent servers pref unreadable — resetting", e);
+        }
+        return out;
+    }
+
+    private void rememberBrowsedServer(String url) {
+        List<String> recent = loadRecentServers();
+        // Case-insensitive de-dupe on the whole address (hosts are case-insensitive; paths on
+        // ArcGIS Server are effectively so as well).
+        for (java.util.Iterator<String> it = recent.iterator(); it.hasNext(); ) {
+            if (it.next().equalsIgnoreCase(url)) it.remove();
+        }
+        recent.add(0, url);
+        while (recent.size() > MAX_RECENT_BROWSE_SERVERS) recent.remove(recent.size() - 1);
+        prefs.edit().putString(PREF_RECENT_BROWSE_SERVERS, new JSONArray(recent).toString()).apply();
+    }
+
+    private void showRecentServers() {
+        final List<String> recent = loadRecentServers();
+        if (recent.isEmpty()) {
+            Toast.makeText(pluginContext, "No recently browsed servers yet", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(getMapView().getContext())
+                .setTitle("Recent servers")
+                .setItems(recent.toArray(new String[0]), (d, which) -> {
+                    String url = recent.get(which);
+                    browseServerUrlEdit.setText(url);
+                    browseServerAddress(url);
+                })
+                .setNeutralButton("Clear", (d, w) ->
+                        prefs.edit().remove(PREF_RECENT_BROWSE_SERVERS).apply())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void openPublicServerList() {
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(PUBLIC_SERVER_LIST_URL));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getMapView().getContext().startActivity(i);
+        } catch (Exception e) {
+            Log.w(TAG, "no app to open the public server list", e);
+            Toast.makeText(pluginContext, "No browser available to open " + PUBLIC_SERVER_LIST_URL,
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     /** Main thread. Adds the resolved layers and kicks off their downloads (which now resolve
