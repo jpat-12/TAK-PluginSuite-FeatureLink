@@ -156,7 +156,7 @@ public class OAuthHelper {
     }
 
     private static String normalizePortal(String url) {
-        return url == null ? "https://www.arcgis.com" : url.replaceAll("/+$", "");
+        return url == null ? "https://www.arcgis.com" : UrlUtil.stripTrailingSlashes(url);
     }
 
     /** UTF-8 is always available. Silently returning the unencoded string on failure (as this

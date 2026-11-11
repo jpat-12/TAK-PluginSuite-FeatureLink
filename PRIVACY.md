@@ -81,6 +81,20 @@ Separately from auto-send, an operator can push a **selected map item** to a fea
 or share a layer configuration. These use the same 24-field schema and transmit whatever the
 selected item contains — which may be another person's marker, not the operator's own.
 
+### 2.2a Browsing an ArcGIS server (ATAK 5.6)
+
+**Add Layer → Browse an ArcGIS server** sends `GET <address>?f=json` to whatever
+`…/rest/services` address the operator enters, and to each folder they open. These requests
+carry **no position, callsign or map data** — only the address being listed. They reveal to
+that server's operator the device's IP address and that someone browsed it, exactly as opening
+the same address in a web browser would.
+
+- `https://` only; cleartext addresses are refused before any request is made.
+- The ArcGIS access token is attached **only** when the address belongs to the portal the
+  operator signed in to. A public server from the curated list never receives it.
+- Opening the curated server list launches the device browser at `mappingsupport.com`; the
+  plugin itself sends nothing there.
+
 ### 2.3 What is *not* transmitted
 
 - No contacts list, no message history, no chat.
@@ -150,7 +164,7 @@ fix the sharing level before any responder enables auto-send.
 
 | Platform | What is stored | Where | Protection |
 |---|---|---|---|
-| **ATAK 5.6 / 5.7** | OAuth access + refresh token, ArcGIS username, portal URL, PLI layer URL, saved layers, display configs | Android `SharedPreferences`, app-private storage | App-private (OS-enforced, other apps cannot read it). **Not additionally encrypted at rest** — `EncryptedSharedPreferences` is not used, so the values are readable on a rooted device or from an unencrypted backup |
+| **ATAK 5.6 / 5.7** | OAuth access + refresh token, ArcGIS username, portal URL, PLI layer URL, saved layers, display configs, up to 10 recently browsed ArcGIS server addresses (ATAK 5.6, `recent_browse_servers_json`) | Android `SharedPreferences`, app-private storage | App-private (OS-enforced, other apps cannot read it). **Not additionally encrypted at rest** — `EncryptedSharedPreferences` is not used, so the values are readable on a rooted device or from an unencrypted backup |
 | **WinTAK 5.6 / 5.7** | Same | Windows user profile, via `SettingsStore` | **DPAPI**, `DataProtectionScope.CurrentUser` with additional entropy — decryptable only by the same Windows user on the same machine. This is the strongest of the three |
 | **CloudTAK** | Portal URL in `localStorage`; refresh token and username in **`sessionStorage`** | Browser storage for the CloudTAK origin | Plaintext, and readable by any script running on that origin. `sessionStorage` is per-tab and cleared when the tab closes, which bounds exposure — but **this remains the weakest of the three**, and any cross-site-scripting flaw in the CloudTAK origin reads it |
 
