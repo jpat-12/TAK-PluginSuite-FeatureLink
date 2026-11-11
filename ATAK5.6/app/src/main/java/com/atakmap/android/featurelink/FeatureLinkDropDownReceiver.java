@@ -99,6 +99,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
     private static final String PREF_SECTION_SHARED_PRIVATE_EXPANDED = "section_shared_private_expanded";
     private static final String PREF_SECTION_PUBLIC_EXPANDED = "section_public_expanded";
     /** MRU list (JSON array of strings) of Services Directory addresses the operator browsed. */
+    /** Marker meta keys recording which FeatureLink layer / feature a map item was drawn from. */
+    private static final String META_SOURCE_LAYER    = "featurelink_source_layer";
+    private static final String META_SOURCE_OBJECTID = "featurelink_source_objectid";
     private static final String PREF_RECENT_BROWSE_SERVERS = "recent_browse_servers_json";
     private static final int MAX_RECENT_BROWSE_SERVERS = 10;
     /** Joseph Elfelt's curated list of public ArcGIS servers. Linked, never bundled: the list's
@@ -2249,8 +2252,12 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         } else {
                             items = Collections.singletonList(buildMarker(f, displayConfig));
                         }
+                        String srcObjectId = ArcGISRestClient.objectIdOf(f.attributes);
                         for (MapItem item : items) {
                             item.setVisible(layer.visible);
+                            // Provenance for "Send to Feature Layer" (source_layer/_objectid).
+                            item.setMetaString(META_SOURCE_LAYER, layer.url);
+                            if (!srcObjectId.isEmpty()) item.setMetaString(META_SOURCE_OBJECTID, srcObjectId);
                             root.addItem(item);
                             added.add(item);
                         }
@@ -3229,7 +3236,9 @@ public class FeatureLinkDropDownReceiver extends DropDownReceiver
                         now,
                         now,
                         now + 7 * 24 * 60 * 60 * 1000L,
-                        "");
+                        "",
+                        item.getMetaString(META_SOURCE_LAYER, ""),
+                        item.getMetaString(META_SOURCE_OBJECTID, ""));
                 postToUi(() -> Toast.makeText(pluginContext,
                         "Sent to Feature Layer: " + callsign, Toast.LENGTH_SHORT).show());
             } catch (Exception e) {

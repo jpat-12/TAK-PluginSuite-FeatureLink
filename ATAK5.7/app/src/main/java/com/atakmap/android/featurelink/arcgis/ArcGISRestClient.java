@@ -681,6 +681,22 @@ public class ArcGISRestClient {
     }
 
     /**
+     * The feature's ObjectID-style key (OBJECTID, FID or GlobalID, any case, in that order of
+     * preference) from a downloaded feature's attributes, or {@code ""}. Recorded on markers so
+     * "Send to Feature Layer" can fill {@code source_objectid}.
+     */
+    public static String objectIdOf(Map<String, String> attributes) {
+        if (attributes == null) return "";
+        for (String want : new String[] {"objectid", "fid", "globalid"}) {
+            for (Map.Entry<String, String> e : attributes.entrySet()) {
+                if (want.equalsIgnoreCase(e.getKey()) && e.getValue() != null
+                        && !e.getValue().isEmpty()) return e.getValue();
+            }
+        }
+        return "";
+    }
+
+    /**
      * A stable synthetic UID for a feature with no uid column. Derived from the feature's
      * OBJECTID where present, so a re-download updates markers in place instead of churning the
      * map with a fresh {@code System.currentTimeMillis()} identity every time (Appendix A §9).
@@ -787,14 +803,16 @@ public class ArcGISRestClient {
             String groupName, String groupRole,
             double lat, double lon, double hae, double ce, double le,
             long timeMs, long startMs, long staleMs,
-            String rawCotXml) throws Exception {
+            String rawCotXml, String sourceLayer, String sourceObjectId) throws Exception {
         long now = System.currentTimeMillis();
 
         JSONObject attributes = new JSONObject();
         attributes.put("uid",            uid            != null ? uid            : "");
         attributes.put("source_system",  "ATAK");
-        attributes.put("source_layer",   "");
-        attributes.put("source_objectid","");
+        // Which FeatureLink layer / feature a relayed map item originally came from; blank for
+        // this device's own position and for items that did not come from a downloaded layer.
+        attributes.put("source_layer",   sourceLayer    != null ? sourceLayer    : "");
+        attributes.put("source_objectid",sourceObjectId != null ? sourceObjectId : "");
         attributes.put("cot_type",       cotType        != null ? cotType        : "");
         attributes.put("tak_callsign",   callsign       != null ? callsign       : "");
         attributes.put("tak_icon",       iconPath       != null ? iconPath       : "");
@@ -841,6 +859,23 @@ public class ArcGISRestClient {
             double lat, double lon, double hae, double ce, double le,
             long timeMs, long startMs, long staleMs,
             String rawCotXml) throws Exception {
+        return addPliFeature(serviceUrl, token, uid, cotType, callsign, iconPath, remarks, how,
+                sentByUser, groupName, groupRole, lat, lon, hae, ce, le, timeMs, startMs, staleMs,
+                rawCotXml, "", "");
+    }
+
+    /**
+     * As the overload above, also recording where a relayed item came from
+     * ({@code source_layer} / {@code source_objectid}). Used by "Send to Feature Layer" for
+     * markers FeatureLink itself drew from a downloaded layer.
+     */
+    public long addPliFeature(String serviceUrl, String token,
+            String uid, String cotType, String callsign, String iconPath,
+            String remarks, String how, String sentByUser,
+            String groupName, String groupRole,
+            double lat, double lon, double hae, double ce, double le,
+            long timeMs, long startMs, long staleMs,
+            String rawCotXml, String sourceLayer, String sourceObjectId) throws Exception {
 
         String layerUrl = ensureLayerIndex(serviceUrl);
 
@@ -848,7 +883,7 @@ public class ArcGISRestClient {
         feature.put("geometry", buildPliGeometry(lat, lon));
         feature.put("attributes", buildPliAttributes(uid, cotType, callsign, iconPath, remarks,
                 how, sentByUser, groupName, groupRole, lat, lon, hae, ce, le,
-                timeMs, startMs, staleMs, rawCotXml));
+                timeMs, startMs, staleMs, rawCotXml, sourceLayer, sourceObjectId));
 
         JSONArray adds = new JSONArray();
         adds.put(feature);
@@ -887,7 +922,7 @@ public class ArcGISRestClient {
 
         JSONObject attributes = buildPliAttributes(uid, cotType, callsign, iconPath, remarks,
                 how, sentByUser, groupName, groupRole, lat, lon, hae, ce, le,
-                timeMs, startMs, staleMs, rawCotXml);
+                timeMs, startMs, staleMs, rawCotXml, "", "");
         attributes.put(objectIdField, objectId);
 
         JSONObject feature = new JSONObject();
@@ -949,11 +984,14 @@ public class ArcGISRestClient {
     // CSV schema template — one header row + one sample row so ArcGIS can infer geometry.
     // ISO-8601 dates cause ArcGIS to recognise date columns; publishParameters.layerInfo
     // then locks in the exact esriFieldType for every column.
+    /** uid of the sample row in {@link #SCHEMA_CSV}. */
+    static final String SCHEMA_TEMPLATE_UID = "SCHEMA_TEMPLATE";
+
     static final String SCHEMA_CSV =
         "uid,source_system,source_layer,source_objectid,cot_type,tak_callsign,tak_icon," +
         "tak_remarks,latitude,longitude,hae,ce,le,time,start_time,stale_time," +
         "sent_toFL_time,sent_by_user,how,sync_status,last_synced,raw_cot_xml\n" +
-        "SCHEMA_TEMPLATE,ATAK,,,a-f-G-U-C,EXAMPLE,,Schema row," +
+        SCHEMA_TEMPLATE_UID + ",ATAK,,,a-f-G-U-C,EXAMPLE,,Schema row," +
         "34.052235,-117.307899,285.4,9.0,2.0," +
         "2025-01-01T00:00:00Z,2025-01-01T00:00:00Z,2025-01-01T00:00:30Z," +
         "2025-01-01T00:00:00Z,admin,m-g,synced,2025-01-01T00:00:00Z,\n";
@@ -998,8 +1036,13 @@ public class ArcGISRestClient {
             // The published layer is not guaranteed to be index 0 — read the real id from the
             // service root rather than hardcoding "/0" (Appendix A §9).
             List<SubLayerRef> subs = listSubLayers(serviceUrl, token);
-            if (!subs.isEmpty()) return subs.get(0).url;
-            return serviceUrl + "/0";
+            String layerUrl = !subs.isEmpty() ? subs.get(0).url : serviceUrl + "/0";
+
+            // Step 5 — the CSV's sample row only exists so ArcGIS can infer geometry and field
+            // types. It is otherwise a fake PLI point (callsign "EXAMPLE" in California) on every
+            // newly created layer, so remove it now that the schema is locked in.
+            deleteSchemaTemplateRow(layerUrl, token);
+            return layerUrl;
 
         } catch (Exception e) {
             Log.e(TAG, "createPliFeatureService failed", e);
@@ -1135,6 +1178,32 @@ public class ArcGISRestClient {
             Log.w(TAG, "waitForPublishJob error", e);
         }
         return false;
+    }
+
+    /**
+     * Deletes the {@link #SCHEMA_CSV} sample row from a freshly published layer. Non-fatal: the
+     * layer is fully usable either way, so a failure is logged rather than failing creation.
+     *
+     * @return number of rows the server reports deleted, or -1 if the request failed
+     */
+    int deleteSchemaTemplateRow(String layerUrl, String token) {
+        try {
+            String body = "where=" + enc("uid='" + SCHEMA_TEMPLATE_UID + "'") + "&f=json";
+            JSONObject json = parseChecked(httpPost(layerUrl + "/deleteFeatures", body, token));
+            int deleted = 0;
+            JSONArray results = json.optJSONArray("deleteResults");
+            if (results != null) {
+                for (int i = 0; i < results.length(); i++) {
+                    JSONObject r = results.optJSONObject(i);
+                    if (r != null && r.optBoolean("success", false)) deleted++;
+                }
+            }
+            Log.d(TAG, "Removed " + deleted + " schema template row(s) from " + redact(layerUrl));
+            return deleted;
+        } catch (Exception e) {
+            Log.w(TAG, "Could not remove schema template row (non-fatal): " + redact(layerUrl), e);
+            return -1;
+        }
     }
 
     private void enableEditing(String featureServerUrl, String token) {
