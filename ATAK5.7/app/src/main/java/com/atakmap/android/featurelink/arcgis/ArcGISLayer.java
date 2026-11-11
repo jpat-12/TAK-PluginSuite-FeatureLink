@@ -109,7 +109,7 @@ public class ArcGISLayer {
 
     public static String canonicalUrl(String raw) {
         if (raw == null) return "";
-        String u = raw.trim().replaceAll("/+$", "");
+        String u = UrlUtil.stripTrailingSlashes(raw.trim());
         int scheme = u.indexOf("://");
         if (scheme < 0) return u.toLowerCase(java.util.Locale.ROOT);
         int hostEnd = u.indexOf('/', scheme + 3);

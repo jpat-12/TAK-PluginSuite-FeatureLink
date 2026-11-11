@@ -120,7 +120,7 @@ public final class AutoIconset {
             // converges because it keeps computing the wrong UID.
             scheme = scheme.toLowerCase(Locale.ROOT);
             authority = authority.toLowerCase(Locale.ROOT);
-            path = path.replaceAll("/{2,}", "/").replaceAll("/+$", "");
+            path = UrlUtil.stripTrailingSlashes(path.replaceAll("/{2,}", "/"));
 
             java.util.regex.Matcher m = java.util.regex.Pattern
                     .compile("^(.*/(?:FeatureServer|MapServer))(?:/(\\d+))?$", java.util.regex.Pattern.CASE_INSENSITIVE)
