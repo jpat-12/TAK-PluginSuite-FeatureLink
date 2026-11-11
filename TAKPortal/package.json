@@ -8,7 +8,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
     "lint": "node --check routes/featurelinkBrowse.routes.js && node --check routes/featurelinkConfigurator.routes.js && node --check routes/featurelinkCustomIcons.routes.js && node --check routes/featurelinkDatasetsAdmin.routes.js && node --check services/featurelinkArcgisIconset.service.js && node --check services/featurelinkCustomIcons.service.js && node --check services/featurelinkDatasets.service.js && node --check services/featurelinkCsrf.service.js && node --check services/featurelinkSafeFetch.service.js"
   },
   "dependencies": {

@@ -103,6 +103,79 @@
 
             </LinearLayout>
 
+            <!-- ── BROWSE AN ARCGIS SERVER ─────────────────────────────── -->
+            <LinearLayout
+                style="@style/FL.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="@dimen/fl_space_md">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Or browse an ArcGIS server"
+                    style="@style/FL.Text.SectionHeader"
+                    android:paddingBottom="@dimen/fl_space_sm" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Enter a server&#8217;s &#8220;rest/services&#8221; address to pick a layer from its folders and services."
+                    style="@style/FL.Text.Body"
+                    android:layout_marginBottom="@dimen/fl_space_sm" />
+
+                <EditText
+                    android:id="@+id/browse_server_url_edit"
+                    style="@style/FL.Input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="https://…/arcgis/rest/services"
+                    android:inputType="textUri"
+                    android:layout_marginBottom="@dimen/fl_space_sm" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="@dimen/fl_space_sm">
+
+                    <Button
+                        android:id="@+id/browse_server_btn"
+                        style="@style/FL.Button.Secondary"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:minHeight="40dp"
+                        android:layout_marginEnd="@dimen/fl_space_sm"
+                        android:text="Browse" />
+
+                    <Button
+                        android:id="@+id/recent_servers_btn"
+                        style="@style/FL.Button.Secondary"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:minHeight="40dp"
+                        android:text="Recent" />
+
+                </LinearLayout>
+
+                <!-- Attribution + pointer to the curated list. The list's data is NOT bundled:
+                     its terms prohibit scraping, so we link to the author's published copy. -->
+                <TextView
+                    android:id="@+id/public_server_list_link"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Need a server address? Open Joseph Elfelt&#8217;s curated list of public federal, state, county and city ArcGIS servers (mappingsupport.com)."
+                    style="@style/FL.Text.Body"
+                    android:textColor="@color/fl_accent"
+                    android:paddingTop="@dimen/fl_space_sm"
+                    android:paddingBottom="@dimen/fl_space_sm"
+                    android:background="?android:attr/selectableItemBackground" />
+
+            </LinearLayout>
+
             <!-- ── DISPLAY PREFS ───────────────────────────────────────── -->
             <Button
                 android:id="@+id/upload_pref_btn"

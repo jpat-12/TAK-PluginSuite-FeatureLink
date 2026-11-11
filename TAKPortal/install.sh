@@ -19,8 +19,8 @@
 #      - server.js: mounts the route files (admin dataset CRUD, the
 #        configurator's static assets, the field-user browse API) + the two
 #        page routes
-#      - views/partials/sidebar.ejs: adds "FeatureLink" under Onboarding and
-#        "FeatureLink Configs" under Administration
+#      - views/partials/sidebar.ejs: adds "FeatureLink" under Onboarding (for both
+#        admins and field users) and "FeatureLink Configs" under Operations
 #   4. Runs `docker compose up -d --build` in the TAK Portal directory so the
 #      patched files are baked into a rebuilt image (matches what `./takportal
 #      update` does).
@@ -70,15 +70,21 @@ mkdir -p "$PORTAL_DIR/routes" "$PORTAL_DIR/services" "$PORTAL_DIR/views"
 rm -f "$PORTAL_DIR/routes/featurelinkConfigsAdmin.routes.js"
 rm -f "$PORTAL_DIR/services/featurelinkConfigs.service.js"
 
-cp -f "$SRC_DIR/routes/featurelinkDatasetsAdmin.routes.js" "$PORTAL_DIR/routes/"
-cp -f "$SRC_DIR/routes/featurelinkConfigurator.routes.js" "$PORTAL_DIR/routes/"
-cp -f "$SRC_DIR/routes/featurelinkCustomIcons.routes.js" "$PORTAL_DIR/routes/"
-cp -f "$SRC_DIR/routes/featurelinkBrowse.routes.js" "$PORTAL_DIR/routes/"
-cp -f "$SRC_DIR/services/featurelinkDatasets.service.js" "$PORTAL_DIR/services/"
-cp -f "$SRC_DIR/services/featurelinkCustomIcons.service.js" "$PORTAL_DIR/services/"
-cp -f "$SRC_DIR/services/featurelinkArcgisIconset.service.js" "$PORTAL_DIR/services/"
-cp -f "$SRC_DIR/views/featurelink-configs.ejs" "$PORTAL_DIR/views/"
-cp -f "$SRC_DIR/views/featurelink.ejs" "$PORTAL_DIR/views/"
+# Copy EVERY featurelink* route, service and view by pattern. This used to be a hand-kept
+# list that named only 3 of the 8 services; the routes require all 8, so a real install hit
+# MODULE_NOT_FOUND on featurelinkAccess/Csrf/Http/RateLimit/SafeFetch and the whole portal
+# failed to start. Only featurelink*-prefixed files are copied, so nothing of the host's is
+# ever overwritten.
+shopt -s nullglob
+for kind in routes services; do
+    files=("$SRC_DIR/$kind"/featurelink*.js)
+    [ ${#files[@]} -gt 0 ] || { echo "ERROR: no $kind/featurelink*.js found under $SRC_DIR" >&2; exit 1; }
+    cp -f "${files[@]}" "$PORTAL_DIR/$kind/"
+done
+views=("$SRC_DIR/views"/featurelink*.ejs)
+[ ${#views[@]} -gt 0 ] || { echo "ERROR: no views/featurelink*.ejs found under $SRC_DIR" >&2; exit 1; }
+cp -f "${views[@]}" "$PORTAL_DIR/views/"
+shopt -u nullglob
 
 # The ported Display Configurator (index.html + bundled iconsets) — same asset
 # infra-TAK's Infra-TAK/featurelink_displayconfig_assets/ serves, copied in as-is
@@ -98,28 +104,45 @@ let changed = false;
 
 const PERM_MARKER = 'featurelink_configs:';
 if (!src.includes(PERM_MARKER)) {
-  const anchor = `    plugin_manager: {
-      id: "page.plugin_manager",
-      label: "Plugin Manager",
-      description: "Upload and manage server-side plugin packages.",
-      section: "configuration",
-    },`;
-  if (!src.includes(anchor)) {
+  // Anchor on the plugin_manager entry's opening line and its closing brace, NOT its exact
+  // field list: upstream 2.0.32 moved it to section "operations" and added `editorVisible`,
+  // which broke the old verbatim anchor and aborted the whole install.
+  const open = src.indexOf('\n    plugin_manager: {');
+  const close = open < 0 ? -1 : src.indexOf('\n    },', open);
+  if (open < 0 || close < 0 || src.slice(open, close).indexOf('id: "page.plugin_manager"') < 0) {
     console.error('ERROR: could not find plugin_manager permission entry anchor — permission NOT added');
     process.exit(1);
   }
+  const insertAt = close + '\n    },'.length;
+  // "operations" is the section upstream files plugin_manager under; an unknown section
+  // still renders in Access Control, but as a stray group with its raw key as the heading.
   const block = `
     featurelink_configs: {
       id: "page.featurelink_configs",
       label: "FeatureLink Configs",
       description: "Prep FeatureLink display configs for field devices to download.",
-      section: "administration",
+      section: "operations",
     },`;
-  src = src.replace(anchor, anchor + block);
+  src = src.slice(0, insertAt) + block + src.slice(insertAt);
   changed = true;
   console.log('    + added page.featurelink_configs permission');
 } else {
   console.log('    = permission entry already present');
+}
+
+// Migration: earlier installs filed the permission under a non-existent "administration"
+// section. Scoped to the featurelink_configs entry only.
+{
+  const at = src.indexOf('    featurelink_configs: {');
+  const end = at < 0 ? -1 : src.indexOf('\n    },', at);
+  if (at >= 0 && end >= 0) {
+    const entry = src.slice(at, end);
+    if (entry.includes('section: "administration"')) {
+      src = src.slice(0, at) + entry.replace('section: "administration"', 'section: "operations"') + src.slice(end);
+      changed = true;
+      console.log('    + moved page.featurelink_configs to the "operations" permission section');
+    }
+  }
 }
 
 const CARVEOUT_MARKER = "p.startsWith(\"/api/featurelink/configs\")";
@@ -211,30 +234,26 @@ let changed = false;
 
 const MARKER = 'normalizedPath === "/featurelink"';
 if (!src.includes(MARKER)) {
-  const anchor = `      const isAllowedNonAdminPath =
-        normalizedPath === "/setup-my-device" ||
-        normalizedPath.startsWith("/api/setup-my-device") ||
-        normalizedPath === "/api/mou/user-agreement/accept" ||
-        normalizedPath === "/api/mou/user-agreement/decline" ||
-        normalizedPath === "/plugins" ||
-        isPluginDownloadApi;`;
-  if (!src.includes(anchor)) {
+  // INSERT after the "/plugins" clause inside upstream's own isAllowedNonAdminPath expression,
+  // rather than replacing the whole expression with a hard-coded copy. Upstream 2.0.32 added
+  // /map, /api/map and isAtakApkDownloadApi to it; the old full-replacement patch both failed
+  // to match and, had it matched, would have silently revoked those for non-admin users.
+  const exprStart = src.indexOf('const isAllowedNonAdminPath =');
+  const exprEnd = exprStart < 0 ? -1 : src.indexOf(';', exprStart);
+  const pluginsClause = '        normalizedPath === "/plugins" ||\n';
+  const at = exprStart < 0 ? -1 : src.indexOf(pluginsClause, exprStart);
+  if (exprStart < 0 || exprEnd < 0 || at < 0 || at > exprEnd) {
     console.error('ERROR: could not find isAllowedNonAdminPath anchor in portalAuth.middleware.js — non-admin access NOT added');
     process.exit(1);
   }
-  const replacement = `      const isAllowedNonAdminPath =
-        normalizedPath === "/setup-my-device" ||
-        normalizedPath.startsWith("/api/setup-my-device") ||
-        normalizedPath === "/api/mou/user-agreement/accept" ||
-        normalizedPath === "/api/mou/user-agreement/decline" ||
-        normalizedPath === "/plugins" ||
-        normalizedPath === "/featurelink" ||
-        normalizedPath.startsWith("/api/featurelink/configs") ||
-        normalizedPath.startsWith("/featurelink-configs/configurator") ||
-        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||
-        normalizedPath.startsWith("/api/featurelink/admin/custom-icons") ||
-        isPluginDownloadApi;`;
-  src = src.replace(anchor, replacement);
+  const insertAt = at + pluginsClause.length;
+  const block =
+    '        normalizedPath === "/featurelink" ||\n' +
+    '        normalizedPath.startsWith("/api/featurelink/configs") ||\n' +
+    '        normalizedPath.startsWith("/featurelink-configs/configurator") ||\n' +
+    '        normalizedPath.startsWith("/api/featurelink/admin/datasets") ||\n' +
+    '        normalizedPath.startsWith("/api/featurelink/admin/custom-icons") ||\n';
+  src = src.slice(0, insertAt) + block + src.slice(insertAt);
   changed = true;
   console.log('    + added /featurelink, the configurator, and its dataset API to isAllowedNonAdminPath');
 } else {
@@ -398,35 +417,59 @@ if (!src.includes(ADMIN_MARKER)) {
   console.log('    = Administration nav link already present');
 }
 
-// Also make the Administration section actually show up if FeatureLink Configs is the only granted permission.
-const CANSEE_MARKER = '    _perm("page.featurelink_configs") ||\n    canSeeMouNav;';
+// Also make the section holding the link actually show up when FeatureLink Configs is the only
+// granted permission. Upstream 2.0.32 renamed canSeeAdminSection to canSeeOperationsSection and
+// no longer ends that list with canSeeMouNav, so both shapes are handled.
+const CANSEE_MARKER = '_perm("page.featurelink_configs") ||\n    canSeeMouNav';
 if (!src.includes(CANSEE_MARKER)) {
-  const anchor = `    canSeeMouNav;`;
-  if (src.includes(anchor)) {
-    src = src.replace(anchor, `    _perm("page.featurelink_configs") ||\n    canSeeMouNav;`);
+  const ops = src.indexOf('const canSeeOperationsSection =');
+  const opsEnd = ops < 0 ? -1 : src.indexOf(';', ops);
+  const mouClause = '    canSeeMouNav ||';
+  const mouAt = ops < 0 ? -1 : src.indexOf(mouClause, ops);
+  if (ops >= 0 && mouAt >= 0 && mouAt < opsEnd) {
+    src = src.slice(0, mouAt) + '    _perm("page.featurelink_configs") ||\n' + src.slice(mouAt);
+    changed = true;
+    console.log('    + included page.featurelink_configs in canSeeOperationsSection');
+  } else if (src.includes('    canSeeMouNav;')) {
+    src = src.replace('    canSeeMouNav;', '    _perm("page.featurelink_configs") ||\n    canSeeMouNav;');
     changed = true;
     console.log('    + included page.featurelink_configs in canSeeAdminSection');
   } else {
-    console.log('    ⚠ could not find canSeeAdminSection anchor — Administration section may stay hidden for users with only page.featurelink_configs');
+    console.log('    ⚠ could not find canSeeOperationsSection/canSeeAdminSection anchor — the section may stay hidden for users with only page.featurelink_configs');
   }
 } else {
-  console.log('    = canSeeAdminSection already includes page.featurelink_configs');
+  console.log('    = section visibility already includes page.featurelink_configs');
 }
 
-const ONBOARD_MARKER = '/featurelink"';
-if (!src.includes(ONBOARD_MARKER)) {
-  const anchor = `            <a href="/plugins" class="<%= isActive('/plugins') ? 'active' : '' %>">ATAK Plugins</a>`;
-  if (!src.includes(anchor)) {
+// Add "FeatureLink" after EVERY "ATAK Plugins" link, at that link's own indentation. Upstream
+// 2.0.32 renders the Onboarding links twice: inside the collapsible section for admins, and as
+// bare links in an `else` branch for everyone else. Patching only the first meant field users,
+// the people /featurelink exists for, never saw the link. Idempotent per occurrence.
+const PLUGINS_LINK = `<a href="/plugins" class="<%= isActive('/plugins') ? 'active' : '' %>">ATAK Plugins</a>`;
+const FL_LINK = `<a href="/featurelink" class="<%= isActive('/featurelink') ? 'active' : '' %>">FeatureLink</a>`;
+{
+  const lines = src.split('\n');
+  let found = 0, added = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() !== PLUGINS_LINK) continue;
+    found++;
+    if (i + 1 < lines.length && lines[i + 1].includes('href="/featurelink"')) continue;
+    const indent = lines[i].slice(0, lines[i].indexOf('<'));
+    lines.splice(i + 1, 0, indent + FL_LINK);
+    added++;
+    i++;
+  }
+  if (found === 0) {
     console.error('ERROR: could not find Onboarding section anchor in sidebar.ejs — onboarding link NOT added');
     process.exit(1);
   }
-  const block = `
-            <a href="/featurelink" class="<%= isActive('/featurelink') ? 'active' : '' %>">FeatureLink</a>`;
-  src = src.replace(anchor, anchor + block);
-  changed = true;
-  console.log('    + added Onboarding nav link');
-} else {
-  console.log('    = Onboarding nav link already present');
+  if (added > 0) {
+    src = lines.join('\n');
+    changed = true;
+    console.log('    + added Onboarding nav link (' + added + ' of ' + found + ' ATAK Plugins links)');
+  } else {
+    console.log('    = Onboarding nav link already present');
+  }
 }
 
 if (changed) fs.writeFileSync(path, src, 'utf-8');
@@ -435,4 +478,4 @@ NODEEOF
 # --- 8. Rebuild + restart the stack ----------------------------------------
 echo "==> Rebuilding TAK Portal (docker compose up -d --build)..."
 ( cd "$PORTAL_DIR" && docker compose up -d --build )
-echo "==> Done. FeatureLink Configs is live: Onboarding → FeatureLink (everyone), Administration → FeatureLink Configs (admins)."
+echo "==> Done. FeatureLink Configs is live: Onboarding → FeatureLink (everyone), Operations → FeatureLink Configs (admins)."

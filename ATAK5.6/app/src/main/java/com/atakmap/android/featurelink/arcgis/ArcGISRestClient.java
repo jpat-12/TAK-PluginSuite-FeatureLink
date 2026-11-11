@@ -122,10 +122,16 @@ public class ArcGISRestClient {
         throw new ArcGisException(code, msg.toString());
     }
 
-    /** C-21: strips credential-valued query parameters before any URL reaches a log sink. */
-    static String redact(String url) {
+    /** C-21: strips credential-valued query parameters before any URL reaches a log sink, and
+     * removes CR/LF so a URL the operator typed (or a public server's directory returned) cannot
+     * forge extra log lines (CodeQL java/log-injection). Public so the UI layer logs URLs the
+     * same way. */
+    public static String redact(String url) {
         if (url == null) return "";
-        return SECRET_PARAM.matcher(url).replaceAll("$1<redacted>");
+        // One replaceAll over [\r\n] (not chained char replaces): the form CodeQL's
+        // java/log-injection analysis recognises as a line-break sanitiser.
+        String oneLine = url.replaceAll("[\\r\\n]", " ");
+        return SECRET_PARAM.matcher(oneLine).replaceAll("$1<redacted>");
     }
 
     // -------------------------------------------------------------------------
@@ -289,7 +295,7 @@ public class ArcGISRestClient {
     public List<SubLayerRef> listSubLayers(String serviceUrl, String token) {
         List<SubLayerRef> out = new ArrayList<>();
         if (serviceUrl == null) return out;
-        String url = serviceUrl.trim().replaceAll("/+$", "");
+        String url = UrlUtil.stripTrailingSlashes(serviceUrl.trim());
         if (url.isEmpty()) return out;
 
         if (LAYER_ADDRESSED.matcher(url).matches()) {
@@ -379,7 +385,7 @@ public class ArcGISRestClient {
     public JSONObject fetchItemRenderer(String portalUrl, String itemId, int layerId, String token) {
         if (itemId == null || itemId.isEmpty()) return null;
         String base = portalUrl == null || portalUrl.isEmpty() ? "https://www.arcgis.com" : portalUrl;
-        String url = base.replaceAll("/+$", "") + "/sharing/rest/content/items/"
+        String url = UrlUtil.stripTrailingSlashes(base) + "/sharing/rest/content/items/"
                 + itemId + "/data?f=json";
         try {
             JSONObject data = fetchJson(url, token);
@@ -406,6 +412,34 @@ public class ArcGISRestClient {
     public JSONObject fetchJson(String url, String token) throws Exception {
         if (url == null || url.isEmpty()) return null;
         return parseChecked(httpGet(appendQuery(url, "f=json"), token));
+    }
+
+    // -------------------------------------------------------------------------
+    // Services Directory browsing
+    // -------------------------------------------------------------------------
+
+    /**
+     * Lists one level of an ArcGIS Server Services Directory ({@code …/rest/services} or a
+     * folder below it). Blocking — call from a background thread.
+     *
+     * <p>A server whose administrator disabled the HTML Services Directory usually still answers
+     * {@code ?f=json}, which is what this requests. A server that requires sign-in answers with an
+     * ArcGIS error body, surfaced as an {@link ArcGisException} (C-22) so the caller can say why.
+     */
+    public ServicesDirectory.Listing browseServicesDirectory(ServicesDirectory.Location location,
+                                                             String token) throws Exception {
+        if (location == null) throw new ArcGisException(-1, "Not an ArcGIS Services Directory address");
+        String body = httpGet(location.url() + "?f=json", token);
+        if (body == null) {
+            throw new ArcGisException(-1, "Server did not respond — check the address and your network");
+        }
+        String trimmed = body.trim();
+        if (!trimmed.startsWith("{")) {
+            // HTML login page, proxy interstitial, or a disabled directory without JSON support.
+            throw new ArcGisException(-1, "Server did not return a Services Directory "
+                    + "(it may be private, or the address is wrong)");
+        }
+        return ServicesDirectory.parse(location.root, location.folder, parseChecked(trimmed));
     }
 
     /**
@@ -946,7 +980,7 @@ public class ArcGISRestClient {
             String[] svcInfo = publishCsvItem(portal, username, token, itemId, displayName);
             if (svcInfo == null) { Log.e(TAG, "CSV publish failed"); return null; }
             String serviceItemId = svcInfo[0];
-            String serviceUrl    = svcInfo[1].replaceAll("/+$", "");
+            String serviceUrl    = UrlUtil.stripTrailingSlashes(svcInfo[1]);
             String jobId         = svcInfo[2];
 
             // Step 3 — wait for the async publish job
@@ -1285,7 +1319,7 @@ public class ArcGISRestClient {
         if (portalUrl == null || portalUrl.trim().isEmpty()) {
             return "https://www.arcgis.com";
         }
-        return portalUrl.trim().replaceAll("/+$", "");
+        return UrlUtil.stripTrailingSlashes(portalUrl.trim());
     }
 
     /**
@@ -1300,7 +1334,7 @@ public class ArcGISRestClient {
 
     static String ensureLayerIndex(String url, int layerId) {
         if (url == null) return "";
-        String u = url.trim().replaceAll("/+$", "");
+        String u = UrlUtil.stripTrailingSlashes(url.trim());
         if (SERVICE_ROOT.matcher(u).matches()) {
             return u + "/" + Math.max(0, layerId);
         }
@@ -1310,7 +1344,7 @@ public class ArcGISRestClient {
     /** True when {@code url} names a service root that may expose more than one sublayer. */
     public static boolean isServiceRoot(String url) {
         if (url == null) return false;
-        return SERVICE_ROOT.matcher(url.trim().replaceAll("/+$", "")).matches();
+        return SERVICE_ROOT.matcher(UrlUtil.stripTrailingSlashes(url.trim())).matches();
     }
 
     /** Lower-cases with {@link Locale#ROOT} — never the default locale (C-39 class of defect). */
